@@ -20,6 +20,16 @@ typedef struct {
     char unraid_user[CFG_MAX_STR];
     char unraid_pass[CFG_MAX_STR];
     int  shutdown_timeout;
+
+    /* Alert thresholds */
+    int alert_load_high_pct;
+    int alert_battery_low_pct;
+    int alert_voltage_warn_offset;
+    int alert_voltage_deadband;
+
+    /* IPC paths */
+    char ipc_sock_path[CFG_MAX_STR];
+    char ipc_lock_path[CFG_MAX_STR];
 } config_t;
 
 /* Parse config file, returns 0 on success */
