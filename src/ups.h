@@ -79,6 +79,12 @@ int ups_cmd_battery_test(modbus_t *ctx);
 int ups_cmd_mute_alarm(modbus_t *ctx);
 int ups_cmd_cancel_mute(modbus_t *ctx);
 int ups_cmd_beep_test(modbus_t *ctx);
+int ups_cmd_bypass_enable(modbus_t *ctx);
+int ups_cmd_bypass_disable(modbus_t *ctx);
+int ups_cmd_set_mode(modbus_t *ctx, uint16_t mode);
+
+/* Read transfer voltage thresholds (regs 1026-1027) */
+int ups_read_thresholds(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low);
 
 /* Human-readable strings */
 const char *ups_transfer_reason_str(uint16_t reason);

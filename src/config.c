@@ -20,6 +20,12 @@ static void set_defaults(config_t *cfg)
     cfg->ups_baud = 9600;
     cfg->ups_slave_id = 1;
     cfg->shutdown_timeout = 180;
+    cfg->alert_load_high_pct = 80;
+    cfg->alert_battery_low_pct = 50;
+    cfg->alert_voltage_warn_offset = 5;
+    cfg->alert_voltage_deadband = 1;
+    strncpy(cfg->ipc_sock_path, "/run/airies-ups/ups.sock", CFG_MAX_STR - 1);
+    strncpy(cfg->ipc_lock_path, "/run/airies-ups/ups.lock", CFG_MAX_STR - 1);
 }
 
 /* Parse comma-separated host list into cfg->unraid_hosts[] */
@@ -103,6 +109,20 @@ int config_load(config_t *cfg, const char *path)
                 strncpy(cfg->unraid_pass, val, CFG_MAX_STR - 1);
             else if (strcmp(key, "timeout") == 0)
                 cfg->shutdown_timeout = atoi(val);
+        } else if (strcmp(section, "alerts") == 0) {
+            if (strcmp(key, "load_high_pct") == 0)
+                cfg->alert_load_high_pct = atoi(val);
+            else if (strcmp(key, "battery_low_pct") == 0)
+                cfg->alert_battery_low_pct = atoi(val);
+            else if (strcmp(key, "voltage_warn_offset") == 0)
+                cfg->alert_voltage_warn_offset = atoi(val);
+            else if (strcmp(key, "voltage_deadband") == 0)
+                cfg->alert_voltage_deadband = atoi(val);
+        } else if (strcmp(section, "ipc") == 0) {
+            if (strcmp(key, "sock_path") == 0)
+                strncpy(cfg->ipc_sock_path, val, CFG_MAX_STR - 1);
+            else if (strcmp(key, "lock_path") == 0)
+                strncpy(cfg->ipc_lock_path, val, CFG_MAX_STR - 1);
         }
     }
 

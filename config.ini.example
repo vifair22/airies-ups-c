@@ -12,3 +12,13 @@ unraid_hosts = unraid.internal.airies.net
 unraid_user = root
 unraid_pass =
 timeout = 180
+
+[alerts]
+load_high_pct = 80
+battery_low_pct = 50
+voltage_warn_offset = 5
+voltage_deadband = 1
+
+[ipc]
+; sock_path = /run/airies-ups/ups.sock
+; lock_path = /run/airies-ups/ups.lock

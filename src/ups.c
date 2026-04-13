@@ -136,6 +136,33 @@ int ups_cmd_beep_test(modbus_t *ctx)
     return modbus_write_register(ctx, 1543, 0x0001) == 1 ? 0 : -1;
 }
 
+int ups_cmd_bypass_enable(modbus_t *ctx)
+{
+    uint16_t cmd[2] = { 0x0000, 0x0010 };
+    return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
+}
+
+int ups_cmd_bypass_disable(modbus_t *ctx)
+{
+    uint16_t cmd[2] = { 0x0000, 0x0020 };
+    return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
+}
+
+int ups_cmd_set_mode(modbus_t *ctx, uint16_t mode)
+{
+    return modbus_write_register(ctx, 593, mode) == 1 ? 0 : -1;
+}
+
+int ups_read_thresholds(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low)
+{
+    uint16_t regs[2];
+    if (modbus_read_registers(ctx, 1026, 2, regs) != 2)
+        return -1;
+    *transfer_high = regs[0];
+    *transfer_low = regs[1];
+    return 0;
+}
+
 /* String helpers */
 
 static const char *transfer_reasons[] = {
