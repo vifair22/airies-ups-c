@@ -1,0 +1,14 @@
+[ups]
+device = /dev/ttyUSB0
+baud = 9600
+slave_id = 1
+
+[pushover]
+token =
+user =
+
+[shutdown]
+unraid_hosts = unraid.internal.airies.net
+unraid_user = root
+unraid_pass =
+timeout = 180

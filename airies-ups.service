@@ -1,0 +1,14 @@
+[Unit]
+Description=Airies UPS Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=sysadmin
+WorkingDirectory=/home/sysadmin/airies-ups-c
+ExecStart=/home/sysadmin/airies-ups-c/airies-ups
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
