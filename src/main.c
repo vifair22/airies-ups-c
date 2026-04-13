@@ -27,6 +27,7 @@ static volatile int running = 1;
 static pushover_client po_client;
 static int po_enabled = 0;
 static int he_inhibit_active = 0;
+static char he_inhibit_source[32] = "";
 static int he_reengaged_count = 0;
 
 /* Require 30 consecutive polls (~60s) with HE active before
@@ -34,20 +35,36 @@ static int he_reengaged_count = 0;
  * the ~5 minute stabilization after a mode change. */
 #define HE_REENGAGE_THRESHOLD 30
 
-/* --- HE inhibit state file --- */
+/* --- HE inhibit state file ---
+ * File contains the source of the inhibit: "manual" or "weather" */
 
 static int he_inhibit_read(void)
 {
-    return access(HE_INHIBIT_FILE, F_OK) == 0;
+    FILE *f = fopen(HE_INHIBIT_FILE, "r");
+    if (!f) {
+        he_inhibit_source[0] = '\0';
+        return 0;
+    }
+    if (fgets(he_inhibit_source, sizeof(he_inhibit_source), f)) {
+        /* Strip trailing newline */
+        char *nl = strchr(he_inhibit_source, '\n');
+        if (nl) *nl = '\0';
+    } else {
+        strncpy(he_inhibit_source, "manual", sizeof(he_inhibit_source) - 1);
+    }
+    fclose(f);
+    return 1;
 }
 
-static void he_inhibit_set(void)
+static void he_inhibit_set(const char *source)
 {
     FILE *f = fopen(HE_INHIBIT_FILE, "w");
     if (f) {
-        fprintf(f, "online\n");
+        fprintf(f, "%s\n", source);
         fclose(f);
     }
+    strncpy(he_inhibit_source, source, sizeof(he_inhibit_source) - 1);
+    he_inhibit_source[sizeof(he_inhibit_source) - 1] = '\0';
     he_inhibit_active = 1;
 }
 
@@ -55,6 +72,7 @@ static void he_inhibit_clear(void)
 {
     unlink(HE_INHIBIT_FILE);
     he_inhibit_active = 0;
+    he_inhibit_source[0] = '\0';
 }
 
 static void sig_handler(int sig)
@@ -81,8 +99,12 @@ static void print_status(const ups_data_t *d)
 {
     char status_str[256], eff_str[64];
     ups_status_str(d->status, status_str, sizeof(status_str));
-    if (he_inhibit_active && !(d->status & UPS_ST_HE_MODE))
-        strncat(status_str, " (HE inhibited)", sizeof(status_str) - strlen(status_str) - 1);
+    if (he_inhibit_active && !(d->status & UPS_ST_HE_MODE)) {
+        char inhibit_tag[64];
+        snprintf(inhibit_tag, sizeof(inhibit_tag), " (HE inhibited: %s)",
+                 he_inhibit_source[0] ? he_inhibit_source : "unknown");
+        strncat(status_str, inhibit_tag, sizeof(status_str) - strlen(status_str) - 1);
+    }
     ups_efficiency_str((int16_t)(d->efficiency * 128), eff_str, sizeof(eff_str));
 
     char msg[1024];
@@ -105,8 +127,12 @@ static void format_status(const ups_data_t *d, char *buf, size_t len)
 {
     char status_str[256], eff_str[64];
     ups_status_str(d->status, status_str, sizeof(status_str));
-    if (he_inhibit_active && !(d->status & UPS_ST_HE_MODE))
-        strncat(status_str, " (HE inhibited)", sizeof(status_str) - strlen(status_str) - 1);
+    if (he_inhibit_active && !(d->status & UPS_ST_HE_MODE)) {
+        char inhibit_tag[64];
+        snprintf(inhibit_tag, sizeof(inhibit_tag), " (HE inhibited: %s)",
+                 he_inhibit_source[0] ? he_inhibit_source : "unknown");
+        strncat(status_str, inhibit_tag, sizeof(status_str) - strlen(status_str) - 1);
+    }
     ups_efficiency_str((int16_t)(d->efficiency * 128), eff_str, sizeof(eff_str));
 
     snprintf(buf, len,
@@ -224,15 +250,17 @@ static void cmd_bypass(modbus_t *ctx, int enable)
     }
 }
 
-static void cmd_mode(modbus_t *ctx, uint16_t mode)
+static void cmd_mode(modbus_t *ctx, uint16_t mode, const char *source)
 {
     if (ups_cmd_set_mode(ctx, mode) == 0) {
         if (mode == UPS_MODE_HE) {
             he_inhibit_clear();
             log_msg("INFO", "HE mode requested, inhibit cleared — transition takes ~30 seconds");
         } else {
-            he_inhibit_set();
-            log_msg("INFO", "Online mode requested, HE inhibit set — HE will drop within ~5 seconds");
+            he_inhibit_set(source);
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Online mode requested (%s), HE inhibit set — HE will drop within ~5 seconds", source);
+            log_msg("INFO", msg);
         }
     } else {
         log_msg("ERROR", "Failed to set operating mode");
@@ -316,8 +344,18 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
     case IPC_CMD_MODE_ONLINE:
         rc = ups_cmd_set_mode(ctx, UPS_MODE_ONLINE);
         if (rc == 0) {
-            he_inhibit_set();
-            ipc_respond(client_fd, "OK\nOnline mode requested, HE inhibit set — HE will drop within ~5 seconds\n");
+            he_inhibit_set("manual");
+            ipc_respond(client_fd, "OK\nOnline mode requested (manual), HE inhibit set — HE will drop within ~5 seconds\n");
+        } else {
+            ipc_respond(client_fd, "ERR Failed to set online mode\n");
+        }
+        break;
+
+    case IPC_CMD_MODE_ONLINE_WEATHER:
+        rc = ups_cmd_set_mode(ctx, UPS_MODE_ONLINE);
+        if (rc == 0) {
+            he_inhibit_set("weather");
+            ipc_respond(client_fd, "OK\nOnline mode requested (weather), HE inhibit set — HE will drop within ~5 seconds\n");
         } else {
             ipc_respond(client_fd, "ERR Failed to set online mode\n");
         }
@@ -780,7 +818,7 @@ int main(int argc, char *argv[])
         cmd_bypass(ctx, bypass_on);
         break;
     case MODE_SET_MODE:
-        cmd_mode(ctx, set_mode_val);
+        cmd_mode(ctx, set_mode_val, "manual");
         break;
     case MODE_CLEAR_FAULTS:
         cmd_clear_faults(ctx);
