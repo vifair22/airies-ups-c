@@ -19,17 +19,20 @@ static const struct {
     const char *text;
     ipc_cmd_t   cmd;
 } cmd_table[] = {
-    { "STATUS",       IPC_CMD_STATUS },
-    { "BYPASS ON",    IPC_CMD_BYPASS_ON },
-    { "BYPASS OFF",   IPC_CMD_BYPASS_OFF },
-    { "MODE HE",      IPC_CMD_MODE_HE },
-    { "MODE ONLINE WEATHER", IPC_CMD_MODE_ONLINE_WEATHER },
-    { "MODE ONLINE",  IPC_CMD_MODE_ONLINE },
-    { "TEST BATTERY", IPC_CMD_TEST_BATTERY },
-    { "CLEAR FAULTS", IPC_CMD_CLEAR_FAULTS },
-    { "MUTE",         IPC_CMD_MUTE },
-    { "UNMUTE",       IPC_CMD_UNMUTE },
-    { "BEEP",         IPC_CMD_BEEP },
+    { "STATUS",              IPC_CMD_STATUS },
+    { "BYPASS ON",           IPC_CMD_BYPASS_ON },
+    { "BYPASS OFF",          IPC_CMD_BYPASS_OFF },
+    { "FREQ HZ60_0_1 WEATHER", IPC_CMD_FREQ_HZ60_0_1_WEATHER },
+    { "FREQ AUTO",           IPC_CMD_FREQ_AUTO },
+    { "FREQ HZ50_0_1",      IPC_CMD_FREQ_HZ50_0_1 },
+    { "FREQ HZ50_3_0",      IPC_CMD_FREQ_HZ50_3_0 },
+    { "FREQ HZ60_0_1",      IPC_CMD_FREQ_HZ60_0_1 },
+    { "FREQ HZ60_3_0",      IPC_CMD_FREQ_HZ60_3_0 },
+    { "TEST BATTERY",        IPC_CMD_TEST_BATTERY },
+    { "CLEAR FAULTS",        IPC_CMD_CLEAR_FAULTS },
+    { "MUTE",                IPC_CMD_MUTE },
+    { "UNMUTE",              IPC_CMD_UNMUTE },
+    { "BEEP",                IPC_CMD_BEEP },
 };
 
 static int strcasecmp_trimmed(const char *a, const char *b)

@@ -60,7 +60,7 @@ typedef struct {
     uint16_t nominal_va;
     uint16_t nominal_watts;
     uint16_t sog_config;
-    uint16_t operating_mode;
+    uint16_t freq_tolerance;
 } ups_inventory_t;
 
 /* Connection */
@@ -72,6 +72,15 @@ int ups_read_status(modbus_t *ctx, ups_data_t *data);
 int ups_read_dynamic(modbus_t *ctx, ups_data_t *data);
 int ups_read_inventory(modbus_t *ctx, ups_inventory_t *inv);
 
+/* Output.AcceptableFrequencySetting_BF (register 593) values.
+ * Setting a narrow tolerance inhibits HE mode because the UPS
+ * cannot validate input quality tightly enough for passthrough. */
+#define UPS_FREQ_AUTO       1   /* Automatic 50/60Hz (47-53, 57-63) */
+#define UPS_FREQ_HZ50_0_1   2   /* 50 Hz +/- 0.1 Hz */
+#define UPS_FREQ_HZ50_3_0   8   /* 50 Hz +/- 3.0 Hz */
+#define UPS_FREQ_HZ60_0_1  16   /* 60 Hz +/- 0.1 Hz */
+#define UPS_FREQ_HZ60_3_0  64   /* 60 Hz +/- 3.0 Hz */
+
 /* Commands — return 0 on success */
 int ups_cmd_shutdown(modbus_t *ctx);
 int ups_cmd_clear_faults(modbus_t *ctx);
@@ -81,7 +90,7 @@ int ups_cmd_cancel_mute(modbus_t *ctx);
 int ups_cmd_beep_test(modbus_t *ctx);
 int ups_cmd_bypass_enable(modbus_t *ctx);
 int ups_cmd_bypass_disable(modbus_t *ctx);
-int ups_cmd_set_mode(modbus_t *ctx, uint16_t mode);
+int ups_cmd_set_freq_tolerance(modbus_t *ctx, uint16_t setting);
 
 /* Read transfer voltage thresholds (regs 1026-1027) */
 int ups_read_thresholds(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low);
