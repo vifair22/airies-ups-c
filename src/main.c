@@ -19,10 +19,6 @@
 #define CONFIG_PATH       "config.ini"
 #define HE_INHIBIT_FILE   "he_inhibit"
 
-/* Operating mode register values */
-#define UPS_MODE_HE     64
-#define UPS_MODE_ONLINE  2
-
 static volatile int running = 1;
 static pushover_client po_client;
 static int po_enabled = 0;
@@ -250,20 +246,42 @@ static void cmd_bypass(modbus_t *ctx, int enable)
     }
 }
 
-static void cmd_mode(modbus_t *ctx, uint16_t mode, const char *source)
+static const char *freq_name(uint16_t val)
 {
-    if (ups_cmd_set_mode(ctx, mode) == 0) {
-        if (mode == UPS_MODE_HE) {
-            he_inhibit_clear();
-            log_msg("INFO", "HE mode requested, inhibit cleared — transition takes ~30 seconds");
-        } else {
+    switch (val) {
+    case UPS_FREQ_AUTO:     return "auto";
+    case UPS_FREQ_HZ50_0_1: return "hz50_0_1";
+    case UPS_FREQ_HZ50_3_0: return "hz50_3_0";
+    case UPS_FREQ_HZ60_0_1: return "hz60_0_1";
+    case UPS_FREQ_HZ60_3_0: return "hz60_3_0";
+    default:                return "unknown";
+    }
+}
+
+/* Returns non-zero if this frequency tolerance is narrow enough to inhibit HE */
+static int freq_is_inhibit(uint16_t val)
+{
+    return val == UPS_FREQ_HZ50_0_1 || val == UPS_FREQ_HZ60_0_1;
+}
+
+static void cmd_freq(modbus_t *ctx, uint16_t setting, const char *source)
+{
+    if (ups_cmd_set_freq_tolerance(ctx, setting) == 0) {
+        char msg[128];
+        if (freq_is_inhibit(setting)) {
             he_inhibit_set(source);
-            char msg[128];
-            snprintf(msg, sizeof(msg), "Online mode requested (%s), HE inhibit set — HE will drop within ~5 seconds", source);
-            log_msg("INFO", msg);
+            snprintf(msg, sizeof(msg),
+                     "Frequency tolerance set to %s (%s) — HE inhibited",
+                     freq_name(setting), source);
+        } else {
+            he_inhibit_clear();
+            snprintf(msg, sizeof(msg),
+                     "Frequency tolerance set to %s — HE inhibit cleared",
+                     freq_name(setting));
         }
+        log_msg("INFO", msg);
     } else {
-        log_msg("ERROR", "Failed to set operating mode");
+        log_msg("ERROR", "Failed to set frequency tolerance");
     }
 }
 
@@ -331,35 +349,45 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
         }
         break;
 
-    case IPC_CMD_MODE_HE:
-        rc = ups_cmd_set_mode(ctx, UPS_MODE_HE);
+    case IPC_CMD_FREQ_AUTO:
+    case IPC_CMD_FREQ_HZ50_0_1:
+    case IPC_CMD_FREQ_HZ50_3_0:
+    case IPC_CMD_FREQ_HZ60_0_1:
+    case IPC_CMD_FREQ_HZ60_0_1_WEATHER:
+    case IPC_CMD_FREQ_HZ60_3_0: {
+        static const struct { ipc_cmd_t cmd; uint16_t val; const char *src; } freq_map[] = {
+            { IPC_CMD_FREQ_AUTO,              UPS_FREQ_AUTO,     "manual" },
+            { IPC_CMD_FREQ_HZ50_0_1,         UPS_FREQ_HZ50_0_1, "manual" },
+            { IPC_CMD_FREQ_HZ50_3_0,         UPS_FREQ_HZ50_3_0, "manual" },
+            { IPC_CMD_FREQ_HZ60_0_1,         UPS_FREQ_HZ60_0_1, "manual" },
+            { IPC_CMD_FREQ_HZ60_0_1_WEATHER, UPS_FREQ_HZ60_0_1, "weather" },
+            { IPC_CMD_FREQ_HZ60_3_0,         UPS_FREQ_HZ60_3_0, "manual" },
+        };
+        uint16_t val = 0;
+        const char *src = "manual";
+        for (size_t i = 0; i < sizeof(freq_map) / sizeof(freq_map[0]); i++) {
+            if (freq_map[i].cmd == cmd) {
+                val = freq_map[i].val;
+                src = freq_map[i].src;
+                break;
+            }
+        }
+        rc = ups_cmd_set_freq_tolerance(ctx, val);
         if (rc == 0) {
-            he_inhibit_clear();
-            ipc_respond(client_fd, "OK\nHE mode requested, inhibit cleared — transition takes ~30 seconds\n");
+            if (freq_is_inhibit(val)) {
+                he_inhibit_set(src);
+                ipc_respond(client_fd, "OK\nFrequency tolerance set to %s (%s) — HE inhibited\n",
+                            freq_name(val), src);
+            } else {
+                he_inhibit_clear();
+                ipc_respond(client_fd, "OK\nFrequency tolerance set to %s — HE inhibit cleared\n",
+                            freq_name(val));
+            }
         } else {
-            ipc_respond(client_fd, "ERR Failed to set HE mode\n");
+            ipc_respond(client_fd, "ERR Failed to set frequency tolerance\n");
         }
         break;
-
-    case IPC_CMD_MODE_ONLINE:
-        rc = ups_cmd_set_mode(ctx, UPS_MODE_ONLINE);
-        if (rc == 0) {
-            he_inhibit_set("manual");
-            ipc_respond(client_fd, "OK\nOnline mode requested (manual), HE inhibit set — HE will drop within ~5 seconds\n");
-        } else {
-            ipc_respond(client_fd, "ERR Failed to set online mode\n");
-        }
-        break;
-
-    case IPC_CMD_MODE_ONLINE_WEATHER:
-        rc = ups_cmd_set_mode(ctx, UPS_MODE_ONLINE);
-        if (rc == 0) {
-            he_inhibit_set("weather");
-            ipc_respond(client_fd, "OK\nOnline mode requested (weather), HE inhibit set — HE will drop within ~5 seconds\n");
-        } else {
-            ipc_respond(client_fd, "ERR Failed to set online mode\n");
-        }
-        break;
+    }
 
     case IPC_CMD_TEST_BATTERY:
         rc = ups_cmd_battery_test(ctx);
@@ -599,7 +627,7 @@ typedef enum {
     MODE_TEST_SSH,
     MODE_REBOOT_NOW,
     MODE_BYPASS,
-    MODE_SET_MODE,
+    MODE_SET_FREQ,
     MODE_CLEAR_FAULTS,
     MODE_MUTE,
     MODE_UNMUTE,
@@ -607,13 +635,21 @@ typedef enum {
 } cli_mode_t;
 
 /* Map CLI modes to IPC command strings */
-static const char *mode_to_ipc_cmd(cli_mode_t mode, int bypass_on, uint16_t set_mode_val)
+static const char *cli_to_ipc_cmd(cli_mode_t mode, int bypass_on, uint16_t freq_val)
 {
     switch (mode) {
     case MODE_STATUS:       return "STATUS";
     case MODE_TEST_BATTERY: return "TEST BATTERY";
     case MODE_BYPASS:       return bypass_on ? "BYPASS ON" : "BYPASS OFF";
-    case MODE_SET_MODE:     return set_mode_val == UPS_MODE_HE ? "MODE HE" : "MODE ONLINE";
+    case MODE_SET_FREQ:
+        switch (freq_val) {
+        case UPS_FREQ_AUTO:     return "FREQ AUTO";
+        case UPS_FREQ_HZ50_0_1: return "FREQ HZ50_0_1";
+        case UPS_FREQ_HZ50_3_0: return "FREQ HZ50_3_0";
+        case UPS_FREQ_HZ60_0_1: return "FREQ HZ60_0_1";
+        case UPS_FREQ_HZ60_3_0: return "FREQ HZ60_3_0";
+        default:                return NULL;
+        }
     case MODE_CLEAR_FAULTS: return "CLEAR FAULTS";
     case MODE_MUTE:         return "MUTE";
     case MODE_UNMUTE:       return "UNMUTE";
@@ -633,7 +669,12 @@ static void usage(const char *prog)
             "  --test-ssh          Test SSH connectivity to shutdown targets\n"
             "  --reboot-now        Interactive shutdown workflow\n"
             "  --bypass on|off     Enable/disable bypass mode (requires confirmation)\n"
-            "  --mode he|online    Set operating mode (HE or Online)\n"
+            "  --freq <setting>    Set output frequency tolerance (reg 593)\n"
+            "                      auto      Automatic 50/60Hz (47-53, 57-63)\n"
+            "                      hz50_0_1  50 Hz +/- 0.1 Hz\n"
+            "                      hz50_3_0  50 Hz +/- 3.0 Hz\n"
+            "                      hz60_0_1  60 Hz +/- 0.1 Hz (inhibits HE)\n"
+            "                      hz60_3_0  60 Hz +/- 3.0 Hz (allows HE)\n"
             "  --clear-faults      Clear UPS fault conditions\n"
             "  --mute              Mute active alarms\n"
             "  --unmute            Cancel alarm mute\n"
@@ -677,7 +718,7 @@ int main(int argc, char *argv[])
     const char *config_path = CONFIG_PATH;
     cli_mode_t mode = MODE_MONITOR;
     int bypass_on = 0;
-    uint16_t set_mode_val = 0;
+    uint16_t freq_val = 0;
     shutdown_flags_t sflags = { 0, 0, 0 };
 
     /* Parse args */
@@ -701,15 +742,21 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Invalid bypass argument: %s (expected on|off)\n", argv[i]);
                 return 1;
             }
-        } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
-            mode = MODE_SET_MODE;
+        } else if (strcmp(argv[i], "--freq") == 0 && i + 1 < argc) {
+            mode = MODE_SET_FREQ;
             i++;
-            if (strcmp(argv[i], "he") == 0)
-                set_mode_val = UPS_MODE_HE;
-            else if (strcmp(argv[i], "online") == 0)
-                set_mode_val = UPS_MODE_ONLINE;
+            if (strcmp(argv[i], "auto") == 0)
+                freq_val = UPS_FREQ_AUTO;
+            else if (strcmp(argv[i], "hz50_0_1") == 0)
+                freq_val = UPS_FREQ_HZ50_0_1;
+            else if (strcmp(argv[i], "hz50_3_0") == 0)
+                freq_val = UPS_FREQ_HZ50_3_0;
+            else if (strcmp(argv[i], "hz60_0_1") == 0)
+                freq_val = UPS_FREQ_HZ60_0_1;
+            else if (strcmp(argv[i], "hz60_3_0") == 0)
+                freq_val = UPS_FREQ_HZ60_3_0;
             else {
-                fprintf(stderr, "Invalid mode argument: %s (expected he|online)\n", argv[i]);
+                fprintf(stderr, "Invalid freq argument: %s (expected auto|hz50_0_1|hz50_3_0|hz60_0_1|hz60_3_0)\n", argv[i]);
                 return 1;
             }
         } else if (strcmp(argv[i], "--clear-faults") == 0) {
@@ -764,7 +811,7 @@ int main(int argc, char *argv[])
 
     /* For one-shot commands, try IPC to running monitor first */
     if (mode != MODE_MONITOR && mode != MODE_TEST_SSH && mode != MODE_REBOOT_NOW) {
-        const char *ipc_cmd = mode_to_ipc_cmd(mode, bypass_on, set_mode_val);
+        const char *ipc_cmd = cli_to_ipc_cmd(mode, bypass_on, freq_val);
         if (ipc_cmd) {
             int rc = oneshot_via_ipc(&cfg, ipc_cmd);
             if (rc >= 0) return rc;
@@ -817,8 +864,8 @@ int main(int argc, char *argv[])
     case MODE_BYPASS:
         cmd_bypass(ctx, bypass_on);
         break;
-    case MODE_SET_MODE:
-        cmd_mode(ctx, set_mode_val, "manual");
+    case MODE_SET_FREQ:
+        cmd_freq(ctx, freq_val, "manual");
         break;
     case MODE_CLEAR_FAULTS:
         cmd_clear_faults(ctx);

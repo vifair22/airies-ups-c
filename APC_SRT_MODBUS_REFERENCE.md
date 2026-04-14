@@ -241,44 +241,46 @@ String registers store 2 ASCII characters per register (MSB = first char, LSB = 
 | 589 | 73 | 1 | Nominal Real Power | uint16 | Watts (900 on this unit) |
 | 590 | 74 | 1 | SOG Relay Config | uint16 BF | Bit 0=MOG, 1=SOG0, 2=SOG1, 3=SOG2 |
 | 591 | 75 | 1 | Manufacture Date | uint16 | Days since 2000-01-01 |
-| 592 | 76 | 1 | Operating Mode (reported) | uint16 | 2 = HE active. Read-only. |
-| 593 | 77 | 1 | Operating Mode (setting) | uint16 | See table below. **Read/Write.** |
+| 592 | 76 | 1 | Output.VoltageACSetting_BF | uint16 BF | Output voltage setting. Bit 1=VAC120. Read-only. |
+| 593 | 77 | 1 | Output.AcceptableFrequencySetting_BF | uint16 BF | See table below. **Read/Write.** |
 | 595 | 79 | 1 | Battery Install Date | uint16 | Days since 2000-01-01 |
 
 ---
 
-## Operating Mode (Register 593)
+## Output Frequency Tolerance (Register 593)
 
-**This register overrides the active UPS operating mode.** It does NOT change the LCD configuration — the UPS front panel will still show whichever mode was configured via the LCD. Register 593 acts as a transient override that the UPS firmware may reconcile with the LCD config over time.
+**Register 593 is `Output.AcceptableFrequencySetting_BF`** — it controls the acceptable input frequency tolerance for the UPS output. This is NOT an operating mode register, despite the behavioral side effects described below.
+
+The official Schneider Electric register map (990-9840A/B) documents this register as a bitfield where each bit selects a frequency/tolerance combination.
 
 ### Accepted Values
 
-| Value | Effect | HE Status Bit | Recovers to HE on its own? |
-|-------|--------|---------------|---------------------------|
-| 64 | High Efficiency (HE/ECO) | ON | N/A — this IS HE mode |
-| 2 | Normal Online (double conversion) | OFF immediately | Untested |
-| 8 | Forces Online mode | OFF immediately | No — held out indefinitely |
-| 16 | Forces Online mode | OFF immediately | No — held out indefinitely |
-| 1 | Accepted, no observable effect | No change | N/A |
-| 3 | Accepted, no observable effect | No change | N/A |
+| Value | Bit | Doc Name | Meaning | HE Side Effect |
+|-------|-----|----------|---------|----------------|
+| 1 | 0 | Auto | Automatic 50/60Hz (47-53, 57-63) | Allows HE |
+| 2 | 1 | Hz50_0_1 | 50 Hz +/- 0.1 Hz | **Forces 50Hz output on 60Hz unit — UNSAFE** |
+| 8 | 3 | Hz50_3_0 | 50 Hz +/- 3.0 Hz | Forces 50Hz output — UNSAFE on 60Hz unit |
+| 16 | 4 | Hz60_0_1 | 60 Hz +/- 0.1 Hz | Inhibits HE (tolerance too tight for passthrough) |
+| 64 | 6 | Hz60_3_0 | 60 Hz +/- 3.0 Hz | Allows HE |
 
 ### Rejected Values
 
 | Value | Result |
 |-------|--------|
-| 0, 4, 32, 48, 128, 256 | Slave device or server failure |
+| 0, 4, 32, 48, 128, 256 | Slave device or server failure (reserved/undefined bits) |
 
 ### Behavior Notes
 
-- **Writing 64 restores HE mode within ~30 seconds** (the physical power path transition from double conversion to HE).
-- **Writing 2, 8, or 16 drops HE within 5 seconds.** All three appear identical from the LCD — the display shows "Online" but the HE config setting remains "Enabled."
-- **Values 1 and 3 are accepted but produce no visible change** — HE stayed active, LCD unchanged. These may be read-back artifacts or mode variants that don't differ from the current state.
-- **The LCD config is authoritative for persistence.** If the LCD is set to HE and you write 593=64, HE engages quickly (~30s). If you write any other value, HE drops, but the UPS may or may not reconcile back to the LCD setting on its own. Writing 8 or 16 held the UPS out of HE indefinitely despite the LCD still showing HE enabled.
-- **For reliable, persistent mode control**, change the mode through the UPS front panel LCD. Register 593 is useful for temporary overrides and for reading the current mode setting.
+- **This register controls the output frequency, not just input acceptance.** Writing value 2 (Hz50_0_1) to a 60Hz unit causes the UPS to generate a 50Hz output waveform. This was confirmed with a multimeter showing 50.1Hz on the load side. **Setting a 50Hz tolerance on a 60Hz unit is dangerous for downstream equipment.**
+- **Value 64 (Hz60_3_0) allows HE mode** because the wide tolerance (±3.0Hz) lets the UPS pass input through without tight frequency validation. Transition to HE takes ~30 seconds.
+- **Value 16 (Hz60_0_1) inhibits HE mode** because the narrow tolerance (±0.1Hz) is tight enough that real-world utility frequency variation prevents HE engagement. The output remains at 60Hz (confirmed by multimeter). HE drops within ~5 seconds.
+- **The UPS slew-rates frequency transitions at ~0.5Hz/sec** rather than stepping, so downstream equipment sees a smooth ramp when the setting changes.
+- **The LCD config is authoritative for persistence.** Register 593 acts as a transient override. The LCD front panel will still show whatever was configured locally.
+- **No dedicated operating mode register exists** over serial RTU on SRT1000XLA FW 16.5. The NUT apc_modbus driver also does not implement mode control. The only way to reliably change HE/Online mode is through the LCD. Frequency tolerance manipulation is a workaround with the caveats described above.
 
-### Register 592 (Read-Only)
+### Register 592: Output.VoltageACSetting_BF (Read-Only)
 
-Register 592 reports the current active operating mode. Observed value is always `2` regardless of whether HE is actually active or not — this register appears to lag or report a different aspect of the mode than expected. **Use status bit 13 (HE) in register 0-1 to determine actual HE state, not register 592.**
+Register 592 is the output voltage setting bitfield, NOT an operating mode readback. Observed value of `2` (bit 1 set) corresponds to VAC120 (120V output), which is correct for a US unit. **Use status bit 13 (HE) in register 0-1 to determine actual HE state.**
 
 ---
 
@@ -609,7 +611,7 @@ Online (0x00002002 OL HE)
 
 1. **Outlet Command register (1538) does not accept writes over serial RTU.** Use register 1540 (SimpleSignalingCommand) for shutdown instead. This means per-outlet-group control is not available over serial — the shutdown command affects all outlets.
 
-2. **Operating mode changes (reg 593) take effect immediately in config but the physical power path transition requires ~5 minutes of stabilization.** The UPS LCD will show the new mode immediately but status bit 13 (HE) won't reflect the change until the transition completes.
+2. **Frequency tolerance changes (reg 593) affect the output waveform.** Setting a 50Hz tolerance on a 60Hz unit will cause 50Hz output. Only use frequency values matching the local grid frequency. The UPS slew-rates frequency transitions at ~0.5Hz/sec. Status bit 13 (HE) may take ~5 minutes to stabilize after a tolerance change.
 
 3. **Rapid-fire config register writes will reset the UPS control plane.** Writing to multiple config registers (1024-1073) without delays causes a watchdog timeout or buffer overflow in the UPS firmware, resulting in a control plane reboot (outlets stay up, but the internal controller bounces and Modbus communication is briefly lost). The NUT `apc_modbus` driver works around this with a mandatory **100ms `usleep()` after every register write** (see NUT source line ~1687: *"There seem to be some communication problems if we don't wait after writing"*). For safety, use at least 100-200ms delay between consecutive writes. This is not an issue for normal monitoring operations — only relevant when writing config/settings.
 

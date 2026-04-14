@@ -98,7 +98,7 @@ int ups_read_inventory(modbus_t *ctx, ups_inventory_t *inv)
     inv->nominal_va     = regs[72];
     inv->nominal_watts  = regs[73];
     inv->sog_config     = regs[74];
-    inv->operating_mode = regs[77];
+    inv->freq_tolerance = regs[77];
 
     return 0;
 }
@@ -148,9 +148,9 @@ int ups_cmd_bypass_disable(modbus_t *ctx)
     return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
 }
 
-int ups_cmd_set_mode(modbus_t *ctx, uint16_t mode)
+int ups_cmd_set_freq_tolerance(modbus_t *ctx, uint16_t setting)
 {
-    return modbus_write_register(ctx, 593, mode) == 1 ? 0 : -1;
+    return modbus_write_register(ctx, 593, setting) == 1 ? 0 : -1;
 }
 
 int ups_read_thresholds(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low)
