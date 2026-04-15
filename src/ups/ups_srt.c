@@ -207,11 +207,9 @@ static const ups_freq_setting_t srt_freq_settings[] = {
 
 static const ups_bitfield_opt_t srt_bat_test_opts[] = {
     { 1,  "never",           "Never" },
-    { 2,  "onstart_only",    "On Startup" },
-    { 4,  "onstart_plus_7",  "On Startup + 7 Days" },
-    { 8,  "onstart_plus_14", "On Startup + 14 Days" },
-    { 16, "every_7_since",   "7 Days (resets after test)" },
-    { 32, "every_14_since",  "14 Days (resets after test)" },
+    { 2,  "onstart_only",    "Startup Only" },
+    { 16, "onstart_7d",      "Startup + 7d Since Test" },
+    { 32, "onstart_14d",     "Startup + 14d Since Test" },
 };
 
 static const ups_bitfield_opt_t srt_voltage_opts[] = {
