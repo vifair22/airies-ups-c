@@ -200,6 +200,57 @@ static const ups_freq_setting_t srt_freq_settings[] = {
     { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz",                0 },
 };
 
+/* --- Config register descriptors --- */
+
+static const ups_bitfield_opt_t srt_bat_test_opts[] = {
+    { 1,  "never",           "Never" },
+    { 2,  "onstart_only",    "On startup only" },
+    { 4,  "onstart_plus_7",  "On startup + every 7 days" },
+    { 8,  "onstart_plus_14", "On startup + every 14 days" },
+    { 16, "every_7_since",   "Every 7 days since last test" },
+    { 32, "every_14_since",  "Every 14 days since last test" },
+};
+
+static const ups_config_reg_t srt_config_regs[] = {
+    /* Transfer voltages */
+    { "transfer_high", "Input Transfer High Voltage", "V", "transfer",
+      1026, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 100, 140 } },
+    { "transfer_low", "Input Transfer Low Voltage", "V", "transfer",
+      1027, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 90, 110 } },
+
+    /* Battery test interval */
+    { "bat_test_interval", "Battery Test Interval", NULL, "battery",
+      1024, 1, UPS_CFG_BITFIELD, 1, 1,
+      .meta.bitfield = { srt_bat_test_opts,
+                         sizeof(srt_bat_test_opts) / sizeof(srt_bat_test_opts[0]) } },
+
+    /* MOG delays */
+    { "mog_shutdown_delay", "MOG Shutdown Delay", "s", "delays",
+      1029, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    { "mog_start_delay", "MOG Start Delay", "s", "delays",
+      1030, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+
+    /* SOG0 delays */
+    { "sog0_shutdown_delay", "SOG0 Shutdown Delay", "s", "delays",
+      1034, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    { "sog0_start_delay", "SOG0 Start Delay", "s", "delays",
+      1035, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+
+    /* SOG1 delays */
+    { "sog1_shutdown_delay", "SOG1 Shutdown Delay", "s", "delays",
+      1039, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    { "sog1_start_delay", "SOG1 Start Delay", "s", "delays",
+      1040, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+
+    /* Output voltage setting (read-only) */
+    { "output_voltage_setting", "Output Voltage Setting", NULL, "output",
+      592, 1, UPS_CFG_BITFIELD, 1, 0, .meta.bitfield = { NULL, 0 } },
+
+    /* Battery install date */
+    { "battery_date", "Battery Install Date", "days since 2000-01-01", "battery",
+      595, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+};
+
 /* --- Driver definition --- */
 
 const ups_driver_t ups_driver_srt = {
@@ -210,6 +261,8 @@ const ups_driver_t ups_driver_srt = {
                           UPS_CAP_BYPASS | UPS_CAP_FREQ_TOLERANCE | UPS_CAP_HE_MODE,
     .freq_settings       = srt_freq_settings,
     .freq_settings_count = sizeof(srt_freq_settings) / sizeof(srt_freq_settings[0]),
+    .config_regs         = srt_config_regs,
+    .config_regs_count   = sizeof(srt_config_regs) / sizeof(srt_config_regs[0]),
     .read_status         = srt_read_status,
     .read_dynamic        = srt_read_dynamic,
     .read_inventory      = srt_read_inventory,

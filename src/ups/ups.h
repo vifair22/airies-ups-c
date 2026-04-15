@@ -150,6 +150,26 @@ int ups_cmd_bypass_enable(ups_t *ups);
 int ups_cmd_bypass_disable(ups_t *ups);
 int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting);
 
+/* --- Config register access --- */
+
+/* Get the list of config register descriptors from the active driver. */
+const ups_config_reg_t *ups_get_config_regs(const ups_t *ups, size_t *count);
+
+/* Find a config register descriptor by name. Returns NULL if not found. */
+const ups_config_reg_t *ups_find_config_reg(const ups_t *ups, const char *name);
+
+/* Read a config register value. Returns raw uint16 value(s).
+ * For scalars: *value = raw register value (caller applies scale).
+ * For strings: writes decoded string to str_buf.
+ * Returns 0 on success. */
+int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
+                    uint16_t *raw_value, char *str_buf, size_t str_bufsz);
+
+/* Write a config register value. Enforces 100ms inter-write delay.
+ * Reads back after write for verification.
+ * Returns 0 on success, UPS_ERR_NOT_SUPPORTED if not writable. */
+int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value);
+
 /* Human-readable strings (shared across all APC Modbus models) */
 const char *ups_transfer_reason_str(uint16_t reason);
 const char *ups_status_str(uint32_t status, char *buf, size_t len);

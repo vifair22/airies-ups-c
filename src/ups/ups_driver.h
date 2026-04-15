@@ -31,6 +31,40 @@ typedef struct {
     int         inhibits_he;  /* 1 if this tolerance inhibits HE mode */
 } ups_freq_setting_t;
 
+/* Config register types */
+typedef enum {
+    UPS_CFG_SCALAR,     /* uint16, read as integer, apply scale */
+    UPS_CFG_BITFIELD,   /* uint16, one-bit-set enum */
+    UPS_CFG_STRING,     /* multiple regs, 2 ASCII chars per reg */
+} ups_cfg_type_t;
+
+/* Bitfield option descriptor */
+typedef struct {
+    uint16_t    value;  /* register value (single bit set) */
+    const char *name;   /* short name: "onstart_plus_7" */
+    const char *label;  /* display: "On startup + every 7 days" */
+} ups_bitfield_opt_t;
+
+/* Config register descriptor */
+typedef struct {
+    const char    *name;         /* "transfer_high" */
+    const char    *display_name; /* "Input Transfer High Voltage" */
+    const char    *unit;         /* "V", "s", "%", NULL */
+    const char    *group;        /* "transfer", "delays", "load_shed" */
+    uint16_t       reg_addr;
+    uint8_t        reg_count;    /* 1 for uint16, 2 for uint32, N for string */
+    ups_cfg_type_t type;
+    uint16_t       scale;        /* divisor (1 = raw, 0 = raw) */
+    int            writable;
+
+    /* Type-specific metadata */
+    union {
+        struct { int32_t min; int32_t max; } scalar;
+        struct { const ups_bitfield_opt_t *opts; size_t count; } bitfield;
+        struct { size_t max_chars; } string;
+    } meta;
+} ups_config_reg_t;
+
 /* Driver vtable — each UPS family implements this */
 typedef struct ups_driver {
     const char *name;  /* "srt", "smt" */
@@ -44,6 +78,10 @@ typedef struct ups_driver {
     /* Frequency tolerance settings (NULL if UPS_CAP_FREQ_TOLERANCE not set) */
     const ups_freq_setting_t *freq_settings;
     size_t                    freq_settings_count;
+
+    /* Config register descriptors (NULL if none) */
+    const ups_config_reg_t *config_regs;
+    size_t                  config_regs_count;
 
     /* --- Reads --- */
     int (*read_status)(modbus_t *ctx, ups_data_t *data);

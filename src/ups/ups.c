@@ -240,6 +240,81 @@ int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
     return ups->driver->cmd_set_freq_tolerance(ups->ctx, setting);
 }
 
+/* --- Config register access --- */
+
+#include <time.h>
+
+const ups_config_reg_t *ups_get_config_regs(const ups_t *ups, size_t *count)
+{
+    if (!ups->driver->config_regs) {
+        if (count) *count = 0;
+        return NULL;
+    }
+    if (count) *count = ups->driver->config_regs_count;
+    return ups->driver->config_regs;
+}
+
+const ups_config_reg_t *ups_find_config_reg(const ups_t *ups, const char *name)
+{
+    size_t count;
+    const ups_config_reg_t *regs = ups_get_config_regs(ups, &count);
+    if (!regs) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(regs[i].name, name) == 0)
+            return &regs[i];
+    }
+    return NULL;
+}
+
+int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
+                    uint16_t *raw_value, char *str_buf, size_t str_bufsz)
+{
+    uint16_t regs[32];
+    int n = reg->reg_count > 0 ? reg->reg_count : 1;
+    if (n > 32) n = 32;
+
+    if (modbus_read_registers(ups->ctx, reg->reg_addr, n, regs) != n)
+        return UPS_ERR_IO;
+
+    if (reg->type == UPS_CFG_STRING && str_buf) {
+        size_t max = str_bufsz - 1;
+        if (max > (size_t)n * 2) max = (size_t)n * 2;
+        for (size_t i = 0; i < max / 2 && i < (size_t)n; i++) {
+            str_buf[i * 2]     = (char)((regs[i] >> 8) & 0xFF);
+            str_buf[i * 2 + 1] = (char)(regs[i] & 0xFF);
+        }
+        str_buf[max] = '\0';
+    }
+
+    if (raw_value)
+        *raw_value = regs[0];
+
+    return UPS_OK;
+}
+
+int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
+{
+    if (!reg->writable)
+        return UPS_ERR_NOT_SUPPORTED;
+
+    if (modbus_write_register(ups->ctx, reg->reg_addr, value) != 1)
+        return UPS_ERR_IO;
+
+    /* Inter-write delay (UPS firmware requirement — 100ms minimum) */
+    struct timespec delay = { .tv_sec = 0, .tv_nsec = 100000000 };
+    nanosleep(&delay, NULL);
+
+    /* Read back for verification */
+    uint16_t readback;
+    if (modbus_read_registers(ups->ctx, reg->reg_addr, 1, &readback) != 1)
+        return UPS_ERR_IO;
+
+    if (readback != value)
+        return UPS_ERR_IO;  /* write verification failed */
+
+    return UPS_OK;
+}
+
 /* --- String helpers (shared across all APC Modbus models) --- */
 
 static const char *transfer_reasons[] = {

@@ -193,6 +193,8 @@ const ups_driver_t ups_driver_smt = {
                           UPS_CAP_CLEAR_FAULTS | UPS_CAP_MUTE | UPS_CAP_BEEP,
     .freq_settings       = NULL,
     .freq_settings_count = 0,
+    .config_regs         = NULL,  /* TODO: populate after SMT hardware testing */
+    .config_regs_count   = 0,
     .read_status         = smt_read_status,
     .read_dynamic        = smt_read_dynamic,
     .read_inventory      = smt_read_inventory,
