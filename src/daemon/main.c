@@ -138,7 +138,7 @@ int main(int argc, char *argv[])
     int http_port = config_get_int(cfg, "http.port", 8080);
     const char *socket_path = config_get_str(cfg, "http.socket");
 
-    api_server_t *api = api_server_create(http_port, socket_path, NULL);
+    api_server_t *api = api_server_create(http_port, socket_path, "frontend/dist");
     if (!api) {
         log_error("failed to start API server");
         if (mon) monitor_stop(mon);

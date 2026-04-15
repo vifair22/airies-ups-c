@@ -74,7 +74,14 @@ analyze: check
 	         --suppress=missingIncludeSystem \
 	         -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON src/
 
+# Frontend
+frontend:
+	cd frontend && bun install && bun run build
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all check analyze clean
+clean-all: clean
+	rm -rf frontend/dist frontend/node_modules
+
+.PHONY: all check analyze frontend clean clean-all
