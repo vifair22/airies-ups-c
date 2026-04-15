@@ -1,10 +1,16 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { useApi } from '../hooks/useApi'
+
+interface StatusBrief {
+  driver: string
+  connected: boolean
+}
 
 const nav = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/events', label: 'Events' },
-  { to: '/telemetry', label: 'Telemetry' },
-  { to: '/commands', label: 'Commands' },
+  { to: '/', label: 'Dashboard', icon: '~' },
+  { to: '/events', label: 'Events', icon: '!' },
+  { to: '/telemetry', label: 'Telemetry', icon: '#' },
+  { to: '/commands', label: 'Commands', icon: '>' },
 ]
 
 const configNav = [
@@ -20,7 +26,7 @@ function SideLink({ to, label }: { to: string; label: string }) {
       to={to}
       end={to === '/'}
       className={({ isActive }) =>
-        `block px-4 py-2 rounded text-sm ${
+        `block px-3 py-1.5 rounded text-sm transition-colors ${
           isActive
             ? 'bg-gray-800 text-white font-medium'
             : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
@@ -33,26 +39,40 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
+  const { data: status } = useApi<StatusBrief>('/api/status', 5000)
+
   return (
     <div className="flex min-h-screen bg-gray-950 text-gray-100">
-      <aside className="w-52 border-r border-gray-800 p-4 flex flex-col gap-1">
-        <h1 className="text-lg font-semibold px-4 py-2 mb-2">airies-ups</h1>
+      <aside className="w-52 border-r border-gray-800 px-3 py-4 flex flex-col gap-0.5 shrink-0">
+        <div className="px-3 py-2 mb-3">
+          <h1 className="text-lg font-semibold tracking-tight">airies-ups</h1>
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className={`w-2 h-2 rounded-full ${
+              status?.connected ? 'bg-green-400' : 'bg-gray-600'
+            }`} />
+            <span className="text-xs text-gray-500">
+              {status?.connected ? `${status.driver} connected` : 'disconnected'}
+            </span>
+          </div>
+        </div>
 
         {nav.map((n) => (
-          <SideLink key={n.to} {...n} />
+          <SideLink key={n.to} to={n.to} label={n.label} />
         ))}
 
-        <p className="text-xs text-gray-600 uppercase tracking-wider px-4 mt-4 mb-1">
-          Config
+        <p className="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-5 mb-1">
+          Configuration
         </p>
         {configNav.map((n) => (
           <SideLink key={n.to} {...n} />
         ))}
 
-        <div className="mt-auto px-4 py-2 text-xs text-gray-600">v0.1.0</div>
+        <div className="mt-auto px-3 py-2 text-[10px] text-gray-700 font-mono">
+          v0.1.0
+        </div>
       </aside>
 
-      <main className="flex-1 p-6 overflow-auto">
+      <main className="flex-1 p-6 overflow-auto min-w-0">
         <Outlet />
       </main>
     </div>
