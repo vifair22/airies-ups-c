@@ -2,6 +2,7 @@
 #define API_ROUTES_H
 
 #include "api/server.h"
+#include "api/auth.h"
 #include "monitor/monitor.h"
 #include "shutdown/shutdown.h"
 #include <cutils/db.h>

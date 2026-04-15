@@ -603,6 +603,65 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+/* --- Auth endpoints --- */
+
+static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (auth_is_setup(ctx->db))
+        return api_error(400, "admin password already set");
+
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jpw = cJSON_GetObjectItem(body, "password");
+    if (!jpw || !cJSON_IsString(jpw) || strlen(jpw->valuestring) < 4) {
+        cJSON_Delete(body);
+        return api_error(400, "password must be at least 4 characters");
+    }
+
+    auth_set_password(ctx->db, jpw->valuestring);
+    cJSON_Delete(body);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "password set");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
+static api_response_t handle_auth_login(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jpw = cJSON_GetObjectItem(body, "password");
+    if (!jpw || !cJSON_IsString(jpw)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing 'password'");
+    }
+
+    if (!auth_verify_password(ctx->db, jpw->valuestring)) {
+        cJSON_Delete(body);
+        return api_error(401, "invalid password");
+    }
+    cJSON_Delete(body);
+
+    char *token = auth_create_token(ctx->db, 24);
+    if (!token) return api_error(500, "failed to create session");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "token", token);
+    cJSON_AddNumberToObject(resp, "expires_in", 86400);
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    free(token);
+    return api_ok(json);
+}
+
 /* --- Route registration --- */
 
 void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
@@ -619,4 +678,6 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/shutdown/targets", API_POST, handle_shutdown_targets_post, ctx);
     api_server_route(srv, "/api/config/app",   API_GET,  handle_app_config_get, ctx);
     api_server_route(srv, "/api/config/app",   API_POST, handle_app_config_set, ctx);
+    api_server_route(srv, "/api/auth/setup",   API_POST, handle_auth_setup, ctx);
+    api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login, ctx);
 }
