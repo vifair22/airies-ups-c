@@ -206,12 +206,12 @@ static const ups_freq_setting_t srt_freq_settings[] = {
 /* --- Config register descriptors --- */
 
 static const ups_bitfield_opt_t srt_bat_test_opts[] = {
-    { 1,  "never",           "Do not perform battery test" },
-    { 2,  "onstart_only",    "Only on UPS powerup" },
-    { 4,  "onstart_plus_7",  "On powerup and every 7 days thereafter" },
-    { 8,  "onstart_plus_14", "On powerup and every 14 days thereafter" },
-    { 16, "every_7_since",   "Every 7 days after last test" },
-    { 32, "every_14_since",  "Every 14 days after last test" },
+    { 1,  "never",           "Never" },
+    { 2,  "onstart_only",    "On Startup" },
+    { 4,  "onstart_plus_7",  "On Startup + 7 Days" },
+    { 8,  "onstart_plus_14", "On Startup + 14 Days" },
+    { 16, "every_7_since",   "7 Days (resets after test)" },
+    { 32, "every_14_since",  "14 Days (resets after test)" },
 };
 
 static const ups_bitfield_opt_t srt_voltage_opts[] = {
