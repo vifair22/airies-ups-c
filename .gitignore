@@ -3,8 +3,15 @@ build/
 *.o
 *.d
 
-# Binary
+# Binaries
 airies-ups
+airies-upsd
+
+# Runtime
+config.yaml
+*.db
+*.db-wal
+*.db-shm
 
 # Editor
 *.swp
