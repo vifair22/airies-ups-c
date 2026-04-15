@@ -58,6 +58,11 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         cJSON_AddNumberToObject(out, "load_pct", data.load_pct);
         cJSON_AddItemToObject(obj, "output", out);
 
+        cJSON *byp = cJSON_CreateObject();
+        cJSON_AddNumberToObject(byp, "voltage", data.bypass_voltage);
+        cJSON_AddNumberToObject(byp, "frequency", data.bypass_frequency);
+        cJSON_AddItemToObject(obj, "bypass", byp);
+
         cJSON *in = cJSON_CreateObject();
         cJSON_AddNumberToObject(in, "voltage", data.input_voltage);
         cJSON_AddItemToObject(obj, "input", in);

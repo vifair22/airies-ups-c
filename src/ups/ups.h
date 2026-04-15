@@ -90,6 +90,9 @@ struct ups_data {
     double   output_voltage;      /* reg 142: Output[0].VoltageAC (/64) */
     double   output_frequency;    /* reg 144: Output.Frequency (/128) */
     uint32_t output_energy_wh;    /* reg 145-146: Output.Energy */
+    uint16_t bypass_status;       /* reg 147: Bypass.InputStatus_BF (SRT only) */
+    double   bypass_voltage;      /* reg 148: Bypass.VoltageAC (/64, SRT only) */
+    double   bypass_frequency;    /* reg 149: Bypass.Frequency (/128, SRT only) */
     uint16_t input_status;        /* reg 150: Input.InputStatus_BF */
     double   input_voltage;       /* reg 151: Input[0].VoltageAC (/64) */
     double   efficiency;          /* reg 154: Efficiency_EN (/128) */

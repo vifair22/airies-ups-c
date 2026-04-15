@@ -14,6 +14,7 @@ interface UpsStatus {
   status?: { raw: number; text: string }
   battery?: { charge_pct: number; voltage: number; runtime_sec: number }
   output?: { voltage: number; frequency: number; current: number; load_pct: number }
+  bypass?: { voltage: number; frequency: number }
   input?: { voltage: number }
   efficiency?: number
   transfer_reason?: string
@@ -125,9 +126,11 @@ export default function Dashboard() {
           <Metric label="Frequency" value={out?.frequency.toFixed(1) || '--'} unit="Hz" />
         </Card>
 
-        <Card title="Input">
-          <Metric label="Voltage" value={inp?.voltage.toFixed(1) || '--'} unit="V" />
-          <Metric label="Transfer" value={status.transfer_reason || '--'} />
+        <Card title="Input / Bypass">
+          <Metric label="Input Voltage" value={inp?.voltage.toFixed(1) || '--'} unit="V" />
+          <Metric label="Bypass Voltage" value={status.bypass?.voltage.toFixed(1) || '--'} unit="V" />
+          <Metric label="Bypass Frequency" value={status.bypass?.frequency.toFixed(1) || '--'} unit="Hz" />
+          <Metric label="Transfer Reason" value={status.transfer_reason || '--'} />
         </Card>
       </div>
 

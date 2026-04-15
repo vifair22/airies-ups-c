@@ -69,6 +69,9 @@ static int srt_read_dynamic(modbus_t *ctx, ups_data_t *data)
     data->output_voltage   = regs[14] / 64.0;
     data->output_frequency = regs[16] / 128.0;
     data->output_energy_wh = ((uint32_t)regs[17] << 16) | regs[18];
+    data->bypass_status    = regs[19];
+    data->bypass_voltage   = regs[20] / 64.0;
+    data->bypass_frequency = regs[21] / 128.0;
     data->input_status     = regs[22];
     data->input_voltage    = regs[23] / 64.0;
     data->efficiency       = (int16_t)regs[26] / 128.0;
@@ -268,6 +271,30 @@ static const ups_config_reg_t srt_config_regs[] = {
       1038, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
     { "sog1_min_return_runtime", "SOG1 Minimum Return Runtime", "s", "outlet_delays",
       1043, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+
+    /* Load shed config bitfields (2 regs each, we read low word only) */
+    { "mog_loadshed_config", "MOG Load Shed Config", NULL, "load_shed",
+      1054, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+    { "sog0_loadshed_config", "SOG0 Load Shed Config", NULL, "load_shed",
+      1056, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+    { "sog1_loadshed_config", "SOG1 Load Shed Config", NULL, "load_shed",
+      1058, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+
+    /* Load shed: runtime remaining thresholds (seconds, 32767 = disabled) */
+    { "mog_loadshed_runtime", "MOG Load Shed Runtime Threshold", "s", "load_shed",
+      1072, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog0_loadshed_runtime", "SOG0 Load Shed Runtime Threshold", "s", "load_shed",
+      1064, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog1_loadshed_runtime", "SOG1 Load Shed Runtime Threshold", "s", "load_shed",
+      1065, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+
+    /* Load shed: time on battery thresholds (seconds, 32767 = disabled) */
+    { "mog_loadshed_time_on_bat", "MOG Load Shed Time on Battery", "s", "load_shed",
+      1073, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog0_loadshed_time_on_bat", "SOG0 Load Shed Time on Battery", "s", "load_shed",
+      1068, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog1_loadshed_time_on_bat", "SOG1 Load Shed Time on Battery", "s", "load_shed",
+      1069, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
 
     /* Output voltage setting (read-only) */
     { "output_voltage_setting", "Output Voltage Setting", NULL, "output",
