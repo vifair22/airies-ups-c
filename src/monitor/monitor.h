@@ -2,6 +2,7 @@
 #define MONITOR_H
 
 #include "ups/ups.h"
+#include "monitor/retention.h"
 #include <cutils/db.h>
 #include <cutils/config.h>
 
@@ -28,6 +29,9 @@ typedef void (*monitor_event_fn)(const char *severity, const char *category,
  * Returns NULL on failure. */
 monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
                           int poll_interval_sec, int telemetry_interval_sec);
+
+/* Set retention policy. If not called, no retention cleanup runs. */
+void monitor_set_retention(monitor_t *mon, const retention_config_t *cfg);
 
 /* Register an event callback (state changes, alerts, shutdown triggers).
  * Multiple callbacks supported (up to 4). */

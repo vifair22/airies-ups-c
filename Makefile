@@ -31,8 +31,9 @@ UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
 # API server + routes
 API_SRCS   = src/api/server.c src/api/routes.c
 
-# Monitor + Alerts + Shutdown
+# Monitor + Alerts + Shutdown + Retention
 MON_SRCS   = src/monitor/monitor.c \
+             src/monitor/retention.c \
              src/alerts/alerts.c \
              src/shutdown/shutdown.c
 

@@ -44,6 +44,11 @@ struct monitor {
     /* Telemetry timing */
     time_t        last_telemetry;
 
+    /* Retention */
+    retention_config_t retention;
+    int                retention_enabled;
+    time_t             last_retention;
+
     /* Event callbacks */
     monitor_event_fn event_fns[MAX_EVENT_CBS];
     void            *event_uds[MAX_EVENT_CBS];
@@ -266,6 +271,12 @@ static void *monitor_thread(void *arg)
             record_telemetry(mon, &data);
             mon->last_telemetry = now;
         }
+
+        /* Daily retention cleanup */
+        if (mon->retention_enabled && now - mon->last_retention >= 86400) {
+            retention_run(mon->db, &mon->retention);
+            mon->last_retention = now;
+        }
     }
 
     return NULL;
@@ -298,6 +309,13 @@ int monitor_on_event(monitor_t *mon, monitor_event_fn fn, void *userdata)
     mon->event_uds[mon->nevent_cbs] = userdata;
     mon->nevent_cbs++;
     return CUTILS_OK;
+}
+
+void monitor_set_retention(monitor_t *mon, const retention_config_t *cfg)
+{
+    mon->retention = *cfg;
+    mon->retention_enabled = 1;
+    mon->last_retention = time(NULL);
 }
 
 int monitor_on_poll(monitor_t *mon, monitor_poll_fn fn, void *userdata)
