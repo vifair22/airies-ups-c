@@ -402,6 +402,207 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+/* --- Shutdown target/group CRUD --- */
+
+static api_response_t handle_shutdown_groups_get(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    db_result_t *result = NULL;
+    int rc = db_execute(ctx->db,
+        "SELECT id, name, execution_order, parallel FROM shutdown_groups ORDER BY execution_order",
+        NULL, &result);
+    if (rc != 0 || !result) return api_error(500, "failed to query groups");
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < result->nrows; i++) {
+        cJSON *g = cJSON_CreateObject();
+        cJSON_AddNumberToObject(g, "id", atoi(result->rows[i][0]));
+        cJSON_AddStringToObject(g, "name", result->rows[i][1]);
+        cJSON_AddNumberToObject(g, "execution_order", atoi(result->rows[i][2]));
+        cJSON_AddBoolToObject(g, "parallel", atoi(result->rows[i][3]));
+        cJSON_AddItemToArray(arr, g);
+    }
+    db_result_free(result);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
+static api_response_t handle_shutdown_groups_post(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jname  = cJSON_GetObjectItem(body, "name");
+    const cJSON *jorder = cJSON_GetObjectItem(body, "execution_order");
+    const cJSON *jpar   = cJSON_GetObjectItem(body, "parallel");
+
+    if (!jname || !cJSON_IsString(jname)) {
+        cJSON_Delete(body); return api_error(400, "missing 'name'");
+    }
+
+    char order_s[16] = "0", par_s[4] = "1";
+    if (jorder && cJSON_IsNumber(jorder)) snprintf(order_s, sizeof(order_s), "%d", jorder->valueint);
+    if (jpar && cJSON_IsBool(jpar)) snprintf(par_s, sizeof(par_s), "%d", cJSON_IsTrue(jpar));
+
+    const char *params[] = { jname->valuestring, order_s, par_s, NULL };
+    int rc = db_execute_non_query(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel) VALUES (?, ?, ?)",
+        params, NULL);
+    cJSON_Delete(body);
+    if (rc != 0) return api_error(500, "failed to create group");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "created");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok_status(201, json);
+}
+
+static api_response_t handle_shutdown_targets_get(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    db_result_t *result = NULL;
+    int rc = db_execute(ctx->db,
+        "SELECT t.id, t.name, t.method, t.host, t.username, t.command, "
+        "t.timeout_sec, t.order_in_group, g.name AS group_name "
+        "FROM shutdown_targets t JOIN shutdown_groups g ON t.group_id = g.id "
+        "ORDER BY g.execution_order, t.order_in_group",
+        NULL, &result);
+    if (rc != 0 || !result) return api_error(500, "failed to query targets");
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < result->nrows; i++) {
+        cJSON *t = cJSON_CreateObject();
+        cJSON_AddNumberToObject(t, "id", atoi(result->rows[i][0]));
+        cJSON_AddStringToObject(t, "name", result->rows[i][1]);
+        cJSON_AddStringToObject(t, "method", result->rows[i][2]);
+        cJSON_AddStringToObject(t, "host", result->rows[i][3]);
+        cJSON_AddStringToObject(t, "username", result->rows[i][4]);
+        cJSON_AddStringToObject(t, "command", result->rows[i][5]);
+        cJSON_AddNumberToObject(t, "timeout_sec", atoi(result->rows[i][6]));
+        cJSON_AddNumberToObject(t, "order_in_group", atoi(result->rows[i][7]));
+        cJSON_AddStringToObject(t, "group", result->rows[i][8]);
+        cJSON_AddItemToArray(arr, t);
+    }
+    db_result_free(result);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
+static api_response_t handle_shutdown_targets_post(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jgid  = cJSON_GetObjectItem(body, "group_id");
+    const cJSON *jname = cJSON_GetObjectItem(body, "name");
+    const cJSON *jmeth = cJSON_GetObjectItem(body, "method");
+    const cJSON *jhost = cJSON_GetObjectItem(body, "host");
+    const cJSON *juser = cJSON_GetObjectItem(body, "username");
+    const cJSON *jcred = cJSON_GetObjectItem(body, "credential");
+    const cJSON *jcmd  = cJSON_GetObjectItem(body, "command");
+    const cJSON *jtmo  = cJSON_GetObjectItem(body, "timeout_sec");
+
+    if (!jgid || !cJSON_IsNumber(jgid) ||
+        !jname || !cJSON_IsString(jname) ||
+        !jcmd || !cJSON_IsString(jcmd)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing required fields: group_id, name, command");
+    }
+
+    char gid_s[16], tmo_s[16] = "180", order_s[16] = "0";
+    snprintf(gid_s, sizeof(gid_s), "%d", jgid->valueint);
+    if (jtmo && cJSON_IsNumber(jtmo)) snprintf(tmo_s, sizeof(tmo_s), "%d", jtmo->valueint);
+
+    const char *params[] = {
+        gid_s,
+        jname->valuestring,
+        jmeth && cJSON_IsString(jmeth) ? jmeth->valuestring : "ssh_password",
+        jhost && cJSON_IsString(jhost) ? jhost->valuestring : "",
+        juser && cJSON_IsString(juser) ? juser->valuestring : "",
+        jcred && cJSON_IsString(jcred) ? jcred->valuestring : "",
+        jcmd->valuestring,
+        tmo_s,
+        order_s,
+        NULL
+    };
+    int rc = db_execute_non_query(ctx->db,
+        "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
+        "credential, command, timeout_sec, order_in_group) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params, NULL);
+    cJSON_Delete(body);
+    if (rc != 0) return api_error(500, "failed to create target");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "created");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok_status(201, json);
+}
+
+/* --- App config CRUD --- */
+
+static api_response_t handle_app_config_get(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    db_result_t *result = NULL;
+    int rc = db_execute(ctx->db,
+        "SELECT key, value, type, default_value, description FROM config ORDER BY key",
+        NULL, &result);
+    if (rc != 0 || !result) return api_error(500, "failed to query config");
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < result->nrows; i++) {
+        cJSON *c = cJSON_CreateObject();
+        cJSON_AddStringToObject(c, "key", result->rows[i][0]);
+        cJSON_AddStringToObject(c, "value", result->rows[i][1]);
+        cJSON_AddStringToObject(c, "type", result->rows[i][2]);
+        cJSON_AddStringToObject(c, "default_value", result->rows[i][3]);
+        cJSON_AddStringToObject(c, "description", result->rows[i][4]);
+        cJSON_AddItemToArray(arr, c);
+    }
+    db_result_free(result);
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
+static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jkey = cJSON_GetObjectItem(body, "key");
+    const cJSON *jval = cJSON_GetObjectItem(body, "value");
+    if (!jkey || !cJSON_IsString(jkey) || !jval || !cJSON_IsString(jval)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing 'key' and 'value' strings");
+    }
+
+    int rc = config_set_db(ctx->config, jkey->valuestring, jval->valuestring);
+    cJSON_Delete(body);
+
+    if (rc != 0) return api_error(400, "failed to update config");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "updated");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
 /* --- Route registration --- */
 
 void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
@@ -412,4 +613,10 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/telemetry",    API_GET,  handle_telemetry,      ctx);
     api_server_route(srv, "/api/config/ups*",  API_GET,  handle_config_ups_get, ctx);
     api_server_route(srv, "/api/config/ups",   API_POST, handle_config_ups_set, ctx);
+    api_server_route(srv, "/api/shutdown/groups",  API_GET,  handle_shutdown_groups_get,  ctx);
+    api_server_route(srv, "/api/shutdown/groups",  API_POST, handle_shutdown_groups_post, ctx);
+    api_server_route(srv, "/api/shutdown/targets", API_GET,  handle_shutdown_targets_get, ctx);
+    api_server_route(srv, "/api/shutdown/targets", API_POST, handle_shutdown_targets_post, ctx);
+    api_server_route(srv, "/api/config/app",   API_GET,  handle_app_config_get, ctx);
+    api_server_route(srv, "/api/config/app",   API_POST, handle_app_config_set, ctx);
 }
