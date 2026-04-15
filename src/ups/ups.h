@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <pthread.h>
 #include <modbus/modbus.h>
 #include "ups_driver.h"
 
@@ -108,12 +109,15 @@ struct ups_inventory {
     uint16_t freq_tolerance;
 };
 
-/* UPS context — holds connection and active driver */
+/* UPS context — holds connection and active driver.
+ * The cmd_mutex serializes all command writes (freq tolerance, bypass, etc.)
+ * so concurrent callers (API thread, weather thread) don't collide. */
 typedef struct ups_context {
     modbus_t           *ctx;
     const ups_driver_t *driver;
     ups_inventory_t     inventory;  /* cached at connect time */
     int                 has_inventory;
+    pthread_mutex_t     cmd_mutex;  /* serializes command writes */
 } ups_t;
 
 /* Connect and auto-detect driver from UPS model string.

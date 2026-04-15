@@ -277,6 +277,24 @@ static void resolve_gridpoint(weather_t *w)
     cJSON_Delete(json);
 }
 
+/* --- Event journal helper --- */
+
+static void weather_event(weather_t *w, const char *severity,
+                          const char *title, const char *message)
+{
+    char ts[32];
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+
+    const char *params[] = { ts, severity, "weather", title, message, NULL };
+    db_execute_non_query(w->db,
+        "INSERT INTO events (timestamp, severity, category, title, message) "
+        "VALUES (?, ?, ?, ?, ?)",
+        params, NULL);
+}
+
 /* --- Thread --- */
 
 static void *weather_thread(void *arg)
@@ -313,12 +331,12 @@ static void *weather_thread(void *arg)
 
         if (severe && !he_active) {
             log_warn("weather: severe conditions (%s), inhibiting HE", reasons);
-            /* Set narrow freq tolerance to inhibit HE */
             const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, "hz60_0_1");
             if (fs) {
                 ups_cmd_set_freq_tolerance(w->ups, fs->value);
                 monitor_he_inhibit_set(w->monitor, "weather");
             }
+            weather_event(w, "warning", "Weather Inhibit", reasons);
             push_send("UPS Weather Inhibit", reasons);
         } else if (!severe && he_active && strcmp(he_source, "weather") == 0) {
             log_info("weather: conditions cleared, restoring HE");
@@ -327,6 +345,8 @@ static void *weather_thread(void *arg)
                 ups_cmd_set_freq_tolerance(w->ups, fs->value);
                 monitor_he_inhibit_clear(w->monitor);
             }
+            weather_event(w, "info", "Weather Clear",
+                          "Conditions cleared, HE mode restored");
             push_send("UPS Weather Clear",
                        "Conditions cleared, HE mode restored");
         } else if (severe && he_active && strcmp(he_source, "weather") == 0) {

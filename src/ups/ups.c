@@ -81,6 +81,7 @@ ups_t *ups_connect(const char *device, int baud, int slave_id)
 
     ups->ctx = ctx;
     ups->driver = driver;
+    pthread_mutex_init(&ups->cmd_mutex, NULL);
 
     /* Read inventory immediately while connection is fresh */
     if (ups_read_inventory(ups, &ups->inventory) == 0)
@@ -96,6 +97,7 @@ void ups_close(ups_t *ups)
             modbus_close(ups->ctx);
             modbus_free(ups->ctx);
         }
+        pthread_mutex_destroy(&ups->cmd_mutex);
         free(ups);
     }
 }
@@ -237,7 +239,10 @@ int ups_cmd_bypass_disable(ups_t *ups)
 int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
 {
     if (!ups->driver->cmd_set_freq_tolerance) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_set_freq_tolerance(ups->ctx, setting);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_set_freq_tolerance(ups->ctx, setting);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 /* --- Config register access --- */
@@ -297,8 +302,12 @@ int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
     if (!reg->writable)
         return UPS_ERR_NOT_SUPPORTED;
 
-    if (modbus_write_register(ups->ctx, reg->reg_addr, value) != 1)
+    pthread_mutex_lock(&ups->cmd_mutex);
+
+    if (modbus_write_register(ups->ctx, reg->reg_addr, value) != 1) {
+        pthread_mutex_unlock(&ups->cmd_mutex);
         return UPS_ERR_IO;
+    }
 
     /* Inter-write delay (UPS firmware requirement — 100ms minimum) */
     struct timespec delay = { .tv_sec = 0, .tv_nsec = 100000000 };
@@ -306,8 +315,12 @@ int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
 
     /* Read back for verification */
     uint16_t readback;
-    if (modbus_read_registers(ups->ctx, reg->reg_addr, 1, &readback) != 1)
+    if (modbus_read_registers(ups->ctx, reg->reg_addr, 1, &readback) != 1) {
+        pthread_mutex_unlock(&ups->cmd_mutex);
         return UPS_ERR_IO;
+    }
+
+    pthread_mutex_unlock(&ups->cmd_mutex);
 
     if (readback != value)
         return UPS_ERR_IO;  /* write verification failed */
