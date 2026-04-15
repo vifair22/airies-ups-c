@@ -408,16 +408,24 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     cJSON_Delete(body);
 
     int rc = ups_config_write(ctx->ups, reg, val);
-    if (rc != 0) return api_error(500, "failed to write register");
 
-    /* Read back and return updated value */
+    /* Always read back current value regardless of write result */
     uint16_t readback = 0;
     ups_config_read(ctx->ups, reg, &readback, NULL, 0);
 
     cJSON *resp = reg_to_json(reg, readback, NULL);
-    cJSON_AddStringToObject(resp, "result", "written");
+    if (rc != 0) {
+        if (readback != val)
+            cJSON_AddStringToObject(resp, "result", "rejected");
+        else
+            cJSON_AddStringToObject(resp, "result", "written");
+    } else {
+        cJSON_AddStringToObject(resp, "result", "written");
+    }
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
+
+    /* Return 200 even on rejection so the UI gets the current value */
     return api_ok(json);
 }
 

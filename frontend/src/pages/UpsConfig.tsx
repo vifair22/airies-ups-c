@@ -31,13 +31,18 @@ export default function UpsConfig() {
 
   const groups = [...new Set(regs.map((r) => r.group || 'other'))]
 
+  const [writeResult, setWriteResult] = useState<{ name: string; result: string } | null>(null)
+
   const handleWrite = async (name: string, value: number) => {
     setSaving(name)
     try {
-      await apiPost('/api/config/ups', { name, value })
+      const res = await apiPost<{ result: string }>('/api/config/ups', { name, value })
+      setWriteResult({ name, result: res.result })
       await refetch()
+      setTimeout(() => setWriteResult(null), 4000)
     } catch {
-      alert('Failed to write register')
+      setWriteResult({ name, result: 'error' })
+      setTimeout(() => setWriteResult(null), 4000)
     }
     setSaving(null)
   }
@@ -86,6 +91,7 @@ export default function UpsConfig() {
                       displayValue={formatValue(reg)}
                       saving={saving}
                       onWrite={handleWrite}
+                      feedback={writeResult?.name === reg.name ? writeResult.result : null}
                     />
                   ))}
               </>
@@ -97,11 +103,12 @@ export default function UpsConfig() {
   )
 }
 
-function RegRow({ reg, displayValue, saving, onWrite }: {
+function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
   reg: ConfigReg
   displayValue: string
   saving: string | null
   onWrite: (name: string, value: number) => void
+  feedback: string | null
 }) {
   const [editVal, setEditVal] = useState<string>('')
   const [editing, setEditing] = useState(false)
@@ -115,7 +122,12 @@ function RegRow({ reg, displayValue, saving, onWrite }: {
       <td className="px-4 py-2 text-gray-200 text-sm">{displayValue}</td>
       <td className="px-4 py-2 text-right text-gray-600 font-mono text-xs">{reg.raw_value}</td>
       <td className="px-4 py-2 text-right">
-        {reg.writable && !editing && (
+        {feedback && (
+          <span className={`text-xs ${feedback === 'written' ? 'text-green-400' : feedback === 'rejected' ? 'text-yellow-400' : 'text-red-400'}`}>
+            {feedback === 'written' ? 'saved' : feedback === 'rejected' ? 'rejected by UPS' : 'error'}
+          </span>
+        )}
+        {!feedback && reg.writable && !editing && (
           <button
             onClick={() => { setEditing(true); setEditVal(String(reg.raw_value)) }}
             className="text-xs text-blue-400 hover:text-blue-300"
@@ -123,7 +135,7 @@ function RegRow({ reg, displayValue, saving, onWrite }: {
             Edit
           </button>
         )}
-        {!reg.writable && (
+        {!feedback && !reg.writable && (
           <span className="text-[10px] text-gray-700">read-only</span>
         )}
         {reg.writable && editing && (
