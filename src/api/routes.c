@@ -662,6 +662,17 @@ static api_response_t handle_auth_login(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+/* --- Weather endpoint --- */
+
+static api_response_t handle_weather_status(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    char *json = weather_status_json(ctx->weather);
+    if (!json) return api_error(500, "weather status unavailable");
+    return api_ok(json);
+}
+
 /* --- Route registration --- */
 
 void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
@@ -680,4 +691,5 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/config/app",   API_POST, handle_app_config_set, ctx);
     api_server_route(srv, "/api/auth/setup",   API_POST, handle_auth_setup, ctx);
     api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login, ctx);
+    api_server_route(srv, "/api/weather/status", API_GET, handle_weather_status, ctx);
 }

@@ -31,11 +31,12 @@ UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
 # API server + routes + auth
 API_SRCS   = src/api/server.c src/api/routes.c src/api/auth.c
 
-# Monitor + Alerts + Shutdown + Retention
+# Monitor + Alerts + Shutdown + Retention + Weather
 MON_SRCS   = src/monitor/monitor.c \
              src/monitor/retention.c \
              src/alerts/alerts.c \
-             src/shutdown/shutdown.c
+             src/shutdown/shutdown.c \
+             src/weather/weather.c
 
 # Daemon sources
 DAEMON_SRCS = src/daemon/main.c \

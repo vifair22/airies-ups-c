@@ -12,6 +12,7 @@
 #include "monitor/monitor.h"
 #include "alerts/alerts.h"
 #include "shutdown/shutdown.h"
+#include "weather/weather.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -125,6 +126,13 @@ int main(int argc, char *argv[])
         shutdown = shutdown_create(db, ups);
     }
 
+    /* Weather subsystem (starts only if enabled in DB config) */
+    weather_t *weather = NULL;
+    if (ups && mon)
+        weather = weather_create(db, mon, ups);
+    if (weather)
+        weather_start(weather);
+
     /* --- Phase 4: API server --- */
 
     int http_port = config_get_int(cfg, "http.port", 8080);
@@ -145,6 +153,7 @@ int main(int argc, char *argv[])
         .monitor  = mon,
         .ups      = ups,
         .shutdown = shutdown,
+        .weather  = weather,
         .db       = db,
         .config   = cfg,
     };
@@ -163,6 +172,7 @@ int main(int argc, char *argv[])
     /* --- Shutdown --- */
 
     log_info("shutting down");
+    weather_stop(weather);
     api_server_stop(api);
     if (mon) monitor_stop(mon);
     if (ups) ups_close(ups);

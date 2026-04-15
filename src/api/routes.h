@@ -5,6 +5,7 @@
 #include "api/auth.h"
 #include "monitor/monitor.h"
 #include "shutdown/shutdown.h"
+#include "weather/weather.h"
 #include <cutils/db.h>
 #include <cutils/config.h>
 
@@ -13,6 +14,7 @@ typedef struct {
     monitor_t       *monitor;
     ups_t           *ups;
     shutdown_mgr_t  *shutdown;
+    weather_t       *weather;
     cutils_db_t     *db;
     cutils_config_t *config;
 } route_ctx_t;
