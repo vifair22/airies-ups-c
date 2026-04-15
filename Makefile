@@ -1,42 +1,57 @@
-PI_HOST  = sysadmin@upspi.internal.airies.net
-PI_DIR   = /home/sysadmin/airies-ups-c
-BIN      = airies-ups
+PI_HOST    = sysadmin@upspi.internal.airies.net
+PI_DIR     = /home/sysadmin/airies-ups
+CUTILS_DIR = ../c-utils
 
-SRCS     = src/main.c src/ups.c src/ups_srt.c src/ups_smt.c src/shutdown.c src/config.c src/ipc.c src/alerts.c
-HDRS     = src/ups.h src/ups_driver.h src/shutdown.h src/config.h src/ipc.h src/alerts.h
-LIBS     = -lmodbus -lcurl
-CFLAGS   = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L
 CC       = gcc
+CFLAGS   = -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
+           -Wunused-variable -Wunused-parameter -Wunused-result \
+           -Wdouble-promotion -Wformat=2 -Wformat-truncation \
+           -Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations \
+           -Wcast-align -Wcast-qual -Wnull-dereference \
+           -Wconversion -Wsign-conversion \
+           -fstack-protector-strong -fstack-clash-protection \
+           -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+           -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
+LIBS     = -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lpthread
 
-# Local build (for syntax checking — won't link without arm libs)
+# --- Source files ---
+
+# UPS driver layer (shared between daemon and CLI via the daemon)
+UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
+
+# Daemon sources
+DAEMON_SRCS = src/daemon/main.c \
+              $(UPS_SRCS)
+
+# CLI sources
+CLI_SRCS    = src/cli/main.c
+
+# All sources (for syntax checking)
+ALL_SRCS    = $(DAEMON_SRCS) $(CLI_SRCS)
+
+# --- Targets ---
+
+all: airies-upsd airies-ups
+
+airies-upsd: $(DAEMON_SRCS)
+	$(CC) $(CFLAGS) -o $@ $(DAEMON_SRCS) $(LIBS)
+
+airies-ups: $(CLI_SRCS)
+	$(CC) $(CFLAGS) -o $@ $(CLI_SRCS) $(LIBS)
+
+# Syntax check (local, no linking — uses modbus stub if libmodbus not installed)
+MODBUS_STUB = /tmp/modbus-stub
 check:
-	$(CC) $(CFLAGS) -fsyntax-only $(SRCS)
+	$(CC) $(CFLAGS) -I$(MODBUS_STUB) -fsyntax-only $(ALL_SRCS)
 
-# Deploy source to Pi, compile there, run
-deploy:
-	ssh $(PI_HOST) "mkdir -p $(PI_DIR)/src"
-	scp $(SRCS) $(PI_HOST):$(PI_DIR)/src/
-	scp $(HDRS) $(PI_HOST):$(PI_DIR)/src/
-	scp lib/log.h lib/pushover.h $(PI_HOST):$(PI_DIR)/src/
-	ssh $(PI_HOST) "cd $(PI_DIR) && $(CC) $(CFLAGS) -o $(BIN) $(SRCS) $(LIBS)"
-
-# Deploy and run
-run: deploy
-	ssh $(PI_HOST) "cd $(PI_DIR) && ./$(BIN)"
-
-# Deploy and run with no-shutdown flags (safe testing)
-run-safe: deploy
-	ssh $(PI_HOST) "cd $(PI_DIR) && ./$(BIN) --no-ssh-shutdown --no-ups-shutdown --no-pi-shutdown"
-
-# One-shot status
-status: deploy
-	ssh $(PI_HOST) "cd $(PI_DIR) && ./$(BIN) --status"
-
-# Test SSH connectivity to shutdown targets
-test-ssh: deploy
-	ssh $(PI_HOST) "cd $(PI_DIR) && ./$(BIN) --test-ssh"
+# Static analysis
+analyze: check
+	$(CC) $(CFLAGS) -fanalyzer $(ALL_SRCS) -fsyntax-only
+	cppcheck --enable=warning,performance,portability \
+	         --suppress=missingIncludeSystem \
+	         -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON src/
 
 clean:
-	ssh $(PI_HOST) "rm -f $(PI_DIR)/$(BIN)"
+	rm -f airies-upsd airies-ups
 
-.PHONY: check deploy run run-safe status test-ssh clean
+.PHONY: all check analyze clean
