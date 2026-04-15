@@ -112,6 +112,8 @@ struct ups_inventory {
 typedef struct ups_context {
     modbus_t           *ctx;
     const ups_driver_t *driver;
+    ups_inventory_t     inventory;  /* cached at connect time */
+    int                 has_inventory;
 } ups_t;
 
 /* Connect and auto-detect driver from UPS model string.

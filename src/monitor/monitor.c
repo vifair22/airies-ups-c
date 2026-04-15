@@ -143,18 +143,18 @@ static void *monitor_thread(void *arg)
     monitor_t *mon = arg;
     ups_data_t data;
 
-    /* Read inventory once */
-    ups_inventory_t inv;
-    if (ups_read_inventory(mon->ups, &inv) == 0) {
+    /* Use cached inventory from ups_connect() */
+    if (mon->ups->has_inventory) {
         pthread_mutex_lock(&mon->mutex);
-        mon->inventory = inv;
+        mon->inventory = mon->ups->inventory;
         pthread_mutex_unlock(&mon->mutex);
         log_info("UPS: %s | Serial: %s | FW: %s | %uVA / %uW | Driver: %s",
-                 inv.model, inv.serial, inv.firmware,
-                 inv.nominal_va, inv.nominal_watts,
+                 mon->inventory.model, mon->inventory.serial,
+                 mon->inventory.firmware,
+                 mon->inventory.nominal_va, mon->inventory.nominal_watts,
                  ups_driver_name(mon->ups));
     } else {
-        log_error("failed to read UPS inventory");
+        log_warn("UPS inventory not available");
     }
 
     /* Initial status read */

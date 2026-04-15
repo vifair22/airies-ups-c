@@ -50,7 +50,7 @@ ups_t *ups_connect(const char *device, int baud, int slave_id)
     if (!ctx) return NULL;
 
     modbus_set_slave(ctx, slave_id);
-    modbus_set_response_timeout(ctx, 3, 0);
+    modbus_set_response_timeout(ctx, 5, 0);
 
     if (modbus_connect(ctx) == -1) {
         modbus_free(ctx);
@@ -81,6 +81,10 @@ ups_t *ups_connect(const char *device, int baud, int slave_id)
 
     ups->ctx = ctx;
     ups->driver = driver;
+
+    /* Read inventory immediately while connection is fresh */
+    if (ups_read_inventory(ups, &ups->inventory) == 0)
+        ups->has_inventory = 1;
 
     return ups;
 }
