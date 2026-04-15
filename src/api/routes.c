@@ -278,12 +278,138 @@ static api_response_t handle_telemetry(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+/* --- UPS config register endpoints --- */
+
+static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw)
+{
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(obj, "name", reg->name);
+    cJSON_AddStringToObject(obj, "display_name", reg->display_name);
+    if (reg->unit) cJSON_AddStringToObject(obj, "unit", reg->unit);
+    if (reg->group) cJSON_AddStringToObject(obj, "group", reg->group);
+    cJSON_AddNumberToObject(obj, "raw_value", raw);
+    cJSON_AddBoolToObject(obj, "writable", reg->writable);
+
+    double scaled = (reg->scale > 1) ? (double)raw / reg->scale : (double)raw;
+    cJSON_AddNumberToObject(obj, "value", scaled);
+
+    if (reg->type == UPS_CFG_SCALAR) {
+        cJSON_AddStringToObject(obj, "type", "scalar");
+    } else if (reg->type == UPS_CFG_BITFIELD) {
+        cJSON_AddStringToObject(obj, "type", "bitfield");
+        /* Find matching option name */
+        for (size_t i = 0; i < reg->meta.bitfield.count; i++) {
+            if (reg->meta.bitfield.opts[i].value == raw) {
+                cJSON_AddStringToObject(obj, "setting", reg->meta.bitfield.opts[i].name);
+                cJSON_AddStringToObject(obj, "setting_label", reg->meta.bitfield.opts[i].label);
+                break;
+            }
+        }
+        /* Add all options */
+        cJSON *opts = cJSON_CreateArray();
+        for (size_t i = 0; i < reg->meta.bitfield.count; i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "value", reg->meta.bitfield.opts[i].value);
+            cJSON_AddStringToObject(o, "name", reg->meta.bitfield.opts[i].name);
+            cJSON_AddStringToObject(o, "label", reg->meta.bitfield.opts[i].label);
+            cJSON_AddItemToArray(opts, o);
+        }
+        cJSON_AddItemToObject(obj, "options", opts);
+    } else if (reg->type == UPS_CFG_STRING) {
+        cJSON_AddStringToObject(obj, "type", "string");
+    }
+
+    return obj;
+}
+
+static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!ctx->ups) return api_error(503, "no UPS connected");
+
+    /* Check if a specific register is requested: /api/config/ups/<name> */
+    const char *name = NULL;
+    if (strlen(req->url) > 16)  /* longer than "/api/config/ups/" */
+        name = req->url + 16;
+
+    if (name && name[0]) {
+        /* Single register */
+        const ups_config_reg_t *reg = ups_find_config_reg(ctx->ups, name);
+        if (!reg) return api_error(404, "register not found");
+
+        uint16_t raw = 0;
+        if (ups_config_read(ctx->ups, reg, &raw, NULL, 0) != 0)
+            return api_error(500, "failed to read register");
+
+        cJSON *obj = reg_to_json(reg, raw);
+        char *json = cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+        return api_ok(json);
+    }
+
+    /* Dump all registers */
+    size_t count;
+    const ups_config_reg_t *regs = ups_get_config_regs(ctx->ups, &count);
+    if (!regs || count == 0)
+        return api_ok(strdup("[]"));
+
+    cJSON *arr = cJSON_CreateArray();
+    for (size_t i = 0; i < count; i++) {
+        uint16_t raw = 0;
+        if (ups_config_read(ctx->ups, &regs[i], &raw, NULL, 0) == 0)
+            cJSON_AddItemToArray(arr, reg_to_json(&regs[i], raw));
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
+static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!ctx->ups) return api_error(503, "no UPS connected");
+    if (!req->body) return api_error(400, "request body required");
+
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jname = cJSON_GetObjectItem(body, "name");
+    const cJSON *jval  = cJSON_GetObjectItem(body, "value");
+    if (!jname || !cJSON_IsString(jname) || !jval || !cJSON_IsNumber(jval)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing 'name' (string) and 'value' (number)");
+    }
+
+    const ups_config_reg_t *reg = ups_find_config_reg(ctx->ups, jname->valuestring);
+    if (!reg) { cJSON_Delete(body); return api_error(404, "register not found"); }
+    if (!reg->writable) { cJSON_Delete(body); return api_error(400, "register is read-only"); }
+
+    uint16_t val = (uint16_t)jval->valueint;
+    cJSON_Delete(body);
+
+    int rc = ups_config_write(ctx->ups, reg, val);
+    if (rc != 0) return api_error(500, "failed to write register");
+
+    /* Read back and return updated value */
+    uint16_t readback = 0;
+    ups_config_read(ctx->ups, reg, &readback, NULL, 0);
+
+    cJSON *resp = reg_to_json(reg, readback);
+    cJSON_AddStringToObject(resp, "result", "written");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
 /* --- Route registration --- */
 
 void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
 {
-    api_server_route(srv, "/api/status",    API_GET,  handle_status,    ctx);
-    api_server_route(srv, "/api/cmd",       API_POST, handle_cmd,       ctx);
-    api_server_route(srv, "/api/events",    API_GET,  handle_events,    ctx);
-    api_server_route(srv, "/api/telemetry", API_GET,  handle_telemetry, ctx);
+    api_server_route(srv, "/api/status",       API_GET,  handle_status,         ctx);
+    api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,            ctx);
+    api_server_route(srv, "/api/events",       API_GET,  handle_events,         ctx);
+    api_server_route(srv, "/api/telemetry",    API_GET,  handle_telemetry,      ctx);
+    api_server_route(srv, "/api/config/ups*",  API_GET,  handle_config_ups_get, ctx);
+    api_server_route(srv, "/api/config/ups",   API_POST, handle_config_ups_set, ctx);
 }

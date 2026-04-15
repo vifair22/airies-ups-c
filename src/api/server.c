@@ -56,9 +56,16 @@ static const route_entry_t *find_route(const api_server_t *srv,
                                        const char *url, api_method_t method)
 {
     for (int i = 0; i < srv->nroutes; i++) {
-        if (srv->routes[i].method == method &&
-            strcmp(srv->routes[i].pattern, url) == 0)
+        if (srv->routes[i].method != method) continue;
+        const char *pat = srv->routes[i].pattern;
+        size_t plen = strlen(pat);
+        /* Prefix match: pattern ending with '*' */
+        if (plen > 0 && pat[plen - 1] == '*') {
+            if (strncmp(url, pat, plen - 1) == 0)
+                return &srv->routes[i];
+        } else if (strcmp(pat, url) == 0) {
             return &srv->routes[i];
+        }
     }
     return NULL;
 }
