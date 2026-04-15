@@ -21,7 +21,34 @@ export default function UpsConfig() {
   const [saving, setSaving] = useState<string | null>(null)
   const [writeResult, setWriteResult] = useState<{ name: string; result: string } | null>(null)
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return (
+    <div>
+      <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
+      <div className="rounded-lg border border-gray-800 overflow-hidden">
+        <div className="bg-gray-900 px-4 py-2.5">
+          <div className="h-3 w-24 bg-gray-800 rounded animate-pulse" />
+        </div>
+        {[1,2,3,4,5,6,7,8].map(i => (
+          <div key={i} className="border-t border-gray-800 px-4 py-3 flex gap-8">
+            <div className="flex-[4]">
+              <div className="h-4 w-48 bg-gray-800 rounded animate-pulse mb-1" />
+              <div className="h-3 w-32 bg-gray-800/50 rounded animate-pulse" />
+            </div>
+            <div className="flex-[3]">
+              <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
+            </div>
+            <div className="flex-[1]">
+              <div className="h-4 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
+            </div>
+            <div className="flex-[2]">
+              <div className="h-4 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
   if (error) return <p className="text-red-400">{error}</p>
   if (!regs || regs.length === 0) return (
     <div>
@@ -112,17 +139,37 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
   const [editVal, setEditVal] = useState<string>('')
   const [editing, setEditing] = useState(false)
 
+  const rowBg = feedback === 'written'
+    ? 'bg-green-900/20 border-t border-gray-800'
+    : feedback === 'rejected'
+      ? 'bg-yellow-900/20 border-t border-gray-800'
+      : feedback === 'error'
+        ? 'bg-red-900/20 border-t border-gray-800'
+        : saving === reg.name
+          ? 'bg-blue-900/10 border-t border-gray-800'
+          : 'border-t border-gray-800 hover:bg-gray-900/30'
+
   return (
-    <tr className="border-t border-gray-800 hover:bg-gray-900/30">
+    <tr className={`transition-colors duration-300 ${rowBg}`}>
       <td className="px-4 py-2">
         <p className="text-gray-200 text-sm">{reg.display_name}</p>
         <p className="text-[11px] text-gray-600 font-mono">{reg.name}</p>
       </td>
-      <td className="px-4 py-2 text-gray-200 text-sm">{displayValue}</td>
+      <td className="px-4 py-2 text-gray-200 text-sm">
+        {saving === reg.name ? (
+          <span className="text-gray-500 animate-pulse">saving...</span>
+        ) : (
+          displayValue
+        )}
+      </td>
       <td className="px-4 py-2 text-right text-gray-600 font-mono text-xs">{reg.raw_value}</td>
       <td className="px-4 py-2 text-right">
         {feedback && (
-          <span className={`text-xs ${feedback === 'written' ? 'text-green-400' : feedback === 'rejected' ? 'text-yellow-400' : 'text-red-400'}`}>
+          <span className={`text-xs font-medium ${
+            feedback === 'written' ? 'text-green-400'
+            : feedback === 'rejected' ? 'text-yellow-400'
+            : 'text-red-400'
+          }`}>
             {feedback === 'written' ? 'saved' : feedback === 'rejected' ? 'rejected by UPS' : 'error'}
           </span>
         )}

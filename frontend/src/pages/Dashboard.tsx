@@ -139,7 +139,7 @@ export default function Dashboard() {
           <Card title="Inventory">
             <Metric label="Model" value={status.inventory.model.trim()} />
             <Metric label="Serial" value={status.inventory.serial.trim()} />
-            <Metric label="Rating" value={`${status.inventory.nominal_va} / ${status.inventory.nominal_watts}`} unit="VA / W" />
+            <Metric label="Rating" value={`${status.inventory.nominal_va}VA / ${status.inventory.nominal_watts}W`} />
             <Metric label="Driver" value={status.driver} />
           </Card>
         )}
