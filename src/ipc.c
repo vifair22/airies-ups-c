@@ -22,13 +22,8 @@ static const struct {
     { "STATUS",              IPC_CMD_STATUS },
     { "BYPASS ON",           IPC_CMD_BYPASS_ON },
     { "BYPASS OFF",          IPC_CMD_BYPASS_OFF },
-    { "FREQ HZ60_0_1 WEATHER", IPC_CMD_FREQ_HZ60_0_1_WEATHER },
-    { "FREQ AUTO",           IPC_CMD_FREQ_AUTO },
-    { "FREQ HZ50_0_1",      IPC_CMD_FREQ_HZ50_0_1 },
-    { "FREQ HZ50_3_0",      IPC_CMD_FREQ_HZ50_3_0 },
-    { "FREQ HZ60_0_1",      IPC_CMD_FREQ_HZ60_0_1 },
-    { "FREQ HZ60_3_0",      IPC_CMD_FREQ_HZ60_3_0 },
     { "TEST BATTERY",        IPC_CMD_TEST_BATTERY },
+    { "RUNTIME CAL",         IPC_CMD_RUNTIME_CAL },
     { "CLEAR FAULTS",        IPC_CMD_CLEAR_FAULTS },
     { "MUTE",                IPC_CMD_MUTE },
     { "UNMUTE",              IPC_CMD_UNMUTE },
@@ -58,6 +53,60 @@ ipc_cmd_t ipc_parse_command(const char *line)
             return cmd_table[i].cmd;
     }
     return IPC_CMD_UNKNOWN;
+}
+
+/* Parse "FREQ <name> [source]" commands.
+ * Returns 0 if line starts with FREQ, -1 otherwise.
+ * source defaults to "manual" if not provided. */
+int ipc_parse_freq(const char *line, char *name, size_t name_sz,
+                   char *source, size_t source_sz)
+{
+    /* Skip leading whitespace */
+    while (*line && isspace((unsigned char)*line)) line++;
+
+    /* Check for FREQ prefix (case-insensitive) */
+    if (!(toupper((unsigned char)line[0]) == 'F' &&
+          toupper((unsigned char)line[1]) == 'R' &&
+          toupper((unsigned char)line[2]) == 'E' &&
+          toupper((unsigned char)line[3]) == 'Q'))
+        return -1;
+    if (line[4] && !isspace((unsigned char)line[4]))
+        return -1;
+
+    const char *p = line + 4;
+    while (*p && isspace((unsigned char)*p)) p++;
+
+    if (!*p) return -1; /* "FREQ" alone — no name */
+
+    /* Extract name */
+    const char *start = p;
+    while (*p && !isspace((unsigned char)*p)) p++;
+    size_t nlen = (size_t)(p - start);
+    if (nlen >= name_sz) nlen = name_sz - 1;
+    memcpy(name, start, nlen);
+    name[nlen] = '\0';
+
+    /* Convert name to lowercase */
+    for (size_t i = 0; i < nlen; i++)
+        name[i] = (char)tolower((unsigned char)name[i]);
+
+    /* Extract optional source */
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p) {
+        start = p;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        size_t slen = (size_t)(p - start);
+        if (slen >= source_sz) slen = source_sz - 1;
+        memcpy(source, start, slen);
+        source[slen] = '\0';
+        for (size_t i = 0; i < slen; i++)
+            source[i] = (char)tolower((unsigned char)source[i]);
+    } else {
+        strncpy(source, "manual", source_sz - 1);
+        source[source_sz - 1] = '\0';
+    }
+
+    return 0;
 }
 
 /* --- Server --- */

@@ -1,9 +1,50 @@
 #include "ups.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 
-modbus_t *ups_connect(const char *device, int baud, int slave_id)
+/* --- Driver registry --- */
+
+extern const ups_driver_t ups_driver_srt;
+extern const ups_driver_t ups_driver_smt;
+
+const ups_driver_t *ups_drivers[] = {
+    &ups_driver_srt,
+    &ups_driver_smt,
+    NULL,
+};
+
+/* --- Connection + auto-detect --- */
+
+/* Read inventory for model string without a driver.
+ * Uses the shared register layout (990-9840): reg 532, 16 regs = 32 chars. */
+static int read_model_string(modbus_t *ctx, char *model, size_t model_sz)
+{
+    uint16_t regs[16];
+    if (modbus_read_registers(ctx, 532, 16, regs) != 16)
+        return -1;
+
+    memset(model, 0, model_sz);
+    size_t max_chars = model_sz - 1;
+    if (max_chars > 32) max_chars = 32;
+    for (size_t i = 0; i < max_chars / 2 && i < 16; i++) {
+        model[i * 2]     = (char)((regs[i] >> 8) & 0xFF);
+        model[i * 2 + 1] = (char)(regs[i] & 0xFF);
+    }
+
+    return 0;
+}
+
+static const ups_driver_t *detect_driver(const char *model)
+{
+    for (int i = 0; ups_drivers[i] != NULL; i++) {
+        if (ups_drivers[i]->detect && ups_drivers[i]->detect(model))
+            return ups_drivers[i];
+    }
+    return NULL;
+}
+
+ups_t *ups_connect(const char *device, int baud, int slave_id)
 {
     modbus_t *ctx = modbus_new_rtu(device, baud, 'N', 8, 1);
     if (!ctx) return NULL;
@@ -16,154 +57,186 @@ modbus_t *ups_connect(const char *device, int baud, int slave_id)
         return NULL;
     }
 
-    return ctx;
-}
-
-void ups_close(modbus_t *ctx)
-{
-    if (ctx) {
+    /* Read model string for auto-detection */
+    char model[33];
+    if (read_model_string(ctx, model, sizeof(model)) != 0) {
         modbus_close(ctx);
         modbus_free(ctx);
+        return NULL;
+    }
+
+    const ups_driver_t *driver = detect_driver(model);
+    if (!driver) {
+        modbus_close(ctx);
+        modbus_free(ctx);
+        return NULL;
+    }
+
+    ups_t *ups = calloc(1, sizeof(*ups));
+    if (!ups) {
+        modbus_close(ctx);
+        modbus_free(ctx);
+        return NULL;
+    }
+
+    ups->ctx = ctx;
+    ups->driver = driver;
+
+    return ups;
+}
+
+void ups_close(ups_t *ups)
+{
+    if (ups) {
+        if (ups->ctx) {
+            modbus_close(ups->ctx);
+            modbus_free(ups->ctx);
+        }
+        free(ups);
     }
 }
 
-int ups_read_status(modbus_t *ctx, ups_data_t *data)
+/* --- Capability queries --- */
+
+int ups_has_cap(const ups_t *ups, ups_cap_t cap)
 {
-    uint16_t regs[27];
-    if (modbus_read_registers(ctx, 0, 27, regs) != 27)
-        return -1;
-
-    data->status          = ((uint32_t)regs[0] << 16) | regs[1];
-    data->transfer_reason = regs[2];
-    data->outlet_mog      = ((uint32_t)regs[3] << 16) | regs[4];
-    data->outlet_sog0     = ((uint32_t)regs[6] << 16) | regs[7];
-    data->outlet_sog1     = ((uint32_t)regs[9] << 16) | regs[10];
-    data->sig_status      = regs[18];
-    data->bat_error       = regs[19];
-    data->bat_test_status = regs[23];
-    data->rt_cal_status   = regs[24];
-
-    return 0;
+    return (ups->driver->caps & (uint32_t)cap) != 0;
 }
 
-int ups_read_dynamic(modbus_t *ctx, ups_data_t *data)
+const char *ups_driver_name(const ups_t *ups)
 {
-    uint16_t regs[44];
-    if (modbus_read_registers(ctx, 128, 44, regs) != 44)
-        return -1;
-
-    data->runtime_sec     = ((uint32_t)regs[0] << 16) | regs[1];
-    data->charge_pct      = regs[2] / 512.0;
-    data->battery_voltage = (int16_t)regs[3] / 32.0;
-    data->load_pct        = regs[8] / 256.0;
-    data->output_current  = regs[12] / 32.0;
-    data->output_voltage  = regs[14] / 64.0;
-    data->output_frequency = regs[16] / 128.0;
-    data->output_energy_wh = ((uint32_t)regs[17] << 16) | regs[18];
-    data->input_voltage   = regs[23] / 64.0;
-    data->efficiency      = (int16_t)regs[26] / 128.0;
-    data->timer_shutdown  = (int16_t)regs[27];
-    data->timer_start     = (int16_t)regs[28];
-    data->timer_reboot    = ((int32_t)regs[29] << 16) | regs[30];
-
-    return 0;
+    return ups->driver->name;
 }
 
-int ups_read_inventory(modbus_t *ctx, ups_inventory_t *inv)
+const ups_freq_setting_t *ups_get_freq_settings(const ups_t *ups, size_t *count)
 {
-    uint16_t regs[80];
-    if (modbus_read_registers(ctx, 516, 80, regs) != 80)
-        return -1;
-
-    memset(inv, 0, sizeof(*inv));
-
-    /* Firmware: reg 516, 8 regs = 16 chars */
-    for (int i = 0; i < 8; i++) {
-        inv->firmware[i * 2]     = (regs[i] >> 8) & 0xFF;
-        inv->firmware[i * 2 + 1] = regs[i] & 0xFF;
+    if (!ups_has_cap(ups, UPS_CAP_FREQ_TOLERANCE) || !ups->driver->freq_settings) {
+        if (count) *count = 0;
+        return NULL;
     }
+    if (count) *count = ups->driver->freq_settings_count;
+    return ups->driver->freq_settings;
+}
 
-    /* Model: reg 532, 16 regs = 32 chars */
-    for (int i = 0; i < 16; i++) {
-        inv->model[i * 2]     = (regs[16 + i] >> 8) & 0xFF;
-        inv->model[i * 2 + 1] = regs[16 + i] & 0xFF;
+const ups_freq_setting_t *ups_find_freq_setting(const ups_t *ups, const char *name)
+{
+    size_t count;
+    const ups_freq_setting_t *settings = ups_get_freq_settings(ups, &count);
+    if (!settings) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(settings[i].name, name) == 0)
+            return &settings[i];
     }
+    return NULL;
+}
 
-    /* Serial: reg 564, 8 regs = 16 chars */
-    for (int i = 0; i < 8; i++) {
-        inv->serial[i * 2]     = (regs[48 + i] >> 8) & 0xFF;
-        inv->serial[i * 2 + 1] = regs[48 + i] & 0xFF;
+const ups_freq_setting_t *ups_find_freq_value(const ups_t *ups, uint16_t value)
+{
+    size_t count;
+    const ups_freq_setting_t *settings = ups_get_freq_settings(ups, &count);
+    if (!settings) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (settings[i].value == value)
+            return &settings[i];
     }
-
-    inv->nominal_va     = regs[72];
-    inv->nominal_watts  = regs[73];
-    inv->sog_config     = regs[74];
-    inv->freq_tolerance = regs[77];
-
-    return 0;
+    return NULL;
 }
 
-/* Commands */
+/* --- Read dispatch --- */
 
-int ups_cmd_shutdown(modbus_t *ctx)
+int ups_read_status(ups_t *ups, ups_data_t *data)
 {
-    return modbus_write_register(ctx, 1540, 0x0001) == 1 ? 0 : -1;
+    if (!ups->driver->read_status) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->read_status(ups->ctx, data);
 }
 
-int ups_cmd_clear_faults(modbus_t *ctx)
+int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 {
-    uint16_t cmd[2] = { 0x0000, 0x0200 };
-    return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
+    if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->read_dynamic(ups->ctx, data);
 }
 
-int ups_cmd_battery_test(modbus_t *ctx)
+int ups_read_inventory(ups_t *ups, ups_inventory_t *inv)
 {
-    return modbus_write_register(ctx, 1541, 0x0001) == 1 ? 0 : -1;
+    if (!ups->driver->read_inventory) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->read_inventory(ups->ctx, inv);
 }
 
-int ups_cmd_mute_alarm(modbus_t *ctx)
+int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_low)
 {
-    return modbus_write_register(ctx, 1543, 0x0004) == 1 ? 0 : -1;
+    if (!ups->driver->read_thresholds) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->read_thresholds(ups->ctx, transfer_high, transfer_low);
 }
 
-int ups_cmd_cancel_mute(modbus_t *ctx)
+/* --- Command dispatch --- */
+
+int ups_cmd_shutdown(ups_t *ups)
 {
-    return modbus_write_register(ctx, 1543, 0x0008) == 1 ? 0 : -1;
+    if (!ups->driver->cmd_shutdown) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_shutdown(ups->ctx);
 }
 
-int ups_cmd_beep_test(modbus_t *ctx)
+int ups_cmd_battery_test(ups_t *ups)
 {
-    return modbus_write_register(ctx, 1543, 0x0001) == 1 ? 0 : -1;
+    if (!ups->driver->cmd_battery_test) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_battery_test(ups->ctx);
 }
 
-int ups_cmd_bypass_enable(modbus_t *ctx)
+int ups_cmd_runtime_cal(ups_t *ups)
 {
-    uint16_t cmd[2] = { 0x0000, 0x0010 };
-    return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
+    if (!ups->driver->cmd_runtime_cal) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_runtime_cal(ups->ctx);
 }
 
-int ups_cmd_bypass_disable(modbus_t *ctx)
+int ups_cmd_abort_runtime_cal(ups_t *ups)
 {
-    uint16_t cmd[2] = { 0x0000, 0x0020 };
-    return modbus_write_registers(ctx, 1536, 2, cmd) == 2 ? 0 : -1;
+    if (!ups->driver->cmd_abort_runtime_cal) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_abort_runtime_cal(ups->ctx);
 }
 
-int ups_cmd_set_freq_tolerance(modbus_t *ctx, uint16_t setting)
+int ups_cmd_clear_faults(ups_t *ups)
 {
-    return modbus_write_register(ctx, 593, setting) == 1 ? 0 : -1;
+    if (!ups->driver->cmd_clear_faults) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_clear_faults(ups->ctx);
 }
 
-int ups_read_thresholds(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low)
+int ups_cmd_mute_alarm(ups_t *ups)
 {
-    uint16_t regs[2];
-    if (modbus_read_registers(ctx, 1026, 2, regs) != 2)
-        return -1;
-    *transfer_high = regs[0];
-    *transfer_low = regs[1];
-    return 0;
+    if (!ups->driver->cmd_mute_alarm) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_mute_alarm(ups->ctx);
 }
 
-/* String helpers */
+int ups_cmd_cancel_mute(ups_t *ups)
+{
+    if (!ups->driver->cmd_cancel_mute) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_cancel_mute(ups->ctx);
+}
+
+int ups_cmd_beep_test(ups_t *ups)
+{
+    if (!ups->driver->cmd_beep_test) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_beep_test(ups->ctx);
+}
+
+int ups_cmd_bypass_enable(ups_t *ups)
+{
+    if (!ups->driver->cmd_bypass_enable) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_bypass_enable(ups->ctx);
+}
+
+int ups_cmd_bypass_disable(ups_t *ups)
+{
+    if (!ups->driver->cmd_bypass_disable) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_bypass_disable(ups->ctx);
+}
+
+int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
+{
+    if (!ups->driver->cmd_set_freq_tolerance) return UPS_ERR_NOT_SUPPORTED;
+    return ups->driver->cmd_set_freq_tolerance(ups->ctx, setting);
+}
+
+/* --- String helpers (shared across all APC Modbus models) --- */
 
 static const char *transfer_reasons[] = {
     "SystemInitialization", "HighInputVoltage", "LowInputVoltage",
@@ -189,16 +262,22 @@ const char *ups_status_str(uint32_t status, char *buf, size_t len)
 {
     buf[0] = '\0';
     struct { uint32_t bit; const char *name; } flags[] = {
-        { UPS_ST_ONLINE,       "Online" },
-        { UPS_ST_ON_BATTERY,   "OnBattery" },
-        { UPS_ST_BYPASS,       "Bypass" },
-        { UPS_ST_OUTPUT_OFF,   "OutputOff" },
-        { UPS_ST_FAULT,        "Fault" },
-        { UPS_ST_INPUT_BAD,    "InputBad" },
-        { UPS_ST_TEST,         "SelfTest" },
-        { UPS_ST_SHUT_PENDING, "ShutdownPending" },
-        { UPS_ST_HE_MODE,      "HighEfficiency" },
-        { UPS_ST_OVERLOAD,     "Overload" },
+        { UPS_ST_ONLINE,         "Online" },
+        { UPS_ST_ON_BATTERY,     "OnBattery" },
+        { UPS_ST_BYPASS,         "Bypass" },
+        { UPS_ST_OUTPUT_OFF,     "OutputOff" },
+        { UPS_ST_FAULT,          "Fault" },
+        { UPS_ST_INPUT_BAD,      "InputBad" },
+        { UPS_ST_TEST,           "SelfTest" },
+        { UPS_ST_PENDING_ON,     "PendingOn" },
+        { UPS_ST_SHUT_PENDING,   "ShutdownPending" },
+        { UPS_ST_COMMANDED,      "Commanded" },
+        { UPS_ST_HE_MODE,        "HighEfficiency" },
+        { UPS_ST_INFO_ALERT,     "InfoAlert" },
+        { UPS_ST_FAULT_STATE,    "FaultState" },
+        { UPS_ST_MAINS_BAD,      "MainsBad" },
+        { UPS_ST_FAULT_RECOVERY, "FaultRecovery" },
+        { UPS_ST_OVERLOAD,       "Overload" },
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
         if (status & flags[i].bit) {

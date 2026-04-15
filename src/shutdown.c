@@ -100,11 +100,11 @@ static void phase1_ssh_shutdown(const config_t *cfg)
     log_msg("INFO", msg);
 }
 
-static void phase2_ups_shutdown(modbus_t *ctx)
+static void phase2_ups_shutdown(ups_t *ups)
 {
     log_msg("INFO", "Phase 2: Sending UPS shutdown command...");
 
-    if (ups_cmd_shutdown(ctx) == 0)
+    if (ups_cmd_shutdown(ups) == 0)
         log_msg("INFO", "UPS shutdown command accepted (~60s countdown)");
     else
         log_msg("ERROR", "UPS shutdown command FAILED");
@@ -112,7 +112,7 @@ static void phase2_ups_shutdown(modbus_t *ctx)
     sleep(5);
 }
 
-void shutdown_workflow(modbus_t *ctx, const config_t *cfg, const shutdown_flags_t *flags)
+void shutdown_workflow(ups_t *ups, const config_t *cfg, const shutdown_flags_t *flags)
 {
     log_msg("INFO", "=== SHUTDOWN WORKFLOW STARTED ===");
     time_t start = time(NULL);
@@ -128,7 +128,7 @@ void shutdown_workflow(modbus_t *ctx, const config_t *cfg, const shutdown_flags_
     if (flags->skip_ups) {
         log_msg("WARN", "Phase 2: SKIPPED (--no-ups-shutdown)");
     } else {
-        phase2_ups_shutdown(ctx);
+        phase2_ups_shutdown(ups);
     }
 
     /* Phase 3: Local Pi shutdown */

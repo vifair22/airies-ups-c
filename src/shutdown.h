@@ -2,7 +2,9 @@
 #define SHUTDOWN_H
 
 #include "config.h"
-#include <modbus/modbus.h>
+
+/* Forward declaration */
+typedef struct ups_context ups_t;
 
 typedef struct {
     int skip_ssh;
@@ -15,7 +17,7 @@ typedef struct {
  * Phase 2: UPS shutdown command
  * Phase 3: Local Pi shutdown
  */
-void shutdown_workflow(modbus_t *ctx, const config_t *cfg, const shutdown_flags_t *flags);
+void shutdown_workflow(ups_t *ups, const config_t *cfg, const shutdown_flags_t *flags);
 
 /* Test SSH connectivity to all configured hosts without shutting down */
 void shutdown_test_ssh(const config_t *cfg);

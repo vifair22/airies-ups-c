@@ -83,11 +83,12 @@ static void notify(const char *title, const char *message)
         pushover_alert(&po_client, title, message);
 }
 
-static void print_inventory(const ups_inventory_t *inv)
+static void print_inventory(const ups_inventory_t *inv, const char *driver_name)
 {
     char msg[512];
-    snprintf(msg, sizeof(msg), "Model: %s | Serial: %s | FW: %s | %uVA / %uW",
-             inv->model, inv->serial, inv->firmware, inv->nominal_va, inv->nominal_watts);
+    snprintf(msg, sizeof(msg), "Model: %s | Serial: %s | FW: %s | %uVA / %uW | Driver: %s",
+             inv->model, inv->serial, inv->firmware, inv->nominal_va, inv->nominal_watts,
+             driver_name);
     log_msg("INFO", msg);
 }
 
@@ -163,77 +164,87 @@ static int should_shutdown(const ups_data_t *d)
            (d->sig_status & UPS_SIG_SHUTDOWN_IMMINENT);
 }
 
-/* --- One-shot commands (direct Modbus) --- */
+/* --- One-shot commands (direct) --- */
 
-static void cmd_status(modbus_t *ctx)
+static void cmd_status(ups_t *ups)
 {
     ups_inventory_t inv;
     ups_data_t data;
 
-    if (ups_read_inventory(ctx, &inv) == 0)
-        print_inventory(&inv);
+    if (ups_read_inventory(ups, &inv) == 0)
+        print_inventory(&inv, ups_driver_name(ups));
     else
         log_msg("ERROR", "Failed to read inventory");
 
-    if (ups_read_status(ctx, &data) == 0 && ups_read_dynamic(ctx, &data) == 0)
+    if (ups_read_status(ups, &data) == 0 && ups_read_dynamic(ups, &data) == 0)
         print_status(&data);
     else
         log_msg("ERROR", "Failed to read UPS data");
 }
 
-static void cmd_test_battery(modbus_t *ctx)
+static void cmd_test_battery(ups_t *ups)
 {
-    if (ups_cmd_battery_test(ctx) == 0)
+    if (ups_cmd_battery_test(ups) == 0)
         log_msg("INFO", "Battery test started");
     else
         log_msg("ERROR", "Failed to start battery test");
 }
 
-static void cmd_clear_faults(modbus_t *ctx)
+static void cmd_runtime_cal(ups_t *ups)
 {
-    if (ups_cmd_clear_faults(ctx) == 0)
+    if (ups_cmd_runtime_cal(ups) == 0)
+        log_msg("INFO", "Runtime calibration started");
+    else
+        log_msg("ERROR", "Failed to start runtime calibration");
+}
+
+static void cmd_clear_faults(ups_t *ups)
+{
+    if (ups_cmd_clear_faults(ups) == 0)
         log_msg("INFO", "Faults cleared");
     else
         log_msg("ERROR", "Failed to clear faults");
 }
 
-static void cmd_mute(modbus_t *ctx)
+static void cmd_mute(ups_t *ups)
 {
-    if (ups_cmd_mute_alarm(ctx) == 0)
+    if (ups_cmd_mute_alarm(ups) == 0)
         log_msg("INFO", "Alarm muted");
     else
         log_msg("ERROR", "Failed to mute alarm");
 }
 
-static void cmd_unmute(modbus_t *ctx)
+static void cmd_unmute(ups_t *ups)
 {
-    if (ups_cmd_cancel_mute(ctx) == 0)
+    if (ups_cmd_cancel_mute(ups) == 0)
         log_msg("INFO", "Alarm unmuted");
     else
         log_msg("ERROR", "Failed to unmute alarm");
 }
 
-static void cmd_beep(modbus_t *ctx)
+static void cmd_beep(ups_t *ups)
 {
-    if (ups_cmd_beep_test(ctx) == 0)
+    if (ups_cmd_beep_test(ups) == 0)
         log_msg("INFO", "Beep test sent");
     else
         log_msg("ERROR", "Failed to send beep test");
 }
 
-static void cmd_bypass(modbus_t *ctx, int enable)
+static void cmd_bypass(ups_t *ups, int enable)
 {
     int rc;
     if (enable)
-        rc = ups_cmd_bypass_enable(ctx);
+        rc = ups_cmd_bypass_enable(ups);
     else
-        rc = ups_cmd_bypass_disable(ctx);
+        rc = ups_cmd_bypass_disable(ups);
 
-    if (rc == 0) {
+    if (rc == UPS_ERR_NOT_SUPPORTED) {
+        log_msg("ERROR", "Bypass not supported by this UPS");
+    } else if (rc == 0) {
         log_msg("INFO", enable ? "Bypass enabled" : "Bypass disabled");
         /* Read back status to confirm */
         ups_data_t data;
-        if (ups_read_status(ctx, &data) == 0) {
+        if (ups_read_status(ups, &data) == 0) {
             int in_bypass = (data.status & UPS_ST_BYPASS) != 0;
             char msg[128];
             snprintf(msg, sizeof(msg), "UPS confirms: %s",
@@ -246,38 +257,23 @@ static void cmd_bypass(modbus_t *ctx, int enable)
     }
 }
 
-static const char *freq_name(uint16_t val)
+static void cmd_freq(ups_t *ups, uint16_t setting, const char *source)
 {
-    switch (val) {
-    case UPS_FREQ_AUTO:     return "auto";
-    case UPS_FREQ_HZ50_0_1: return "hz50_0_1";
-    case UPS_FREQ_HZ50_3_0: return "hz50_3_0";
-    case UPS_FREQ_HZ60_0_1: return "hz60_0_1";
-    case UPS_FREQ_HZ60_3_0: return "hz60_3_0";
-    default:                return "unknown";
-    }
-}
+    const ups_freq_setting_t *fs = ups_find_freq_value(ups, setting);
 
-/* Returns non-zero if this frequency tolerance is narrow enough to inhibit HE */
-static int freq_is_inhibit(uint16_t val)
-{
-    return val == UPS_FREQ_HZ50_0_1 || val == UPS_FREQ_HZ60_0_1;
-}
-
-static void cmd_freq(modbus_t *ctx, uint16_t setting, const char *source)
-{
-    if (ups_cmd_set_freq_tolerance(ctx, setting) == 0) {
+    if (ups_cmd_set_freq_tolerance(ups, setting) == 0) {
         char msg[128];
-        if (freq_is_inhibit(setting)) {
+        const char *name = fs ? fs->name : "unknown";
+        if (fs && fs->inhibits_he) {
             he_inhibit_set(source);
             snprintf(msg, sizeof(msg),
                      "Frequency tolerance set to %s (%s) — HE inhibited",
-                     freq_name(setting), source);
+                     name, source);
         } else {
             he_inhibit_clear();
             snprintf(msg, sizeof(msg),
                      "Frequency tolerance set to %s — HE inhibit cleared",
-                     freq_name(setting));
+                     name);
         }
         log_msg("INFO", msg);
     } else {
@@ -298,7 +294,7 @@ static int confirm(const char *prompt)
 
 /* --- IPC command handler (called from monitor loop) --- */
 
-static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
+static void handle_ipc_command(ups_t *ups, int client_fd, ipc_cmd_t cmd)
 {
     ups_data_t data;
     ups_inventory_t inv;
@@ -306,15 +302,15 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
 
     switch (cmd) {
     case IPC_CMD_STATUS:
-        if (ups_read_inventory(ctx, &inv) == 0) {
+        if (ups_read_inventory(ups, &inv) == 0) {
             ipc_respond(client_fd, "OK\n");
-            ipc_respond(client_fd, "Model: %s | Serial: %s | FW: %s | %uVA / %uW\n",
+            ipc_respond(client_fd, "Model: %s | Serial: %s | FW: %s | %uVA / %uW | Driver: %s\n",
                         inv.model, inv.serial, inv.firmware,
-                        inv.nominal_va, inv.nominal_watts);
+                        inv.nominal_va, inv.nominal_watts, ups_driver_name(ups));
         } else {
             ipc_respond(client_fd, "OK\n");
         }
-        if (ups_read_status(ctx, &data) == 0 && ups_read_dynamic(ctx, &data) == 0) {
+        if (ups_read_status(ups, &data) == 0 && ups_read_dynamic(ups, &data) == 0) {
             char buf[2048];
             format_status(&data, buf, sizeof(buf));
             ipc_respond(client_fd, "%s\n", buf);
@@ -324,10 +320,12 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
         break;
 
     case IPC_CMD_BYPASS_ON:
-        rc = ups_cmd_bypass_enable(ctx);
-        if (rc == 0) {
+        rc = ups_cmd_bypass_enable(ups);
+        if (rc == UPS_ERR_NOT_SUPPORTED) {
+            ipc_respond(client_fd, "ERR Bypass not supported by this UPS\n");
+        } else if (rc == 0) {
             ipc_respond(client_fd, "OK\nBypass enabled\n");
-            if (ups_read_status(ctx, &data) == 0) {
+            if (ups_read_status(ups, &data) == 0) {
                 ipc_respond(client_fd, "UPS confirms: %s\n",
                             (data.status & UPS_ST_BYPASS) ? "In Bypass" : "Normal operation");
             }
@@ -337,10 +335,12 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
         break;
 
     case IPC_CMD_BYPASS_OFF:
-        rc = ups_cmd_bypass_disable(ctx);
-        if (rc == 0) {
+        rc = ups_cmd_bypass_disable(ups);
+        if (rc == UPS_ERR_NOT_SUPPORTED) {
+            ipc_respond(client_fd, "ERR Bypass not supported by this UPS\n");
+        } else if (rc == 0) {
             ipc_respond(client_fd, "OK\nBypass disabled\n");
-            if (ups_read_status(ctx, &data) == 0) {
+            if (ups_read_status(ups, &data) == 0) {
                 ipc_respond(client_fd, "UPS confirms: %s\n",
                             (data.status & UPS_ST_BYPASS) ? "In Bypass" : "Normal operation");
             }
@@ -349,76 +349,52 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
         }
         break;
 
-    case IPC_CMD_FREQ_AUTO:
-    case IPC_CMD_FREQ_HZ50_0_1:
-    case IPC_CMD_FREQ_HZ50_3_0:
-    case IPC_CMD_FREQ_HZ60_0_1:
-    case IPC_CMD_FREQ_HZ60_0_1_WEATHER:
-    case IPC_CMD_FREQ_HZ60_3_0: {
-        static const struct { ipc_cmd_t cmd; uint16_t val; const char *src; } freq_map[] = {
-            { IPC_CMD_FREQ_AUTO,              UPS_FREQ_AUTO,     "manual" },
-            { IPC_CMD_FREQ_HZ50_0_1,         UPS_FREQ_HZ50_0_1, "manual" },
-            { IPC_CMD_FREQ_HZ50_3_0,         UPS_FREQ_HZ50_3_0, "manual" },
-            { IPC_CMD_FREQ_HZ60_0_1,         UPS_FREQ_HZ60_0_1, "manual" },
-            { IPC_CMD_FREQ_HZ60_0_1_WEATHER, UPS_FREQ_HZ60_0_1, "weather" },
-            { IPC_CMD_FREQ_HZ60_3_0,         UPS_FREQ_HZ60_3_0, "manual" },
-        };
-        uint16_t val = 0;
-        const char *src = "manual";
-        for (size_t i = 0; i < sizeof(freq_map) / sizeof(freq_map[0]); i++) {
-            if (freq_map[i].cmd == cmd) {
-                val = freq_map[i].val;
-                src = freq_map[i].src;
-                break;
-            }
-        }
-        rc = ups_cmd_set_freq_tolerance(ctx, val);
-        if (rc == 0) {
-            if (freq_is_inhibit(val)) {
-                he_inhibit_set(src);
-                ipc_respond(client_fd, "OK\nFrequency tolerance set to %s (%s) — HE inhibited\n",
-                            freq_name(val), src);
-            } else {
-                he_inhibit_clear();
-                ipc_respond(client_fd, "OK\nFrequency tolerance set to %s — HE inhibit cleared\n",
-                            freq_name(val));
-            }
-        } else {
-            ipc_respond(client_fd, "ERR Failed to set frequency tolerance\n");
-        }
+    case IPC_CMD_FREQ:
+        /* Bare "FREQ" with no setting name — routed here because
+         * ipc_parse_freq() rejected it (no name argument). */
+        ipc_respond(client_fd, "ERR Frequency commands must use FREQ <name> format\n");
         break;
-    }
 
     case IPC_CMD_TEST_BATTERY:
-        rc = ups_cmd_battery_test(ctx);
+        rc = ups_cmd_battery_test(ups);
         ipc_respond(client_fd, rc == 0
             ? "OK\nBattery test started\n"
             : "ERR Failed to start battery test\n");
         break;
 
+    case IPC_CMD_RUNTIME_CAL:
+        rc = ups_cmd_runtime_cal(ups);
+        if (rc == UPS_ERR_NOT_SUPPORTED)
+            ipc_respond(client_fd, "ERR Runtime calibration not supported by this UPS\n");
+        else
+            ipc_respond(client_fd, rc == 0
+                ? "OK\nRuntime calibration started\n"
+                : "ERR Failed to start runtime calibration\n");
+        break;
+
     case IPC_CMD_CLEAR_FAULTS:
-        rc = ups_cmd_clear_faults(ctx);
+        rc = ups_cmd_clear_faults(ups);
         ipc_respond(client_fd, rc == 0
             ? "OK\nFaults cleared\n"
             : "ERR Failed to clear faults\n");
         break;
 
     case IPC_CMD_MUTE:
-        rc = ups_cmd_mute_alarm(ctx);
+        rc = ups_cmd_mute_alarm(ups);
         ipc_respond(client_fd, rc == 0
             ? "OK\nAlarm muted\n"
             : "ERR Failed to mute alarm\n");
         break;
 
     case IPC_CMD_UNMUTE:
-        rc = ups_cmd_cancel_mute(ctx);
+        rc = ups_cmd_cancel_mute(ups);
         ipc_respond(client_fd, rc == 0
             ? "OK\nAlarm unmuted\n"
             : "ERR Failed to unmute alarm\n");
         break;
 
     case IPC_CMD_BEEP:
-        rc = ups_cmd_beep_test(ctx);
+        rc = ups_cmd_beep_test(ups);
         ipc_respond(client_fd, rc == 0
             ? "OK\nBeep test sent\n"
             : "ERR Failed to send beep test\n");
@@ -432,9 +408,39 @@ static void handle_ipc_command(modbus_t *ctx, int client_fd, ipc_cmd_t cmd)
     ipc_respond_end(client_fd);
 }
 
+/* Handle FREQ IPC commands with parsed name and source */
+static void handle_ipc_freq(ups_t *ups, int client_fd,
+                            const char *freq_name, const char *source)
+{
+    const ups_freq_setting_t *fs = ups_find_freq_setting(ups, freq_name);
+    if (!fs) {
+        ipc_respond(client_fd, "ERR Unknown frequency setting: %s\n", freq_name);
+        ipc_respond_end(client_fd);
+        return;
+    }
+
+    int rc = ups_cmd_set_freq_tolerance(ups, fs->value);
+    if (rc == UPS_ERR_NOT_SUPPORTED) {
+        ipc_respond(client_fd, "ERR Frequency tolerance not supported by this UPS\n");
+    } else if (rc == 0) {
+        if (fs->inhibits_he) {
+            he_inhibit_set(source);
+            ipc_respond(client_fd, "OK\nFrequency tolerance set to %s (%s) — HE inhibited\n",
+                        fs->name, source);
+        } else {
+            he_inhibit_clear();
+            ipc_respond(client_fd, "OK\nFrequency tolerance set to %s — HE inhibit cleared\n",
+                        fs->name);
+        }
+    } else {
+        ipc_respond(client_fd, "ERR Failed to set frequency tolerance\n");
+    }
+    ipc_respond_end(client_fd);
+}
+
 /* --- Monitor loop --- */
 
-static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
+static void cmd_monitor(ups_t *ups, const config_t *cfg,
                         const shutdown_flags_t *flags, int listen_fd)
 {
     ups_inventory_t inv;
@@ -450,26 +456,28 @@ static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
     ups_thresholds_t thresholds = { 0, 0 };
 
     /* Read and display inventory once */
-    if (ups_read_inventory(ctx, &inv) == 0)
-        print_inventory(&inv);
+    if (ups_read_inventory(ups, &inv) == 0)
+        print_inventory(&inv, ups_driver_name(ups));
     else
         log_msg("ERROR", "Failed to read inventory");
 
     /* Reconcile HE inhibit state from prior run */
-    he_inhibit_active = he_inhibit_read();
-    if (he_inhibit_active) {
-        /* Check if UPS re-engaged HE on its own */
-        ups_data_t check;
-        if (ups_read_status(ctx, &check) == 0 && (check.status & UPS_ST_HE_MODE)) {
-            log_msg("INFO", "HE inhibit file found but UPS is in HE mode — clearing stale inhibit");
-            he_inhibit_clear();
-        } else {
-            log_msg("INFO", "HE inhibit active from prior session");
+    if (ups_has_cap(ups, UPS_CAP_HE_MODE)) {
+        he_inhibit_active = he_inhibit_read();
+        if (he_inhibit_active) {
+            /* Check if UPS re-engaged HE on its own */
+            ups_data_t check;
+            if (ups_read_status(ups, &check) == 0 && (check.status & UPS_ST_HE_MODE)) {
+                log_msg("INFO", "HE inhibit file found but UPS is in HE mode — clearing stale inhibit");
+                he_inhibit_clear();
+            } else {
+                log_msg("INFO", "HE inhibit active from prior session");
+            }
         }
     }
 
     /* Read transfer thresholds for alert system */
-    if (ups_read_thresholds(ctx, &thresholds.transfer_high, &thresholds.transfer_low) == 0) {
+    if (ups_read_thresholds(ups, &thresholds.transfer_high, &thresholds.transfer_low) == 0) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Transfer thresholds: high=%uV low=%uV",
                  thresholds.transfer_high, thresholds.transfer_low);
@@ -479,7 +487,7 @@ static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
     }
 
     /* Initial read + notification */
-    if (ups_read_status(ctx, &data) == 0 && ups_read_dynamic(ctx, &data) == 0) {
+    if (ups_read_status(ups, &data) == 0 && ups_read_dynamic(ups, &data) == 0) {
         print_status(&data);
         char body[2048];
         format_status(&data, body, sizeof(body));
@@ -525,8 +533,15 @@ static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
                 pfds[1].fd = -1;
             } else {
                 cmd_buf[n] = '\0';
-                ipc_cmd_t cmd = ipc_parse_command(cmd_buf);
-                handle_ipc_command(ctx, client_fd, cmd);
+                /* Check for FREQ command with parameters */
+                char freq_name[32], freq_source[32];
+                if (ipc_parse_freq(cmd_buf, freq_name, sizeof(freq_name),
+                                   freq_source, sizeof(freq_source)) == 0) {
+                    handle_ipc_freq(ups, client_fd, freq_name, freq_source);
+                } else {
+                    ipc_cmd_t cmd = ipc_parse_command(cmd_buf);
+                    handle_ipc_command(ups, client_fd, cmd);
+                }
                 close(client_fd);
                 client_fd = -1;
                 pfds[1].fd = -1;
@@ -534,14 +549,14 @@ static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
         }
 
         /* Periodic Modbus poll */
-        if (ups_read_status(ctx, &data) != 0 || ups_read_dynamic(ctx, &data) != 0) {
+        if (ups_read_status(ups, &data) != 0 || ups_read_dynamic(ups, &data) != 0) {
             log_msg("ERROR", "Failed to read UPS data");
             continue;
         }
 
         /* Auto-clear HE inhibit if UPS has stably re-engaged HE.
          * Require consecutive polls to filter transitional flicker. */
-        if (he_inhibit_active) {
+        if (he_inhibit_active && ups_has_cap(ups, UPS_CAP_HE_MODE)) {
             if (data.status & UPS_ST_HE_MODE) {
                 he_reengaged_count++;
                 if (he_reengaged_count >= HE_REENGAGE_THRESHOLD) {
@@ -598,7 +613,7 @@ static void cmd_monitor(modbus_t *ctx, const config_t *cfg,
                          data.charge_pct, data.runtime_sec / 60, data.runtime_sec % 60);
                 notify("UPS Battery Critical", alert);
 
-                shutdown_workflow(ctx, cfg, flags);
+                shutdown_workflow(ups, cfg, flags);
                 sleep(180);
                 break;
             }
@@ -624,6 +639,7 @@ typedef enum {
     MODE_MONITOR,
     MODE_STATUS,
     MODE_TEST_BATTERY,
+    MODE_RUNTIME_CAL,
     MODE_TEST_SSH,
     MODE_REBOOT_NOW,
     MODE_BYPASS,
@@ -635,21 +651,19 @@ typedef enum {
 } cli_mode_t;
 
 /* Map CLI modes to IPC command strings */
-static const char *cli_to_ipc_cmd(cli_mode_t mode, int bypass_on, uint16_t freq_val)
+static const char *cli_to_ipc_cmd(cli_mode_t mode, int bypass_on,
+                                  const char *freq_name, const char *freq_source)
 {
+    static char freq_cmd[IPC_MAX_CMD_LEN];
+
     switch (mode) {
     case MODE_STATUS:       return "STATUS";
     case MODE_TEST_BATTERY: return "TEST BATTERY";
+    case MODE_RUNTIME_CAL:  return "RUNTIME CAL";
     case MODE_BYPASS:       return bypass_on ? "BYPASS ON" : "BYPASS OFF";
     case MODE_SET_FREQ:
-        switch (freq_val) {
-        case UPS_FREQ_AUTO:     return "FREQ AUTO";
-        case UPS_FREQ_HZ50_0_1: return "FREQ HZ50_0_1";
-        case UPS_FREQ_HZ50_3_0: return "FREQ HZ50_3_0";
-        case UPS_FREQ_HZ60_0_1: return "FREQ HZ60_0_1";
-        case UPS_FREQ_HZ60_3_0: return "FREQ HZ60_3_0";
-        default:                return NULL;
-        }
+        snprintf(freq_cmd, sizeof(freq_cmd), "FREQ %s %s", freq_name, freq_source);
+        return freq_cmd;
     case MODE_CLEAR_FAULTS: return "CLEAR FAULTS";
     case MODE_MUTE:         return "MUTE";
     case MODE_UNMUTE:       return "UNMUTE";
@@ -666,15 +680,13 @@ static void usage(const char *prog)
             "Commands:\n"
             "  --status            One-shot status dump\n"
             "  --test-battery      Start battery self-test\n"
+            "  --runtime-cal       Start runtime calibration (deep discharge)\n"
             "  --test-ssh          Test SSH connectivity to shutdown targets\n"
             "  --reboot-now        Interactive shutdown workflow\n"
-            "  --bypass on|off     Enable/disable bypass mode (requires confirmation)\n"
-            "  --freq <setting>    Set output frequency tolerance (reg 593)\n"
-            "                      auto      Automatic 50/60Hz (47-53, 57-63)\n"
-            "                      hz50_0_1  50 Hz +/- 0.1 Hz\n"
-            "                      hz50_3_0  50 Hz +/- 3.0 Hz\n"
-            "                      hz60_0_1  60 Hz +/- 0.1 Hz (inhibits HE)\n"
-            "                      hz60_3_0  60 Hz +/- 3.0 Hz (allows HE)\n"
+            "  --bypass on|off     Enable/disable bypass mode\n"
+            "  --freq <setting>    Set output frequency tolerance\n"
+            "                      Available settings depend on UPS model.\n"
+            "                      Use --status to see driver capabilities.\n"
             "  --clear-faults      Clear UPS fault conditions\n"
             "  --mute              Mute active alarms\n"
             "  --unmute            Cancel alarm mute\n"
@@ -718,7 +730,8 @@ int main(int argc, char *argv[])
     const char *config_path = CONFIG_PATH;
     cli_mode_t mode = MODE_MONITOR;
     int bypass_on = 0;
-    uint16_t freq_val = 0;
+    char freq_name[32] = "";
+    char freq_source[32] = "manual";
     shutdown_flags_t sflags = { 0, 0, 0 };
 
     /* Parse args */
@@ -727,6 +740,8 @@ int main(int argc, char *argv[])
             mode = MODE_STATUS;
         } else if (strcmp(argv[i], "--test-battery") == 0) {
             mode = MODE_TEST_BATTERY;
+        } else if (strcmp(argv[i], "--runtime-cal") == 0) {
+            mode = MODE_RUNTIME_CAL;
         } else if (strcmp(argv[i], "--test-ssh") == 0) {
             mode = MODE_TEST_SSH;
         } else if (strcmp(argv[i], "--reboot-now") == 0) {
@@ -745,20 +760,8 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--freq") == 0 && i + 1 < argc) {
             mode = MODE_SET_FREQ;
             i++;
-            if (strcmp(argv[i], "auto") == 0)
-                freq_val = UPS_FREQ_AUTO;
-            else if (strcmp(argv[i], "hz50_0_1") == 0)
-                freq_val = UPS_FREQ_HZ50_0_1;
-            else if (strcmp(argv[i], "hz50_3_0") == 0)
-                freq_val = UPS_FREQ_HZ50_3_0;
-            else if (strcmp(argv[i], "hz60_0_1") == 0)
-                freq_val = UPS_FREQ_HZ60_0_1;
-            else if (strcmp(argv[i], "hz60_3_0") == 0)
-                freq_val = UPS_FREQ_HZ60_3_0;
-            else {
-                fprintf(stderr, "Invalid freq argument: %s (expected auto|hz50_0_1|hz50_3_0|hz60_0_1|hz60_3_0)\n", argv[i]);
-                return 1;
-            }
+            strncpy(freq_name, argv[i], sizeof(freq_name) - 1);
+            freq_name[sizeof(freq_name) - 1] = '\0';
         } else if (strcmp(argv[i], "--clear-faults") == 0) {
             mode = MODE_CLEAR_FAULTS;
         } else if (strcmp(argv[i], "--mute") == 0) {
@@ -809,9 +812,17 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Runtime calibration requires interactive confirmation */
+    if (mode == MODE_RUNTIME_CAL) {
+        if (!confirm("Start runtime calibration? This deeply discharges the battery.")) {
+            log_msg("INFO", "Runtime calibration cancelled by user");
+            return 0;
+        }
+    }
+
     /* For one-shot commands, try IPC to running monitor first */
     if (mode != MODE_MONITOR && mode != MODE_TEST_SSH && mode != MODE_REBOOT_NOW) {
-        const char *ipc_cmd = cli_to_ipc_cmd(mode, bypass_on, freq_val);
+        const char *ipc_cmd = cli_to_ipc_cmd(mode, bypass_on, freq_name, freq_source);
         if (ipc_cmd) {
             int rc = oneshot_via_ipc(&cfg, ipc_cmd);
             if (rc >= 0) return rc;
@@ -834,17 +845,17 @@ int main(int argc, char *argv[])
         log_msg("INFO", "Pushover not configured, notifications disabled");
     }
 
-    /* Connect to UPS */
+    /* Connect to UPS (auto-detects driver from model string) */
     log_msg("INFO", "Connecting to UPS...");
-    modbus_t *ctx = ups_connect(cfg.ups_device, cfg.ups_baud, cfg.ups_slave_id);
-    if (!ctx) {
-        log_msg("ERROR", "Failed to connect to UPS");
+    ups_t *ups = ups_connect(cfg.ups_device, cfg.ups_baud, cfg.ups_slave_id);
+    if (!ups) {
+        log_msg("ERROR", "Failed to connect to UPS or unknown model");
         return 1;
     }
 
     char msg[512];
-    snprintf(msg, sizeof(msg), "Connected to %s (baud %d, slave %d)",
-             cfg.ups_device, cfg.ups_baud, cfg.ups_slave_id);
+    snprintf(msg, sizeof(msg), "Connected to %s (baud %d, slave %d) — driver: %s",
+             cfg.ups_device, cfg.ups_baud, cfg.ups_slave_id, ups_driver_name(ups));
     log_msg("INFO", msg);
 
     /* Signal handling */
@@ -853,36 +864,62 @@ int main(int argc, char *argv[])
 
     int exit_code = 0;
 
+    /* Validate freq setting against driver before dispatch */
+    uint16_t freq_val = 0;
+    if (mode == MODE_SET_FREQ) {
+        const ups_freq_setting_t *fs = ups_find_freq_setting(ups, freq_name);
+        if (!fs) {
+            fprintf(stderr, "Invalid freq setting '%s' for %s driver.\n",
+                    freq_name, ups_driver_name(ups));
+            if (ups_has_cap(ups, UPS_CAP_FREQ_TOLERANCE)) {
+                size_t count;
+                const ups_freq_setting_t *settings = ups_get_freq_settings(ups, &count);
+                fprintf(stderr, "Available settings:");
+                for (size_t j = 0; j < count; j++)
+                    fprintf(stderr, " %s", settings[j].name);
+                fprintf(stderr, "\n");
+            } else {
+                fprintf(stderr, "This UPS does not support frequency tolerance control.\n");
+            }
+            ups_close(ups);
+            return 1;
+        }
+        freq_val = fs->value;
+    }
+
     /* Dispatch */
     switch (mode) {
     case MODE_STATUS:
-        cmd_status(ctx);
+        cmd_status(ups);
         break;
     case MODE_TEST_BATTERY:
-        cmd_test_battery(ctx);
+        cmd_test_battery(ups);
+        break;
+    case MODE_RUNTIME_CAL:
+        cmd_runtime_cal(ups);
         break;
     case MODE_BYPASS:
-        cmd_bypass(ctx, bypass_on);
+        cmd_bypass(ups, bypass_on);
         break;
     case MODE_SET_FREQ:
-        cmd_freq(ctx, freq_val, "manual");
+        cmd_freq(ups, freq_val, freq_source);
         break;
     case MODE_CLEAR_FAULTS:
-        cmd_clear_faults(ctx);
+        cmd_clear_faults(ups);
         break;
     case MODE_MUTE:
-        cmd_mute(ctx);
+        cmd_mute(ups);
         break;
     case MODE_UNMUTE:
-        cmd_unmute(ctx);
+        cmd_unmute(ups);
         break;
     case MODE_BEEP:
-        cmd_beep(ctx);
+        cmd_beep(ups);
         break;
     case MODE_REBOOT_NOW:
         if (confirm("Are you sure you want to reboot NOW?")) {
             log_msg("INFO", "User confirmed reboot");
-            shutdown_workflow(ctx, &cfg, &sflags);
+            shutdown_workflow(ups, &cfg, &sflags);
             sleep(180);
         } else {
             log_msg("INFO", "Reboot aborted by user");
@@ -907,7 +944,7 @@ int main(int argc, char *argv[])
         }
 
         log_msg("INFO", "IPC socket listening");
-        cmd_monitor(ctx, &cfg, &sflags, listen_fd);
+        cmd_monitor(ups, &cfg, &sflags, listen_fd);
 
         ipc_server_cleanup(cfg.ipc_sock_path, listen_fd);
         ipc_lock_release(lock_fd, cfg.ipc_lock_path);
@@ -918,7 +955,7 @@ int main(int argc, char *argv[])
     }
 
     /* Cleanup */
-    ups_close(ctx);
+    ups_close(ups);
     if (po_enabled)
         pushover_global_cleanup();
 

@@ -76,11 +76,11 @@ uint32_t alerts_check(alert_state_t *state,
                                 body, UPS_ST_FAULT, notify);
 
     /* --- Critical: Battery replace --- */
-    int is_bat_replace = (data->bat_error & UPS_BATERR_REPLACE) != 0;
+    int is_bat_replace = (data->bat_system_error & UPS_BATERR_REPLACE) != 0;
     snprintf(body, sizeof(body), "Battery system error detected");
-    /* bat_replace uses bat_error register, not status register.
-     * Return UPS_ST_FAULT bit in alerted mask as a proxy since bat_error
-     * changes don't affect status_signature directly. */
+    /* bat_replace uses BatterySystemError register (reg 22), not the
+     * status register. No bit in alerted mask — bat_system_error changes
+     * don't affect status_signature directly. */
     if (is_bat_replace && !state->bat_replace) {
         notify("UPS Battery Replace Required", body);
     } else if (!is_bat_replace && state->bat_replace) {

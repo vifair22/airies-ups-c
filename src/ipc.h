@@ -12,13 +12,9 @@ typedef enum {
     IPC_CMD_STATUS,
     IPC_CMD_BYPASS_ON,
     IPC_CMD_BYPASS_OFF,
-    IPC_CMD_FREQ_AUTO,
-    IPC_CMD_FREQ_HZ50_0_1,
-    IPC_CMD_FREQ_HZ50_3_0,
-    IPC_CMD_FREQ_HZ60_0_1,
-    IPC_CMD_FREQ_HZ60_0_1_WEATHER,
-    IPC_CMD_FREQ_HZ60_3_0,
+    IPC_CMD_FREQ,           /* Generic — use ipc_parse_freq() for name/source */
     IPC_CMD_TEST_BATTERY,
+    IPC_CMD_RUNTIME_CAL,
     IPC_CMD_CLEAR_FAULTS,
     IPC_CMD_MUTE,
     IPC_CMD_UNMUTE,
@@ -37,6 +33,12 @@ int  ipc_client_recv(int fd, char *buf, size_t bufsz);
 
 /* Command parsing */
 ipc_cmd_t ipc_parse_command(const char *line);
+
+/* Parse a FREQ command: "FREQ <name> [source]"
+ * Returns 0 if line is a FREQ command, -1 otherwise.
+ * source defaults to "manual" if not provided. */
+int ipc_parse_freq(const char *line, char *name, size_t name_sz,
+                   char *source, size_t source_sz);
 
 /* Response helpers */
 void ipc_respond(int client_fd, const char *fmt, ...);
