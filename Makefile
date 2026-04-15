@@ -13,16 +13,20 @@ CFLAGS   = -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
            -fstack-protector-strong -fstack-clash-protection \
            -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
            -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
-LIBS     = -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lpthread
+LIBS     = -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread
 
 # --- Source files ---
 
 # UPS driver layer (shared between daemon and CLI via the daemon)
 UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
 
+# API server
+API_SRCS   = src/api/server.c
+
 # Daemon sources
 DAEMON_SRCS = src/daemon/main.c \
-              $(UPS_SRCS)
+              $(UPS_SRCS) \
+              $(API_SRCS)
 
 # CLI sources
 CLI_SRCS    = src/cli/main.c

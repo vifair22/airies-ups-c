@@ -23,7 +23,7 @@ static const config_key_t app_file_keys[] = {
     /* HTTP server */
     { "http.port",     CFG_INT,    "8080",         "Web UI and API listen port",
       CFG_STORE_FILE, 0 },
-    { "http.socket",   CFG_STRING, "/run/airies-ups/ups.sock",
+    { "http.socket",   CFG_STRING, "/tmp/airies-ups.sock",
       "Unix socket path for CLI communication",
       CFG_STORE_FILE, 0 },
 
