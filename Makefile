@@ -23,10 +23,14 @@ UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
 # API server
 API_SRCS   = src/api/server.c
 
+# Monitor
+MON_SRCS   = src/monitor/monitor.c
+
 # Daemon sources
 DAEMON_SRCS = src/daemon/main.c \
               $(UPS_SRCS) \
-              $(API_SRCS)
+              $(API_SRCS) \
+              $(MON_SRCS)
 
 # CLI sources
 CLI_SRCS    = src/cli/main.c
