@@ -121,6 +121,11 @@ typedef struct ups_context {
     ups_inventory_t     inventory;  /* cached at connect time */
     int                 has_inventory;
     pthread_mutex_t     cmd_mutex;  /* serializes command writes */
+    int                 consecutive_errors;
+    /* Connection params for reconnect */
+    char                device[256];
+    int                 baud;
+    int                 slave_id;
 } ups_t;
 
 /* Connect and auto-detect driver from UPS model string.

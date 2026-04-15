@@ -82,6 +82,9 @@ ups_t *ups_connect(const char *device, int baud, int slave_id)
     ups->ctx = ctx;
     ups->driver = driver;
     pthread_mutex_init(&ups->cmd_mutex, NULL);
+    snprintf(ups->device, sizeof(ups->device), "%s", device);
+    ups->baud = baud;
+    ups->slave_id = slave_id;
 
     /* Read inventory immediately while connection is fresh */
     if (ups_read_inventory(ups, &ups->inventory) == 0)
@@ -148,6 +151,42 @@ const ups_freq_setting_t *ups_find_freq_value(const ups_t *ups, uint16_t value)
     return NULL;
 }
 
+/* --- Error recovery --- */
+
+#define MAX_CONSECUTIVE_ERRORS 5
+
+/* Called after a successful Modbus transaction */
+static void ups_clear_errors(ups_t *ups)
+{
+    ups->consecutive_errors = 0;
+}
+
+/* Called after a failed Modbus transaction.
+ * Flushes the serial buffer to clear stale bytes.
+ * After repeated failures, attempts a full reconnect. */
+static void ups_handle_error(ups_t *ups)
+{
+    ups->consecutive_errors++;
+
+    /* Always flush after an error — clears stale bytes from partial responses */
+    modbus_flush(ups->ctx);
+
+    /* After persistent failures, try reconnecting */
+    if (ups->consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+        modbus_close(ups->ctx);
+        modbus_free(ups->ctx);
+
+        ups->ctx = modbus_new_rtu(ups->device, ups->baud, 'N', 8, 1);
+        if (ups->ctx) {
+            modbus_set_slave(ups->ctx, ups->slave_id);
+            modbus_set_response_timeout(ups->ctx, 5, 0);
+            if (modbus_connect(ups->ctx) == 0) {
+                ups->consecutive_errors = 0;
+            }
+        }
+    }
+}
+
 /* --- Read dispatch --- */
 
 int ups_read_status(ups_t *ups, ups_data_t *data)
@@ -155,6 +194,7 @@ int ups_read_status(ups_t *ups, ups_data_t *data)
     if (!ups->driver->read_status) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
     int rc = ups->driver->read_status(ups->ctx, data);
+    if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
@@ -164,6 +204,7 @@ int ups_read_dynamic(ups_t *ups, ups_data_t *data)
     if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
     int rc = ups->driver->read_dynamic(ups->ctx, data);
+    if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
@@ -186,66 +227,128 @@ int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_
     return rc;
 }
 
-/* --- Command dispatch --- */
+/* --- Command dispatch ---
+ * All commands hold the mutex and flush after write to prevent
+ * the next read from getting stale serial data. */
+
+#include <time.h>
+
+static void post_command_settle(void)
+{
+    /* Brief delay after command write — gives UPS time to process
+     * before the monitor's next read attempt */
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 200000000 }; /* 200ms */
+    nanosleep(&ts, NULL);
+}
 
 int ups_cmd_shutdown(ups_t *ups)
 {
     if (!ups->driver->cmd_shutdown) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_shutdown(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_shutdown(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_battery_test(ups_t *ups)
 {
     if (!ups->driver->cmd_battery_test) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_battery_test(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_battery_test(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_runtime_cal(ups_t *ups)
 {
     if (!ups->driver->cmd_runtime_cal) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_runtime_cal(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_runtime_cal(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_abort_runtime_cal(ups_t *ups)
 {
     if (!ups->driver->cmd_abort_runtime_cal) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_abort_runtime_cal(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_abort_runtime_cal(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_clear_faults(ups_t *ups)
 {
     if (!ups->driver->cmd_clear_faults) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_clear_faults(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_clear_faults(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_mute_alarm(ups_t *ups)
 {
     if (!ups->driver->cmd_mute_alarm) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_mute_alarm(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_mute_alarm(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_cancel_mute(ups_t *ups)
 {
     if (!ups->driver->cmd_cancel_mute) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_cancel_mute(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_cancel_mute(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_beep_test(ups_t *ups)
 {
     if (!ups->driver->cmd_beep_test) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_beep_test(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_beep_test(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_bypass_enable(ups_t *ups)
 {
     if (!ups->driver->cmd_bypass_enable) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_bypass_enable(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_bypass_enable(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_bypass_disable(ups_t *ups)
 {
     if (!ups->driver->cmd_bypass_disable) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->cmd_bypass_disable(ups->ctx);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_bypass_disable(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
@@ -253,6 +356,8 @@ int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
     if (!ups->driver->cmd_set_freq_tolerance) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
     int rc = ups->driver->cmd_set_freq_tolerance(ups->ctx, setting);
+    modbus_flush(ups->ctx);
+    post_command_settle();
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
@@ -292,9 +397,9 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
 
     pthread_mutex_lock(&ups->cmd_mutex);
     int rc = modbus_read_registers(ups->ctx, reg->reg_addr, n, regs);
+    if (rc != n) { ups_handle_error(ups); pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
-    if (rc != n)
-        return UPS_ERR_IO;
 
     if (reg->type == UPS_CFG_STRING && str_buf) {
         size_t max = str_bufsz - 1;
