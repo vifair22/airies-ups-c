@@ -242,6 +242,19 @@ static enum MHD_Result request_handler(void *cls,
         }
     }
 
+    /* SPA fallback: non-API GET requests without a file extension
+     * get index.html so React Router can handle the path */
+    if (api_method == API_GET && srv->static_dir &&
+        strncmp(url, "/api/", 5) != 0 && !strrchr(url, '.')) {
+        enum MHD_Result ret = try_serve_static(conn, "/", srv->static_dir);
+        if (ret == MHD_YES) {
+            free(pb->data);
+            free(pb);
+            *req_cls = NULL;
+            return ret;
+        }
+    }
+
     /* 404 */
     free(pb->data);
     free(pb);
