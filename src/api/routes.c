@@ -16,6 +16,13 @@ static cJSON *build_status_json(route_ctx_t *ctx)
     ups_data_t data;
     ups_inventory_t inv;
 
+    if (!ctx->monitor || !ctx->ups) {
+        cJSON_AddStringToObject(obj, "driver", "none");
+        cJSON_AddBoolToObject(obj, "connected", 0);
+        cJSON_AddStringToObject(obj, "message", "no UPS connected");
+        return obj;
+    }
+
     cJSON_AddStringToObject(obj, "driver", monitor_driver_name(ctx->monitor));
     cJSON_AddBoolToObject(obj, "connected", monitor_is_connected(ctx->monitor));
 
@@ -100,6 +107,9 @@ static api_response_t handle_status(const api_request_t *req, void *ud)
 static api_response_t handle_cmd(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
+
+    if (!ctx->ups)
+        return api_error(503, "no UPS connected");
 
     if (!req->body || req->body_len == 0)
         return api_error(400, "request body required");
