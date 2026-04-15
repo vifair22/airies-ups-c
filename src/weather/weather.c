@@ -105,6 +105,8 @@ struct weather {
     int     wind_speed_mph;
     char    severe_keywords[256];
     int     poll_interval;
+    char    severe_freq[32];   /* freq setting to apply during severe weather */
+    char    normal_freq[32];   /* freq setting to restore when clear */
 
     /* State */
     int     severe;
@@ -117,7 +119,8 @@ static int load_config(weather_t *w)
     db_result_t *result = NULL;
     int rc = db_execute(w->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
-        "wind_speed_mph, severe_keywords, poll_interval "
+        "wind_speed_mph, severe_keywords, poll_interval, "
+        "severe_freq_setting, normal_freq_setting "
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
@@ -137,6 +140,10 @@ static int load_config(weather_t *w)
     snprintf(w->severe_keywords, sizeof(w->severe_keywords), "%s",
              result->rows[0][6] ? result->rows[0][6] : "");
     w->poll_interval = atoi(result->rows[0][7]);
+    snprintf(w->severe_freq, sizeof(w->severe_freq), "%s",
+             result->rows[0][8] ? result->rows[0][8] : "hz60_0_1");
+    snprintf(w->normal_freq, sizeof(w->normal_freq), "%s",
+             result->rows[0][9] ? result->rows[0][9] : "auto");
     if (w->poll_interval < 60) w->poll_interval = 300;
 
     db_result_free(result);
@@ -330,25 +337,27 @@ static void *weather_thread(void *arg)
         const char *he_source = monitor_he_inhibit_source(w->monitor);
 
         if (severe && !he_active) {
-            log_warn("weather: severe conditions (%s), inhibiting HE", reasons);
-            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, "hz60_0_1");
+            log_warn("weather: severe conditions (%s), setting freq to %s",
+                     reasons, w->severe_freq);
+            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, w->severe_freq);
             if (fs) {
                 ups_cmd_set_freq_tolerance(w->ups, fs->value);
                 monitor_he_inhibit_set(w->monitor, "weather");
             }
-            weather_event(w, "warning", "Weather Inhibit", reasons);
-            push_send("UPS Weather Inhibit", reasons);
+            weather_event(w, "warning", "Weather: Severe", reasons);
+            push_send("UPS Weather Alert", reasons);
         } else if (!severe && he_active && strcmp(he_source, "weather") == 0) {
-            log_info("weather: conditions cleared, restoring HE");
-            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, "hz60_3_0");
+            log_info("weather: conditions cleared, restoring freq to %s",
+                     w->normal_freq);
+            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, w->normal_freq);
             if (fs) {
                 ups_cmd_set_freq_tolerance(w->ups, fs->value);
                 monitor_he_inhibit_clear(w->monitor);
             }
-            weather_event(w, "info", "Weather Clear",
-                          "Conditions cleared, HE mode restored");
+            weather_event(w, "info", "Weather: Clear",
+                          "Conditions cleared, frequency tolerance restored");
             push_send("UPS Weather Clear",
-                       "Conditions cleared, HE mode restored");
+                       "Conditions cleared, frequency tolerance restored");
         } else if (severe && he_active && strcmp(he_source, "weather") == 0) {
             log_info("weather: still severe (%s)", reasons);
         } else if (!severe) {

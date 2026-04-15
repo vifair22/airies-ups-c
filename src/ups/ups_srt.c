@@ -193,30 +193,49 @@ static int srt_detect(const char *model)
 /* --- Frequency tolerance settings --- */
 
 static const ups_freq_setting_t srt_freq_settings[] = {
-    { 1,  "auto",     "Automatic 50/60Hz (47-53, 57-63)", 0 },
-    { 2,  "hz50_0_1", "50 Hz +/- 0.1 Hz",                1 },
-    { 8,  "hz50_3_0", "50 Hz +/- 3.0 Hz",                0 },
-    { 16, "hz60_0_1", "60 Hz +/- 0.1 Hz",                1 },
-    { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz",                0 },
+    { 1,  "auto",     "Automatic 50/60Hz (47-53, 57-63)" },
+    { 2,  "hz50_0_1", "50 Hz +/- 0.1 Hz" },
+    { 8,  "hz50_3_0", "50 Hz +/- 3.0 Hz" },
+    { 16, "hz60_0_1", "60 Hz +/- 0.1 Hz" },
+    { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz" },
 };
 
 /* --- Config register descriptors --- */
 
 static const ups_bitfield_opt_t srt_bat_test_opts[] = {
-    { 1,  "never",           "Never" },
-    { 2,  "onstart_only",    "On startup only" },
-    { 4,  "onstart_plus_7",  "On startup + every 7 days" },
-    { 8,  "onstart_plus_14", "On startup + every 14 days" },
-    { 16, "every_7_since",   "Every 7 days since last test" },
-    { 32, "every_14_since",  "Every 14 days since last test" },
+    { 1,  "never",           "Do not perform battery test" },
+    { 2,  "onstart_only",    "Only on UPS powerup" },
+    { 4,  "onstart_plus_7",  "On powerup and every 7 days thereafter" },
+    { 8,  "onstart_plus_14", "On powerup and every 14 days thereafter" },
+    { 16, "every_7_since",   "Every 7 days after last test" },
+    { 32, "every_14_since",  "Every 14 days after last test" },
+};
+
+static const ups_bitfield_opt_t srt_voltage_opts[] = {
+    { 1,    "vac100",     "100 VAC" },
+    { 2,    "vac120",     "120 VAC" },
+    { 4,    "vac200",     "200 VAC" },
+    { 8,    "vac208",     "208 VAC" },
+    { 16,   "vac220",     "220 VAC" },
+    { 32,   "vac230",     "230 VAC" },
+    { 64,   "vac240",     "240 VAC" },
+    { 2048, "vac110",     "110 VAC" },
+};
+
+static const ups_bitfield_opt_t srt_freq_tol_opts[] = {
+    { 1,  "auto",     "Automatic 50/60Hz" },
+    { 2,  "hz50_0_1", "50 Hz +/- 0.1 Hz" },
+    { 8,  "hz50_3_0", "50 Hz +/- 3.0 Hz" },
+    { 16, "hz60_0_1", "60 Hz +/- 0.1 Hz" },
+    { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz" },
 };
 
 static const ups_config_reg_t srt_config_regs[] = {
-    /* Transfer voltages */
-    { "transfer_high", "Input Transfer High Voltage", "V", "transfer",
-      1026, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 100, 140 } },
-    { "transfer_low", "Input Transfer Low Voltage", "V", "transfer",
-      1027, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 90, 110 } },
+    /* Transfer voltages — thresholds for switching to/from battery */
+    { "transfer_high", "Upper Acceptable Input Voltage", "V", "transfer",
+      1026, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 110, 150 } },
+    { "transfer_low", "Lower Acceptable Input Voltage", "V", "transfer",
+      1027, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 80, 120 } },
 
     /* Battery test interval */
     { "bat_test_interval", "Battery Test Interval", NULL, "battery",
@@ -224,31 +243,59 @@ static const ups_config_reg_t srt_config_regs[] = {
       .meta.bitfield = { srt_bat_test_opts,
                          sizeof(srt_bat_test_opts) / sizeof(srt_bat_test_opts[0]) } },
 
-    /* MOG delays */
-    { "mog_shutdown_delay", "MOG Shutdown Delay", "s", "delays",
-      1029, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
-    { "mog_start_delay", "MOG Start Delay", "s", "delays",
-      1030, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    /* MOG (Main Outlet Group) delays */
+    { "mog_turn_off_delay", "MOG Turn Off Countdown", "s", "outlet_delays",
+      1029, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "mog_turn_on_delay", "MOG Turn On Countdown", "s", "outlet_delays",
+      1030, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
 
-    /* SOG0 delays */
-    { "sog0_shutdown_delay", "SOG0 Shutdown Delay", "s", "delays",
-      1034, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
-    { "sog0_start_delay", "SOG0 Start Delay", "s", "delays",
-      1035, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    /* SOG0 (Switched Outlet Group 0) delays */
+    { "sog0_turn_off_delay", "SOG0 Turn Off Countdown", "s", "outlet_delays",
+      1034, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog0_turn_on_delay", "SOG0 Turn On Countdown", "s", "outlet_delays",
+      1035, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
 
-    /* SOG1 delays */
-    { "sog1_shutdown_delay", "SOG1 Shutdown Delay", "s", "delays",
-      1039, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
-    { "sog1_start_delay", "SOG1 Start Delay", "s", "delays",
-      1040, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 600 } },
+    /* SOG1 (Switched Outlet Group 1) delays */
+    { "sog1_turn_off_delay", "SOG1 Turn Off Countdown", "s", "outlet_delays",
+      1039, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog1_turn_on_delay", "SOG1 Turn On Countdown", "s", "outlet_delays",
+      1040, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+
+    /* Minimum return runtime settings */
+    { "mog_min_return_runtime", "MOG Minimum Return Runtime", "s", "outlet_delays",
+      1033, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog0_min_return_runtime", "SOG0 Minimum Return Runtime", "s", "outlet_delays",
+      1038, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    { "sog1_min_return_runtime", "SOG1 Minimum Return Runtime", "s", "outlet_delays",
+      1043, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
 
     /* Output voltage setting (read-only) */
     { "output_voltage_setting", "Output Voltage Setting", NULL, "output",
-      592, 1, UPS_CFG_BITFIELD, 1, 0, .meta.bitfield = { NULL, 0 } },
+      592, 1, UPS_CFG_BITFIELD, 1, 0,
+      .meta.bitfield = { srt_voltage_opts,
+                         sizeof(srt_voltage_opts) / sizeof(srt_voltage_opts[0]) } },
 
-    /* Battery install date */
-    { "battery_date", "Battery Install Date", "days since 2000-01-01", "battery",
+    /* Frequency tolerance (read/write) */
+    { "freq_tolerance", "Output Frequency Tolerance", NULL, "output",
+      593, 1, UPS_CFG_BITFIELD, 1, 1,
+      .meta.bitfield = { srt_freq_tol_opts,
+                         sizeof(srt_freq_tol_opts) / sizeof(srt_freq_tol_opts[0]) } },
+
+    /* Dates */
+    { "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
+      591, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
+    { "battery_date", "Battery Install Date", "days since 2000-01-01", "info",
       595, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+
+    /* Name strings (R/W, 8 regs = 16 chars each) */
+    { "ups_name", "UPS Name", NULL, "names",
+      596, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
+    { "mog_name", "MOG Name", NULL, "names",
+      604, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
+    { "sog0_name", "SOG0 Name", NULL, "names",
+      612, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
+    { "sog1_name", "SOG1 Name", NULL, "names",
+      620, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
 };
 
 /* --- Driver definition --- */

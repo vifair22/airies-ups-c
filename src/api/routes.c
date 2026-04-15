@@ -179,13 +179,6 @@ static api_response_t handle_cmd(const api_request_t *req, void *ud)
             return api_error(400, "invalid frequency setting");
         }
         rc = ups_cmd_set_freq_tolerance(ctx->ups, fs->value);
-        if (rc == 0 && fs->inhibits_he) {
-            const cJSON *src = cJSON_GetObjectItem(body, "source");
-            monitor_he_inhibit_set(ctx->monitor,
-                src && cJSON_IsString(src) ? src->valuestring : "manual");
-        } else if (rc == 0) {
-            monitor_he_inhibit_clear(ctx->monitor);
-        }
         result_msg = "frequency tolerance set";
 
     } else {
@@ -280,7 +273,8 @@ static api_response_t handle_telemetry(const api_request_t *req, void *ud)
 
 /* --- UPS config register endpoints --- */
 
-static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw)
+static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
+                          const char *str_val)
 {
     cJSON *obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "name", reg->name);
@@ -292,6 +286,16 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw)
 
     double scaled = (reg->scale > 1) ? (double)raw / reg->scale : (double)raw;
     cJSON_AddNumberToObject(obj, "value", scaled);
+
+    /* Add human-readable date for date fields */
+    if (reg->unit && strcmp(reg->unit, "days since 2000-01-01") == 0 && raw > 0) {
+        time_t epoch = 946684800 + (time_t)raw * 86400; /* 2000-01-01 UTC */
+        struct tm tm;
+        gmtime_r(&epoch, &tm);
+        char datebuf[16];
+        strftime(datebuf, sizeof(datebuf), "%Y-%m-%d", &tm);
+        cJSON_AddStringToObject(obj, "date", datebuf);
+    }
 
     if (reg->type == UPS_CFG_SCALAR) {
         cJSON_AddStringToObject(obj, "type", "scalar");
@@ -317,6 +321,8 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw)
         cJSON_AddItemToObject(obj, "options", opts);
     } else if (reg->type == UPS_CFG_STRING) {
         cJSON_AddStringToObject(obj, "type", "string");
+        if (str_val)
+            cJSON_AddStringToObject(obj, "string_value", str_val);
     }
 
     return obj;
@@ -338,10 +344,14 @@ static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
         if (!reg) return api_error(404, "register not found");
 
         uint16_t raw = 0;
-        if (ups_config_read(ctx->ups, reg, &raw, NULL, 0) != 0)
+        char str_buf[64] = "";
+        if (ups_config_read(ctx->ups, reg, &raw,
+                            reg->type == UPS_CFG_STRING ? str_buf : NULL,
+                            sizeof(str_buf)) != 0)
             return api_error(500, "failed to read register");
 
-        cJSON *obj = reg_to_json(reg, raw);
+        cJSON *obj = reg_to_json(reg, raw,
+                                 reg->type == UPS_CFG_STRING ? str_buf : NULL);
         char *json = cJSON_PrintUnformatted(obj);
         cJSON_Delete(obj);
         return api_ok(json);
@@ -356,8 +366,12 @@ static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
     cJSON *arr = cJSON_CreateArray();
     for (size_t i = 0; i < count; i++) {
         uint16_t raw = 0;
-        if (ups_config_read(ctx->ups, &regs[i], &raw, NULL, 0) == 0)
-            cJSON_AddItemToArray(arr, reg_to_json(&regs[i], raw));
+        char str_buf[64] = "";
+        if (ups_config_read(ctx->ups, &regs[i], &raw,
+                            regs[i].type == UPS_CFG_STRING ? str_buf : NULL,
+                            sizeof(str_buf)) == 0)
+            cJSON_AddItemToArray(arr, reg_to_json(&regs[i], raw,
+                regs[i].type == UPS_CFG_STRING ? str_buf : NULL));
     }
 
     char *json = cJSON_PrintUnformatted(arr);
@@ -395,7 +409,7 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     uint16_t readback = 0;
     ups_config_read(ctx->ups, reg, &readback, NULL, 0);
 
-    cJSON *resp = reg_to_json(reg, readback);
+    cJSON *resp = reg_to_json(reg, readback, NULL);
     cJSON_AddStringToObject(resp, "result", "written");
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
@@ -680,7 +694,8 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
     db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
-        "wind_speed_mph, severe_keywords, poll_interval "
+        "wind_speed_mph, severe_keywords, poll_interval, "
+        "severe_freq_setting, normal_freq_setting "
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
@@ -698,6 +713,8 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
     cJSON_AddNumberToObject(obj, "wind_speed_mph", atoi(result->rows[0][5]));
     cJSON_AddStringToObject(obj, "severe_keywords", result->rows[0][6] ? result->rows[0][6] : "");
     cJSON_AddNumberToObject(obj, "poll_interval", atoi(result->rows[0][7]));
+    cJSON_AddStringToObject(obj, "severe_freq_setting", result->rows[0][8] ? result->rows[0][8] : "hz60_0_1");
+    cJSON_AddStringToObject(obj, "normal_freq_setting", result->rows[0][9] ? result->rows[0][9] : "auto");
 
     db_result_free(result);
     char *json = cJSON_PrintUnformatted(obj);
@@ -721,6 +738,8 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     const cJSON *jws  = cJSON_GetObjectItem(body, "wind_speed_mph");
     const cJSON *jsk  = cJSON_GetObjectItem(body, "severe_keywords");
     const cJSON *jpi  = cJSON_GetObjectItem(body, "poll_interval");
+    const cJSON *jsf  = cJSON_GetObjectItem(body, "severe_freq_setting");
+    const cJSON *jnf  = cJSON_GetObjectItem(body, "normal_freq_setting");
 
     char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16];
 
@@ -728,7 +747,8 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     db_result_t *cur = NULL;
     db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
-        "wind_speed_mph, severe_keywords, poll_interval "
+        "wind_speed_mph, severe_keywords, poll_interval, "
+        "severe_freq_setting, normal_freq_setting "
         "FROM weather_config WHERE id = 1", NULL, &cur);
 
     if (!cur || cur->nrows == 0) {
@@ -750,17 +770,21 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     const char *skw = jsk && cJSON_IsString(jsk) ? jsk->valuestring : cur->rows[0][6];
     snprintf(pi_s, sizeof(pi_s), "%d",
              jpi && cJSON_IsNumber(jpi) ? jpi->valueint : atoi(cur->rows[0][7]));
+    const char *sfreq = jsf && cJSON_IsString(jsf) ? jsf->valuestring : cur->rows[0][8];
+    const char *nfreq = jnf && cJSON_IsString(jnf) ? jnf->valuestring : cur->rows[0][9];
 
     const char *params[] = {
         en_s, lat_s, lon_s,
         zones ? zones : "", atypes ? atypes : "",
         ws_s, skw ? skw : "", pi_s,
+        sfreq ? sfreq : "hz60_0_1", nfreq ? nfreq : "auto",
         NULL
     };
     int rc = db_execute_non_query(ctx->db,
         "UPDATE weather_config SET enabled=?, latitude=?, longitude=?, "
         "alert_zones=?, alert_types=?, wind_speed_mph=?, "
-        "severe_keywords=?, poll_interval=? WHERE id = 1",
+        "severe_keywords=?, poll_interval=?, "
+        "severe_freq_setting=?, normal_freq_setting=? WHERE id = 1",
         params, NULL);
 
     db_result_free(cur);

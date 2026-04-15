@@ -28,7 +28,6 @@ typedef struct {
     uint16_t    value;        /* register value to write */
     const char *name;         /* short name: "hz60_0_1" */
     const char *description;  /* human-readable: "60 Hz +/- 0.1 Hz" */
-    int         inhibits_he;  /* 1 if this tolerance inhibits HE mode */
 } ups_freq_setting_t;
 
 /* Config register types */
