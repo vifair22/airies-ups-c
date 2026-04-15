@@ -173,6 +173,11 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run,
             if (parallel) {
                 /* Fork per target */
                 pid_t *pids = calloc((size_t)targets->nrows, sizeof(pid_t));
+                if (!pids) {
+                    log_error("allocation failed for shutdown pids");
+                    db_result_free(targets);
+                    continue;
+                }
                 for (int t = 0; t < targets->nrows; t++) {
                     report(mgr, group_name, targets->rows[t][0], "starting");
                     pids[t] = fork();
