@@ -33,6 +33,11 @@ monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
  * Multiple callbacks supported (up to 4). */
 int monitor_on_event(monitor_t *mon, monitor_event_fn fn, void *userdata);
 
+/* Per-poll callback — called after each successful UPS read with current data.
+ * Used by the alert engine to run threshold checks every poll cycle. */
+typedef void (*monitor_poll_fn)(const ups_data_t *data, void *userdata);
+int monitor_on_poll(monitor_t *mon, monitor_poll_fn fn, void *userdata);
+
 /* Start the monitor loop (runs in a background thread). */
 int monitor_start(monitor_t *mon);
 

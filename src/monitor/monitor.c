@@ -48,6 +48,11 @@ struct monitor {
     monitor_event_fn event_fns[MAX_EVENT_CBS];
     void            *event_uds[MAX_EVENT_CBS];
     int              nevent_cbs;
+
+    /* Per-poll callbacks */
+    monitor_poll_fn  poll_fns[MAX_EVENT_CBS];
+    void            *poll_uds[MAX_EVENT_CBS];
+    int              npoll_cbs;
 };
 
 /* --- Helpers --- */
@@ -200,6 +205,12 @@ static void *monitor_thread(void *arg)
         mon->connected = 1;
         pthread_mutex_unlock(&mon->mutex);
 
+        /* Fire per-poll callbacks (alert engine runs here) */
+        for (int i = 0; i < mon->npoll_cbs; i++) {
+            if (mon->poll_fns[i])
+                mon->poll_fns[i](&data, mon->poll_uds[i]);
+        }
+
         /* HE inhibit auto-clear */
         if (mon->he_inhibit && ups_has_cap(mon->ups, UPS_CAP_HE_MODE)) {
             if (data.status & UPS_ST_HE_MODE) {
@@ -286,6 +297,16 @@ int monitor_on_event(monitor_t *mon, monitor_event_fn fn, void *userdata)
     mon->event_fns[mon->nevent_cbs] = fn;
     mon->event_uds[mon->nevent_cbs] = userdata;
     mon->nevent_cbs++;
+    return CUTILS_OK;
+}
+
+int monitor_on_poll(monitor_t *mon, monitor_poll_fn fn, void *userdata)
+{
+    if (mon->npoll_cbs >= MAX_EVENT_CBS)
+        return set_error(CUTILS_ERR, "too many poll callbacks");
+    mon->poll_fns[mon->npoll_cbs] = fn;
+    mon->poll_uds[mon->npoll_cbs] = userdata;
+    mon->npoll_cbs++;
     return CUTILS_OK;
 }
 

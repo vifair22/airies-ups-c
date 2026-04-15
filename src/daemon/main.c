@@ -43,6 +43,26 @@ static void on_monitor_event(const char *severity, const char *category,
     }
 }
 
+/* --- Alert integration --- */
+
+typedef struct {
+    alert_state_t      state;
+    alert_config_t     cfg;
+    alert_thresholds_t thresh;
+} alert_ctx_t;
+
+static void alert_notify(const char *title, const char *body)
+{
+    log_info("ALERT: %s — %s", title, body);
+    push_send(title, body);
+}
+
+static void on_monitor_poll(const ups_data_t *data, void *userdata)
+{
+    alert_ctx_t *actx = userdata;
+    alerts_check(&actx->state, data, &actx->thresh, &actx->cfg, alert_notify);
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -77,9 +97,7 @@ int main(int argc, char *argv[])
 
     monitor_t *mon = NULL;
     shutdown_mgr_t *shutdown = NULL;
-    alert_state_t alert_state;
-    alert_config_t alert_cfg;
-    alert_thresholds_t alert_thresh = { 0, 0 };
+    static alert_ctx_t alert_ctx;
 
     if (ups) {
         /* Monitor */
@@ -88,22 +106,20 @@ int main(int argc, char *argv[])
         mon = monitor_create(ups, db, poll_sec, telem_sec);
         if (mon) {
             monitor_on_event(mon, on_monitor_event, NULL);
+
+            /* Wire alert engine into monitor poll cycle */
+            alerts_init(&alert_ctx.state);
+            alert_ctx.cfg = alerts_load_config(cfg);
+            ups_read_thresholds(ups, &alert_ctx.thresh.transfer_high,
+                                &alert_ctx.thresh.transfer_low);
+            if (alert_ctx.thresh.transfer_high > 0)
+                log_info("transfer thresholds: high=%uV low=%uV",
+                         alert_ctx.thresh.transfer_high,
+                         alert_ctx.thresh.transfer_low);
+            monitor_on_poll(mon, on_monitor_poll, &alert_ctx);
+
             monitor_start(mon);
         }
-
-        /* Alerts */
-        alerts_init(&alert_state);
-        alert_cfg = alerts_load_config(cfg);
-        ups_read_thresholds(ups, &alert_thresh.transfer_high,
-                            &alert_thresh.transfer_low);
-        if (alert_thresh.transfer_high > 0)
-            log_info("transfer thresholds: high=%uV low=%uV",
-                     alert_thresh.transfer_high, alert_thresh.transfer_low);
-
-        /* TODO: wire alert_cfg + alert_state + alert_thresh into monitor
-         * event loop for per-poll threshold checking */
-        (void)alert_cfg;
-        (void)alert_state;
 
         /* Shutdown orchestrator */
         shutdown = shutdown_create(db, ups);
