@@ -19,6 +19,7 @@ interface ConfigReg {
 export default function UpsConfig() {
   const { data: regs, error, loading, refetch } = useApi<ConfigReg[]>('/api/config/ups')
   const [saving, setSaving] = useState<string | null>(null)
+  const [writeResult, setWriteResult] = useState<{ name: string; result: string } | null>(null)
 
   if (loading) return <p className="text-gray-500">Loading...</p>
   if (error) return <p className="text-red-400">{error}</p>
@@ -30,8 +31,6 @@ export default function UpsConfig() {
   )
 
   const groups = [...new Set(regs.map((r) => r.group || 'other'))]
-
-  const [writeResult, setWriteResult] = useState<{ name: string; result: string } | null>(null)
 
   const handleWrite = async (name: string, value: number) => {
     setSaving(name)
