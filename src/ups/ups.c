@@ -153,25 +153,37 @@ const ups_freq_setting_t *ups_find_freq_value(const ups_t *ups, uint16_t value)
 int ups_read_status(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_status) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->read_status(ups->ctx, data);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->read_status(ups->ctx, data);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->read_dynamic(ups->ctx, data);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->read_dynamic(ups->ctx, data);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_read_inventory(ups_t *ups, ups_inventory_t *inv)
 {
     if (!ups->driver->read_inventory) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->read_inventory(ups->ctx, inv);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->read_inventory(ups->ctx, inv);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_low)
 {
     if (!ups->driver->read_thresholds) return UPS_ERR_NOT_SUPPORTED;
-    return ups->driver->read_thresholds(ups->ctx, transfer_high, transfer_low);
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->read_thresholds(ups->ctx, transfer_high, transfer_low);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
 }
 
 /* --- Command dispatch --- */
@@ -278,7 +290,10 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
     int n = reg->reg_count > 0 ? reg->reg_count : 1;
     if (n > 32) n = 32;
 
-    if (modbus_read_registers(ups->ctx, reg->reg_addr, n, regs) != n)
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = modbus_read_registers(ups->ctx, reg->reg_addr, n, regs);
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    if (rc != n)
         return UPS_ERR_IO;
 
     if (reg->type == UPS_CFG_STRING && str_buf) {

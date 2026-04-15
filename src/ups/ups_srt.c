@@ -287,15 +287,9 @@ static const ups_config_reg_t srt_config_regs[] = {
     { "battery_date", "Battery Install Date", "days since 2000-01-01", "info",
       595, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
 
-    /* Name strings (R/W, 8 regs = 16 chars each) */
-    { "ups_name", "UPS Name", NULL, "names",
-      596, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
-    { "mog_name", "MOG Name", NULL, "names",
-      604, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
-    { "sog0_name", "SOG0 Name", NULL, "names",
-      612, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
-    { "sog1_name", "SOG1 Name", NULL, "names",
-      620, 8, UPS_CFG_STRING, 1, 1, .meta.string = { 16 } },
+    /* Name strings — available via inventory read, omitted from config
+     * register dump to avoid excessive Modbus transactions over serial.
+     * Registers: 596 (UPS name), 604 (MOG), 612 (SOG0), 620 (SOG1) */
 };
 
 /* --- Driver definition --- */
