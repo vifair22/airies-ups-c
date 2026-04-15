@@ -20,8 +20,8 @@ LIBS     = -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicroh
 # UPS driver layer (shared between daemon and CLI via the daemon)
 UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
 
-# API server
-API_SRCS   = src/api/server.c
+# API server + routes
+API_SRCS   = src/api/server.c src/api/routes.c
 
 # Monitor + Alerts + Shutdown
 MON_SRCS   = src/monitor/monitor.c \
