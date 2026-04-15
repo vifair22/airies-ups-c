@@ -39,10 +39,9 @@ airies-upsd: $(DAEMON_SRCS)
 airies-ups: $(CLI_SRCS)
 	$(CC) $(CFLAGS) -o $@ $(CLI_SRCS) $(LIBS)
 
-# Syntax check (local, no linking — uses modbus stub if libmodbus not installed)
-MODBUS_STUB = /tmp/modbus-stub
+# Syntax check (local, no linking)
 check:
-	$(CC) $(CFLAGS) -I$(MODBUS_STUB) -fsyntax-only $(ALL_SRCS)
+	$(CC) $(CFLAGS) -fsyntax-only $(ALL_SRCS)
 
 # Static analysis
 analyze: check
