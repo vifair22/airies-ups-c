@@ -55,38 +55,6 @@ function CmdButton({ label, action, extra, confirm: needsConfirm, variant = 'def
   )
 }
 
-function FreqSelector() {
-  const [setting, setSetting] = useState('hz60_3_0')
-  const [result, setResult] = useState<string | null>(null)
-
-  const apply = async () => {
-    try {
-      const res = await apiPost<CmdResult>('/api/cmd', { action: 'freq', setting })
-      setResult(res.result || res.error || 'done')
-    } catch {
-      setResult('failed')
-    }
-    setTimeout(() => setResult(null), 4000)
-  }
-
-  return (
-    <div className="flex items-center gap-2">
-      <select value={setting} onChange={(e) => setSetting(e.target.value)}
-        className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm">
-        <option value="auto">Auto (50/60Hz)</option>
-        <option value="hz60_3_0">60Hz +/- 3.0Hz (allows HE)</option>
-        <option value="hz60_0_1">60Hz +/- 0.1Hz (inhibits HE)</option>
-        <option value="hz50_3_0">50Hz +/- 3.0Hz</option>
-        <option value="hz50_0_1">50Hz +/- 0.1Hz</option>
-      </select>
-      <button onClick={apply} className="px-4 py-2 rounded text-sm bg-gray-800 hover:bg-gray-700 border border-gray-700 transition-colors">
-        Apply
-      </button>
-      {result && <span className="text-xs text-green-400">{result}</span>}
-    </div>
-  )
-}
-
 export default function Commands() {
   const { data: status } = useApi<UpsStatus>('/api/status', 5000)
   const caps = status?.capabilities || []
@@ -125,12 +93,6 @@ export default function Commands() {
             {has('mute') && <CmdButton label="Unmute" action="unmute" />}
           </div>
         </Section>
-
-        {has('freq_tolerance') && (
-          <Section title="Frequency Tolerance">
-            <FreqSelector />
-          </Section>
-        )}
 
         {has('bypass') && (
           <Section title="Bypass">
