@@ -1,6 +1,7 @@
 PI_HOST    = sysadmin@upspi.internal.airies.net
 PI_DIR     = /home/sysadmin/airies-ups
 CUTILS_DIR = ../c-utils
+BUILD_DIR  = build
 
 CC       = gcc
 CFLAGS   = -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
@@ -31,12 +32,15 @@ ALL_SRCS    = $(DAEMON_SRCS) $(CLI_SRCS)
 
 # --- Targets ---
 
-all: airies-upsd airies-ups
+all: $(BUILD_DIR)/airies-upsd $(BUILD_DIR)/airies-ups
 
-airies-upsd: $(DAEMON_SRCS)
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/airies-upsd: $(DAEMON_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(DAEMON_SRCS) $(LIBS)
 
-airies-ups: $(CLI_SRCS)
+$(BUILD_DIR)/airies-ups: $(CLI_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(CLI_SRCS) $(LIBS)
 
 # Syntax check (local, no linking)
@@ -51,6 +55,6 @@ analyze: check
 	         -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON src/
 
 clean:
-	rm -f airies-upsd airies-ups
+	rm -rf $(BUILD_DIR)
 
 .PHONY: all check analyze clean
