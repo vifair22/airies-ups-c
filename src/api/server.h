@@ -25,7 +25,12 @@ typedef struct {
     const char   *body;        /* POST/PUT body (JSON), NULL for GET/DELETE */
     size_t        body_len;
     const char   *auth_token;  /* from Authorization header, NULL if absent */
+    void         *_conn;       /* internal: MHD connection for query params */
 } api_request_t;
+
+/* Get a query parameter value from the request URL (?key=value).
+ * Returns NULL if not found. */
+const char *api_query_param(const api_request_t *req, const char *key);
 
 /* Response built by route handlers */
 typedef struct {

@@ -243,16 +243,48 @@ static api_response_t handle_events(const api_request_t *req, void *ud)
 
 static api_response_t handle_telemetry(const api_request_t *req, void *ud)
 {
-    (void)req;
     route_ctx_t *ctx = ud;
 
+    /* Query params: ?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=N */
+    const char *from_param = api_query_param(req, "from");
+    const char *to_param = api_query_param(req, "to");
+    const char *limit_param = api_query_param(req, "limit");
+
+    int limit = limit_param ? atoi(limit_param) : 500;
+    if (limit <= 0 || limit > 10000) limit = 500;
+
+    char limit_s[16];
+    snprintf(limit_s, sizeof(limit_s), "%d", limit);
+
     db_result_t *result = NULL;
-    int rc = db_execute(ctx->db,
-        "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
-        "load_pct, output_voltage, output_frequency, output_current, "
-        "input_voltage, efficiency "
-        "FROM telemetry ORDER BY id DESC LIMIT 100",
-        NULL, &result);
+    int rc;
+
+    if (from_param && to_param) {
+        const char *params[] = { from_param, to_param, limit_s, NULL };
+        rc = db_execute(ctx->db,
+            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
+            "load_pct, output_voltage, output_frequency, output_current, "
+            "input_voltage, efficiency "
+            "FROM telemetry WHERE timestamp >= ? AND timestamp <= ? "
+            "ORDER BY id ASC LIMIT ?",
+            params, &result);
+    } else if (from_param) {
+        const char *params[] = { from_param, limit_s, NULL };
+        rc = db_execute(ctx->db,
+            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
+            "load_pct, output_voltage, output_frequency, output_current, "
+            "input_voltage, efficiency "
+            "FROM telemetry WHERE timestamp >= ? ORDER BY id ASC LIMIT ?",
+            params, &result);
+    } else {
+        const char *params[] = { limit_s, NULL };
+        rc = db_execute(ctx->db,
+            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
+            "load_pct, output_voltage, output_frequency, output_current, "
+            "input_voltage, efficiency "
+            "FROM telemetry ORDER BY id DESC LIMIT ?",
+            params, &result);
+    }
 
     if (rc != 0 || !result)
         return api_error(500, "failed to query telemetry");

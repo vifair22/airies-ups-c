@@ -75,6 +75,12 @@ static const char *get_header(struct MHD_Connection *conn, const char *name)
     return MHD_lookup_connection_value(conn, MHD_HEADER_KIND, name);
 }
 
+const char *api_query_param(const api_request_t *req, const char *key)
+{
+    if (!req->_conn) return NULL;
+    return MHD_lookup_connection_value(req->_conn, MHD_GET_ARGUMENT_KIND, key);
+}
+
 static enum MHD_Result send_response(struct MHD_Connection *conn,
                                      int status, const char *content_type,
                                      const char *body)
@@ -216,6 +222,7 @@ static enum MHD_Result request_handler(void *cls,
             .body       = pb->data,
             .body_len   = pb->len,
             .auth_token = get_header(conn, "Authorization"),
+            ._conn      = conn,
         };
 
         api_response_t resp = route->handler(&req, route->userdata);
