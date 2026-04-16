@@ -799,7 +799,7 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
     int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
-        "severe_freq_setting, normal_freq_setting "
+        "control_register, severe_raw_value, normal_raw_value "
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
@@ -817,8 +817,11 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
     cJSON_AddNumberToObject(obj, "wind_speed_mph", atoi(result->rows[0][5]));
     cJSON_AddStringToObject(obj, "severe_keywords", result->rows[0][6] ? result->rows[0][6] : "");
     cJSON_AddNumberToObject(obj, "poll_interval", atoi(result->rows[0][7]));
-    cJSON_AddStringToObject(obj, "severe_freq_setting", result->rows[0][8] ? result->rows[0][8] : "hz60_0_1");
-    cJSON_AddStringToObject(obj, "normal_freq_setting", result->rows[0][9] ? result->rows[0][9] : "auto");
+    cJSON_AddStringToObject(obj, "control_register", result->rows[0][8] ? result->rows[0][8] : "freq_tolerance");
+    if (result->rows[0][9])
+        cJSON_AddNumberToObject(obj, "severe_raw_value", atoi(result->rows[0][9]));
+    if (result->rows[0][10])
+        cJSON_AddNumberToObject(obj, "normal_raw_value", atoi(result->rows[0][10]));
 
     db_result_free(result);
     char *json = cJSON_PrintUnformatted(obj);
@@ -842,17 +845,18 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     const cJSON *jws  = cJSON_GetObjectItem(body, "wind_speed_mph");
     const cJSON *jsk  = cJSON_GetObjectItem(body, "severe_keywords");
     const cJSON *jpi  = cJSON_GetObjectItem(body, "poll_interval");
-    const cJSON *jsf  = cJSON_GetObjectItem(body, "severe_freq_setting");
-    const cJSON *jnf  = cJSON_GetObjectItem(body, "normal_freq_setting");
+    const cJSON *jcr  = cJSON_GetObjectItem(body, "control_register");
+    const cJSON *jsrv = cJSON_GetObjectItem(body, "severe_raw_value");
+    const cJSON *jnrv = cJSON_GetObjectItem(body, "normal_raw_value");
 
-    char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16];
+    char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16], srv_s[16], nrv_s[16];
 
     /* Read current values as defaults */
     db_result_t *cur = NULL;
     db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
-        "severe_freq_setting, normal_freq_setting "
+        "control_register, severe_raw_value, normal_raw_value "
         "FROM weather_config WHERE id = 1", NULL, &cur);
 
     if (!cur || cur->nrows == 0) {
@@ -874,21 +878,26 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     const char *skw = jsk && cJSON_IsString(jsk) ? jsk->valuestring : cur->rows[0][6];
     snprintf(pi_s, sizeof(pi_s), "%d",
              jpi && cJSON_IsNumber(jpi) ? jpi->valueint : atoi(cur->rows[0][7]));
-    const char *sfreq = jsf && cJSON_IsString(jsf) ? jsf->valuestring : cur->rows[0][8];
-    const char *nfreq = jnf && cJSON_IsString(jnf) ? jnf->valuestring : cur->rows[0][9];
+    const char *creg = jcr && cJSON_IsString(jcr) ? jcr->valuestring : cur->rows[0][8];
+    snprintf(srv_s, sizeof(srv_s), "%d",
+             jsrv && cJSON_IsNumber(jsrv) ? jsrv->valueint :
+             (cur->rows[0][9] ? atoi(cur->rows[0][9]) : 0));
+    snprintf(nrv_s, sizeof(nrv_s), "%d",
+             jnrv && cJSON_IsNumber(jnrv) ? jnrv->valueint :
+             (cur->rows[0][10] ? atoi(cur->rows[0][10]) : 0));
 
     const char *params[] = {
         en_s, lat_s, lon_s,
         zones ? zones : "", atypes ? atypes : "",
         ws_s, skw ? skw : "", pi_s,
-        sfreq ? sfreq : "hz60_0_1", nfreq ? nfreq : "auto",
+        creg ? creg : "freq_tolerance", srv_s, nrv_s,
         NULL
     };
     int rc = db_execute_non_query(ctx->db,
         "UPDATE weather_config SET enabled=?, latitude=?, longitude=?, "
         "alert_zones=?, alert_types=?, wind_speed_mph=?, "
         "severe_keywords=?, poll_interval=?, "
-        "severe_freq_setting=?, normal_freq_setting=? WHERE id = 1",
+        "control_register=?, severe_raw_value=?, normal_raw_value=? WHERE id = 1",
         params, NULL);
 
     db_result_free(cur);
