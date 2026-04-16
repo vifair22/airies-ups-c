@@ -48,16 +48,24 @@ function daysAgoStr(n: number) {
 }
 
 export default function Telemetry() {
-  const [fromDate, setFromDate] = useState(todayStr())
-  const [toDate, setToDate] = useState(todayStr())
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  const url = `/api/telemetry?from=${fromDate}&to=${toDate} 23:59:59&limit=2000`
+  // No date filter = latest 500 points. With dates = filtered query.
+  const url = fromDate
+    ? `/api/telemetry?from=${fromDate}&to=${toDate || todayStr()} 23:59:59&limit=2000`
+    : '/api/telemetry?limit=500'
   const { data, error, loading } = useApi<TelemetryPoint[]>(url, 30000)
 
   const setPreset = useCallback((days: number) => {
-    setFromDate(daysAgoStr(days))
-    setToDate(todayStr())
+    if (days === 0) {
+      setFromDate('')
+      setToDate('')
+    } else {
+      setFromDate(daysAgoStr(days))
+      setToDate(todayStr())
+    }
   }, [])
 
   if (error) return <p className="text-red-400">{error}</p>
@@ -92,7 +100,7 @@ export default function Telemetry() {
         </div>
         <div className="flex gap-1">
           {[
-            { label: 'Today', days: 0 },
+            { label: 'Latest', days: 0 },
             { label: '7d', days: 7 },
             { label: '30d', days: 30 },
             { label: '90d', days: 90 },
