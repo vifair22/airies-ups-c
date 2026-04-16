@@ -21,3 +21,25 @@
   --color-accent: #1d4ed8;          /* blue-700 — buttons */
   --color-accent-hover: #2563eb;    /* blue-600 — button hover */
 }
+
+/* Power flow animations */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-slow {
+  animation: pulse-slow 3s ease-in-out infinite;
+}
+
+@keyframes flow {
+  to { stroke-dashoffset: -28; }
+}
+@keyframes flow-reverse {
+  to { stroke-dashoffset: 28; }
+}
+.animate-flow {
+  animation: flow 1s linear infinite;
+}
+.animate-flow-reverse {
+  animation: flow-reverse 1s linear infinite;
+}

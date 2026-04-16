@@ -1,4 +1,5 @@
 import { useApi } from '../hooks/useApi'
+import { PowerFlowSRT } from '../components/PowerFlow'
 
 /* ── Types ── */
 
@@ -25,7 +26,10 @@ interface UpsStatus {
   outlets?: { mog: number; sog0: number; sog1: number }
   bypass?: { voltage: number; frequency: number; status: number }
   input?: { voltage: number; status: number; transfer_high?: number; transfer_low?: number; warn_offset?: number }
-  errors?: { general: number; power_system: number; battery_system: number }
+  errors?: {
+    general: number; power_system: number; battery_system: number
+    general_detail: string[]; power_system_detail: string[]; battery_system_detail: string[]
+  }
   timers?: { shutdown: number; start: number; reboot: number }
   efficiency?: number
   transfer_reason?: string
@@ -422,6 +426,21 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      {/* ── Power flow diagram ── */}
+      {isDoubleConversion && (
+        <PowerFlowSRT
+          statusRaw={raw}
+          inputVoltage={inp?.voltage ?? 0}
+          outputVoltage={out?.voltage ?? 0}
+          batteryCharge={bat?.charge_pct ?? 0}
+          batteryVoltage={bat?.voltage ?? 0}
+          batteryError={s.errors?.battery_system ?? 0}
+          loadPct={out?.load_pct ?? 0}
+          efficiency={s.efficiency ?? -1}
+          outputFrequency={out?.frequency ?? 0}
+        />
+      )}
+
       {/* ── Cascading power planes ── */}
       <div className="space-y-3">
 
@@ -430,12 +449,6 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
             <Metric label="Voltage" value={inp?.voltage.toFixed(1) ?? '--'} unit="VAC" accent={uStyle.accent} />
             <Metric label="Last Transfer" value={humanizeTransfer(s.transfer_reason)} />
-            {canBypass && (
-              <>
-                <Metric label="Bypass Voltage" value={s.bypass?.voltage.toFixed(1) ?? '--'} unit="VAC" />
-                <Metric label="Bypass Frequency" value={s.bypass?.frequency.toFixed(2) ?? '--'} unit="Hz" />
-              </>
-            )}
           </div>
         </Plane>
 
@@ -463,9 +476,15 @@ export default function Dashboard() {
             {(raw & ST.SHUT_PENDING) !== 0 && <Metric label="Shutdown" value="Pending" accent="text-red-400" />}
             {(raw & ST.PENDING_ON) !== 0 && <Metric label="Startup" value="Pending" accent="text-blue-400" />}
             {(raw & ST.FAULT_RECOVERY) !== 0 && <Metric label="Recovery" value="In Progress" accent="text-yellow-400" />}
-            {s.errors && s.errors.general !== 0 && <Metric label="General Error" value={`0x${s.errors.general.toString(16)}`} accent="text-red-400" />}
-            {s.errors && s.errors.power_system !== 0 && <Metric label="Power Error" value={`0x${s.errors.power_system.toString(16)}`} accent="text-red-400" />}
-            {s.errors && s.errors.battery_system !== 0 && <Metric label="Battery Error" value={`0x${s.errors.battery_system.toString(16)}`} accent="text-red-400" />}
+            {s.errors?.general_detail?.map((e: string) => (
+              <Metric key={`ge-${e}`} label="General Error" value={e} accent="text-red-400" />
+            ))}
+            {s.errors?.power_system_detail?.map((e: string) => (
+              <Metric key={`pe-${e}`} label="Power Error" value={e} accent="text-red-400" />
+            ))}
+            {s.errors?.battery_system_detail?.map((e: string) => (
+              <Metric key={`be-${e}`} label="Battery Error" value={e} accent="text-red-400" />
+            ))}
           </div>
         </Plane>
 
