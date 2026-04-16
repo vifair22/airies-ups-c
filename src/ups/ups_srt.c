@@ -29,9 +29,6 @@
 #define SRT_REG_CMD_RTCAL      1542  /* uint16, FC06: runtime calibration */
 #define SRT_REG_CMD_UI         1543  /* uint16, FC06: beep, mute */
 
-/* Frequency tolerance */
-#define SRT_REG_FREQ_TOLERANCE 593   /* uint16, FC06 */
-
 /* --- Transport helpers --- */
 
 static modbus_t *mb(void *transport) { return (modbus_t *)transport; }
@@ -281,11 +278,6 @@ static int srt_cmd_bypass_disable(void *transport)
     return modbus_write_registers(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
-static int srt_cmd_set_freq_tolerance(void *transport, uint16_t setting)
-{
-    return modbus_write_register(mb(transport), SRT_REG_FREQ_TOLERANCE, setting) == 1 ? 0 : -1;
-}
-
 /* --- Frequency tolerance settings --- */
 
 static const ups_freq_setting_t srt_freq_settings[] = {
@@ -383,6 +375,71 @@ static const ups_config_reg_t srt_config_regs[] = {
       595, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
 };
 
+/* --- Command descriptors --- */
+
+static const ups_cmd_desc_t srt_commands[] = {
+    { "shutdown", "Shutdown UPS", "Send the UPS shutdown command",
+      "power", "Shutdown UPS?",
+      "This sends the shutdown command directly to the UPS. Use the shutdown workflow for orchestrated multi-host shutdown.",
+      UPS_CMD_SIMPLE, UPS_CMD_DANGER, UPS_CMD_IS_SHUTDOWN, 0,
+      srt_cmd_shutdown, NULL },
+
+    { "battery_test", "Battery Test", "Run a quick self-test to verify battery health",
+      "diagnostics", "Start Battery Test?",
+      "This will run a brief self-test where the UPS switches to battery power momentarily to verify battery health.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      srt_cmd_battery_test, NULL },
+
+    { "runtime_cal", "Runtime Calibration", "Deep discharge to recalibrate the runtime estimate",
+      "diagnostics", "Start Runtime Calibration?",
+      "Runtime calibration deeply discharges the battery to recalibrate the runtime estimate. The UPS will be on battery power for the entire duration. The battery will take a significant amount of time to recharge after calibration completes. If the battery is degraded, the UPS may not be able to sustain the load.",
+      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
+      srt_cmd_runtime_cal, NULL },
+
+    { "abort_runtime_cal", "Abort Calibration", "Cancel a running runtime calibration",
+      "diagnostics", "Abort Runtime Calibration?",
+      "This will abort the current runtime calibration and return the UPS to normal operation.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      srt_cmd_abort_runtime_cal, NULL },
+
+    { "beep_short", "Short Beep", "Verify the audible alarm is functional",
+      "diagnostics", "Short Beep Test?",
+      "This will emit a brief beep to verify the audible alarm.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      srt_cmd_beep_short, NULL },
+
+    { "beep_continuous", "Continuous Beep", "Continuous beep and LED test",
+      "diagnostics", "Continuous Beep Test?",
+      "This starts a continuous beep and LED test. The alarm will sound until you stop it.",
+      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
+      srt_cmd_beep_continuous, NULL },
+
+    { "mute", "Mute Alarm", "Silence the UPS audible alarm",
+      "alarm", "Mute Alarm?",
+      "This will silence the UPS audible alarm. The alarm will remain muted until a new alarm condition occurs or you unmute it.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, UPS_CMD_IS_MUTE, 0,
+      srt_cmd_mute_alarm, NULL },
+
+    { "unmute", "Unmute Alarm", "Re-enable the UPS audible alarm",
+      "alarm", "Unmute Alarm?",
+      "This will re-enable the UPS audible alarm. Any active alarm conditions will immediately sound.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      srt_cmd_cancel_mute, NULL },
+
+    { "clear_faults", "Clear Faults", "Reset latched fault flags",
+      "alarm", "Clear Fault Flags?",
+      "This will reset all latched fault indicators on the UPS.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      srt_cmd_clear_faults, NULL },
+
+    { "bypass", "Bypass Mode",
+      "Routes utility power directly to the output, bypassing the UPS power conditioning. Used for UPS maintenance or to reduce heat and power consumption.",
+      "power", "Toggle Bypass?",
+      "Enabling bypass routes utility power directly to the output without conditioning. Disabling returns the UPS to normal operation.",
+      UPS_CMD_TOGGLE, UPS_CMD_WARN, 0, UPS_ST_BYPASS,
+      srt_cmd_bypass_enable, srt_cmd_bypass_disable },
+};
+
 /* --- Driver definition --- */
 
 const ups_driver_t ups_driver_srt = {
@@ -403,18 +460,8 @@ const ups_driver_t ups_driver_srt = {
     .read_dynamic        = srt_read_dynamic,
     .read_inventory      = srt_read_inventory,
     .read_thresholds     = srt_read_thresholds,
-    .cmd_shutdown        = srt_cmd_shutdown,
-    .cmd_battery_test    = srt_cmd_battery_test,
-    .cmd_runtime_cal     = srt_cmd_runtime_cal,
-    .cmd_abort_runtime_cal = srt_cmd_abort_runtime_cal,
-    .cmd_clear_faults    = srt_cmd_clear_faults,
-    .cmd_mute_alarm      = srt_cmd_mute_alarm,
-    .cmd_cancel_mute     = srt_cmd_cancel_mute,
-    .cmd_beep_short      = srt_cmd_beep_short,
-    .cmd_beep_continuous = srt_cmd_beep_continuous,
-    .cmd_bypass_enable   = srt_cmd_bypass_enable,
-    .cmd_bypass_disable  = srt_cmd_bypass_disable,
-    .cmd_set_freq_tolerance = srt_cmd_set_freq_tolerance,
+    .commands            = srt_commands,
+    .commands_count      = sizeof(srt_commands) / sizeof(srt_commands[0]),
     .config_read         = srt_config_read,
     .config_write        = srt_config_write,
 };

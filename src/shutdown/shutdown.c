@@ -224,7 +224,8 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run,
             log_info("UPS shutdown: would send command");
         } else {
             log_info("Sending UPS shutdown command");
-            if (ups_cmd_shutdown(mgr->ups) == 0)
+            const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
+            if (sd && ups_cmd_execute(mgr->ups, sd->name, 0) == 0)
                 log_info("UPS shutdown command accepted");
             else
                 log_error("UPS shutdown command FAILED");

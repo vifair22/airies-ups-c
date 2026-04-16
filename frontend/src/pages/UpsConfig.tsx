@@ -13,6 +13,8 @@ interface ConfigReg {
   setting?: string
   setting_label?: string
   date?: string
+  min?: number
+  max?: number
   options?: { value: number; name: string; label: string }[]
 }
 
@@ -215,6 +217,8 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
                 type="number"
                 value={editVal}
                 onChange={(e) => setEditVal(e.target.value)}
+                min={reg.min}
+                max={reg.max}
                 className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-20 text-right"
               />
             )}

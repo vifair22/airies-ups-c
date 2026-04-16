@@ -87,6 +87,40 @@ typedef struct {
     } meta;
 } ups_config_reg_t;
 
+/* Command descriptor — driver declares available commands.
+ * The app renders UI from these and dispatches by name. */
+
+typedef enum {
+    UPS_CMD_SIMPLE,     /* fire-and-forget, one handler */
+    UPS_CMD_TOGGLE,     /* on/off pair, state tracked by status_bit */
+} ups_cmd_type_t;
+
+typedef enum {
+    UPS_CMD_DEFAULT,    /* normal styling */
+    UPS_CMD_WARN,       /* yellow/warning styling */
+    UPS_CMD_DANGER,     /* red/danger styling */
+} ups_cmd_variant_t;
+
+#define UPS_CMD_IS_SHUTDOWN  (1 << 0)  /* shutdown orchestrator uses this command */
+#define UPS_CMD_IS_MUTE      (1 << 1)  /* mute command (used to stop continuous beep) */
+
+typedef struct {
+    const char       *name;           /* API dispatch key: "battery_test" */
+    const char       *display_name;   /* button label: "Battery Test" */
+    const char       *description;    /* row help text */
+    const char       *group;          /* "power", "diagnostics", "alarm" */
+    const char       *confirm_title;  /* modal title */
+    const char       *confirm_body;   /* modal body text */
+    ups_cmd_type_t    type;
+    ups_cmd_variant_t variant;
+    uint32_t          flags;          /* UPS_CMD_IS_SHUTDOWN, etc. */
+    uint32_t          status_bit;     /* for toggles: bit in ups_data.status */
+
+    /* Handlers */
+    int (*execute)(void *transport);
+    int (*execute_off)(void *transport);  /* toggle: the "off/disable" action */
+} ups_cmd_desc_t;
+
 /* Driver vtable — each UPS family implements this.
  *
  * The void *transport parameter is an opaque handle allocated by the driver's
@@ -126,19 +160,9 @@ typedef struct ups_driver {
     int (*read_inventory)(void *transport, ups_inventory_t *inv);
     int (*read_thresholds)(void *transport, uint16_t *transfer_high, uint16_t *transfer_low);
 
-    /* --- Commands --- */
-    int (*cmd_shutdown)(void *transport);
-    int (*cmd_battery_test)(void *transport);
-    int (*cmd_runtime_cal)(void *transport);
-    int (*cmd_abort_runtime_cal)(void *transport);
-    int (*cmd_clear_faults)(void *transport);
-    int (*cmd_mute_alarm)(void *transport);
-    int (*cmd_cancel_mute)(void *transport);
-    int (*cmd_beep_short)(void *transport);
-    int (*cmd_beep_continuous)(void *transport);
-    int (*cmd_bypass_enable)(void *transport);
-    int (*cmd_bypass_disable)(void *transport);
-    int (*cmd_set_freq_tolerance)(void *transport, uint16_t setting);
+    /* --- Commands (driver-declared, dynamically rendered) --- */
+    const ups_cmd_desc_t *commands;
+    size_t                commands_count;
 
     /* --- Config register I/O (optional, NULL if no config_regs) --- */
     int (*config_read)(void *transport, const ups_config_reg_t *reg,

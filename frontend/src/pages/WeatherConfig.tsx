@@ -136,56 +136,67 @@ export default function WeatherConfig() {
               When conditions clear, the register is restored to the value it had before the override.
             </p>
 
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs text-gray-400">Control Register</label>
-                <select value={form.control_register}
-                  onChange={(e) => setForm({ ...form, control_register: e.target.value, severe_raw_value: undefined, normal_raw_value: undefined })}
-                  className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
-                  {writableRegs.length > 0 ? (
-                    writableRegs.map(r => (
-                      <option key={r.name} value={r.name}>{r.display_name}</option>
-                    ))
-                  ) : (
-                    <option value={form.control_register}>{form.control_register}</option>
-                  )}
-                </select>
+            {!upsRegs ? (
+              <div className="grid grid-cols-3 gap-4">
+                {[1,2,3].map(i => (
+                  <div key={i}>
+                    <div className="h-3 w-24 bg-gray-800 rounded animate-pulse mb-2" />
+                    <div className="h-8 w-full bg-gray-800 rounded animate-pulse" />
+                  </div>
+                ))}
               </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs text-gray-400">Control Register</label>
+                  <select value={form.control_register}
+                    onChange={(e) => setForm({ ...form, control_register: e.target.value, severe_raw_value: undefined, normal_raw_value: undefined })}
+                    className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                    {writableRegs.length > 0 ? (
+                      writableRegs.map(r => (
+                        <option key={r.name} value={r.name}>{r.display_name}</option>
+                      ))
+                    ) : (
+                      <option value={form.control_register}>{form.control_register}</option>
+                    )}
+                  </select>
+                </div>
 
-              {selectedReg?.type === 'bitfield' && selectedReg.options ? (
-                <>
-                  <div>
-                    <label className="text-xs text-gray-400">Severe Value</label>
-                    <select value={form.severe_raw_value ?? ''}
-                      onChange={(e) => setForm({ ...form, severe_raw_value: parseInt(e.target.value) })}
-                      className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
-                      <option value="">Select...</option>
-                      {selectedReg.options.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-400">Normal Value (fallback)</label>
-                    <select value={form.normal_raw_value ?? ''}
-                      onChange={(e) => setForm({ ...form, normal_raw_value: parseInt(e.target.value) })}
-                      className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
-                      <option value="">Select...</option>
-                      {selectedReg.options.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Field label="Severe Value (raw)" value={String(form.severe_raw_value ?? '')} type="number"
-                    onChange={(v) => setForm({ ...form, severe_raw_value: v ? parseInt(v) : undefined })} />
-                  <Field label="Normal Value (raw, fallback)" value={String(form.normal_raw_value ?? '')} type="number"
-                    onChange={(v) => setForm({ ...form, normal_raw_value: v ? parseInt(v) : undefined })} />
-                </>
-              )}
-            </div>
+                {selectedReg?.type === 'bitfield' && selectedReg.options ? (
+                  <>
+                    <div>
+                      <label className="text-xs text-gray-400">Severe Value</label>
+                      <select value={form.severe_raw_value ?? ''}
+                        onChange={(e) => setForm({ ...form, severe_raw_value: parseInt(e.target.value) })}
+                        className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                        <option value="">Select...</option>
+                        {selectedReg.options.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400">Normal Value (fallback)</label>
+                      <select value={form.normal_raw_value ?? ''}
+                        onChange={(e) => setForm({ ...form, normal_raw_value: parseInt(e.target.value) })}
+                        className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                        <option value="">Select...</option>
+                        {selectedReg.options.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Field label="Severe Value (raw)" value={String(form.severe_raw_value ?? '')} type="number"
+                      onChange={(v) => setForm({ ...form, severe_raw_value: v ? parseInt(v) : undefined })} />
+                    <Field label="Normal Value (raw, fallback)" value={String(form.normal_raw_value ?? '')} type="number"
+                      onChange={(v) => setForm({ ...form, normal_raw_value: v ? parseInt(v) : undefined })} />
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

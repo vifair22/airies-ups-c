@@ -224,36 +224,53 @@ static void post_command_settle(void)
     nanosleep(&ts, NULL);
 }
 
-#define CMD_DISPATCH(fn_name, driver_fn)                                    \
-int fn_name(ups_t *ups)                                                    \
-{                                                                          \
-    if (!ups->driver->driver_fn) return UPS_ERR_NOT_SUPPORTED;             \
-    if (!ups->transport) return UPS_ERR_IO;                                \
-    pthread_mutex_lock(&ups->cmd_mutex);                                   \
-    int rc = ups->driver->driver_fn(ups->transport);                       \
-    post_command_settle();                                                  \
-    pthread_mutex_unlock(&ups->cmd_mutex);                                 \
-    return rc;                                                             \
+/* --- Command descriptor access --- */
+
+const ups_cmd_desc_t *ups_get_commands(const ups_t *ups, size_t *count)
+{
+    if (!ups->driver->commands) {
+        if (count) *count = 0;
+        return NULL;
+    }
+    if (count) *count = ups->driver->commands_count;
+    return ups->driver->commands;
 }
 
-CMD_DISPATCH(ups_cmd_shutdown,         cmd_shutdown)
-CMD_DISPATCH(ups_cmd_battery_test,     cmd_battery_test)
-CMD_DISPATCH(ups_cmd_runtime_cal,      cmd_runtime_cal)
-CMD_DISPATCH(ups_cmd_abort_runtime_cal,cmd_abort_runtime_cal)
-CMD_DISPATCH(ups_cmd_clear_faults,     cmd_clear_faults)
-CMD_DISPATCH(ups_cmd_mute_alarm,       cmd_mute_alarm)
-CMD_DISPATCH(ups_cmd_cancel_mute,      cmd_cancel_mute)
-CMD_DISPATCH(ups_cmd_beep_short,       cmd_beep_short)
-CMD_DISPATCH(ups_cmd_beep_continuous,  cmd_beep_continuous)
-CMD_DISPATCH(ups_cmd_bypass_enable,    cmd_bypass_enable)
-CMD_DISPATCH(ups_cmd_bypass_disable,   cmd_bypass_disable)
-
-int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting)
+const ups_cmd_desc_t *ups_find_command(const ups_t *ups, const char *name)
 {
-    if (!ups->driver->cmd_set_freq_tolerance) return UPS_ERR_NOT_SUPPORTED;
+    size_t count;
+    const ups_cmd_desc_t *cmds = ups_get_commands(ups, &count);
+    if (!cmds) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(cmds[i].name, name) == 0)
+            return &cmds[i];
+    }
+    return NULL;
+}
+
+const ups_cmd_desc_t *ups_find_command_flag(const ups_t *ups, uint32_t flag)
+{
+    size_t count;
+    const ups_cmd_desc_t *cmds = ups_get_commands(ups, &count);
+    if (!cmds) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        if (cmds[i].flags & flag)
+            return &cmds[i];
+    }
+    return NULL;
+}
+
+int ups_cmd_execute(ups_t *ups, const char *name, int is_off)
+{
+    const ups_cmd_desc_t *cmd = ups_find_command(ups, name);
+    if (!cmd) return UPS_ERR_NOT_SUPPORTED;
+
+    int (*fn)(void *) = is_off ? cmd->execute_off : cmd->execute;
+    if (!fn) return UPS_ERR_NOT_SUPPORTED;
     if (!ups->transport) return UPS_ERR_IO;
+
     pthread_mutex_lock(&ups->cmd_mutex);
-    int rc = ups->driver->cmd_set_freq_tolerance(ups->transport, setting);
+    int rc = fn(ups->transport);
     post_command_settle();
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;

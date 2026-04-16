@@ -151,20 +151,20 @@ int ups_read_dynamic(ups_t *ups, ups_data_t *data);
 int ups_read_inventory(ups_t *ups, ups_inventory_t *inv);
 int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_low);
 
-/* Commands — return 0 on success, UPS_ERR_NOT_SUPPORTED if driver
- * doesn't implement it, negative on I/O error */
-int ups_cmd_shutdown(ups_t *ups);
-int ups_cmd_battery_test(ups_t *ups);
-int ups_cmd_runtime_cal(ups_t *ups);
-int ups_cmd_abort_runtime_cal(ups_t *ups);
-int ups_cmd_clear_faults(ups_t *ups);
-int ups_cmd_mute_alarm(ups_t *ups);
-int ups_cmd_cancel_mute(ups_t *ups);
-int ups_cmd_beep_short(ups_t *ups);
-int ups_cmd_beep_continuous(ups_t *ups);
-int ups_cmd_bypass_enable(ups_t *ups);
-int ups_cmd_bypass_disable(ups_t *ups);
-int ups_cmd_set_freq_tolerance(ups_t *ups, uint16_t setting);
+/* --- Commands (descriptor-driven) --- */
+
+/* Get the list of command descriptors from the active driver. */
+const ups_cmd_desc_t *ups_get_commands(const ups_t *ups, size_t *count);
+
+/* Find a command descriptor by name. Returns NULL if not found. */
+const ups_cmd_desc_t *ups_find_command(const ups_t *ups, const char *name);
+
+/* Find a command by flag (e.g., UPS_CMD_IS_SHUTDOWN). Returns NULL if not found. */
+const ups_cmd_desc_t *ups_find_command_flag(const ups_t *ups, uint32_t flag);
+
+/* Execute a command by name. For toggles, pass is_off=1 to call execute_off.
+ * Returns 0 on success, UPS_ERR_NOT_SUPPORTED if not found. */
+int ups_cmd_execute(ups_t *ups, const char *name, int is_off);
 
 /* --- Config register access --- */
 

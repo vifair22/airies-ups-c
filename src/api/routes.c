@@ -183,66 +183,31 @@ static api_response_t handle_cmd(const api_request_t *req, void *ud)
     int rc;
     const char *result_msg = "ok";
 
-    if (strcmp(act, "shutdown") == 0) {
+    /* Special case: shutdown workflow (app-level orchestration, not a UPS command) */
+    if (strcmp(act, "shutdown_workflow") == 0) {
         int dry_run = 0;
         const cJSON *dr = cJSON_GetObjectItem(body, "dry_run");
         if (dr && cJSON_IsBool(dr)) dry_run = cJSON_IsTrue(dr);
         rc = shutdown_execute(ctx->shutdown, dry_run, 0, 0);
         result_msg = dry_run ? "dry run complete" : "shutdown initiated";
 
-    } else if (strcmp(act, "battery_test") == 0) {
-        rc = ups_cmd_battery_test(ctx->ups);
-        result_msg = "battery test started";
-
-    } else if (strcmp(act, "runtime_cal") == 0) {
-        rc = ups_cmd_runtime_cal(ctx->ups);
-        result_msg = "runtime calibration started";
-
-    } else if (strcmp(act, "clear_faults") == 0) {
-        rc = ups_cmd_clear_faults(ctx->ups);
-        result_msg = "faults cleared";
-
-    } else if (strcmp(act, "mute") == 0) {
-        rc = ups_cmd_mute_alarm(ctx->ups);
-        result_msg = "alarm muted";
-
-    } else if (strcmp(act, "unmute") == 0) {
-        rc = ups_cmd_cancel_mute(ctx->ups);
-        result_msg = "alarm unmuted";
-
-    } else if (strcmp(act, "beep_short") == 0) {
-        rc = ups_cmd_beep_short(ctx->ups);
-        result_msg = "short beep test sent";
-
-    } else if (strcmp(act, "beep_continuous") == 0) {
-        rc = ups_cmd_beep_continuous(ctx->ups);
-        result_msg = "continuous test started";
-
-    } else if (strcmp(act, "bypass_on") == 0) {
-        rc = ups_cmd_bypass_enable(ctx->ups);
-        result_msg = "bypass enabled";
-
-    } else if (strcmp(act, "bypass_off") == 0) {
-        rc = ups_cmd_bypass_disable(ctx->ups);
-        result_msg = "bypass disabled";
-
-    } else if (strcmp(act, "freq") == 0) {
-        const cJSON *setting = cJSON_GetObjectItem(body, "setting");
-        if (!setting || !cJSON_IsString(setting)) {
-            cJSON_Delete(body);
-            return api_error(400, "missing 'setting' field for freq command");
-        }
-        const ups_freq_setting_t *fs = ups_find_freq_setting(ctx->ups, setting->valuestring);
-        if (!fs) {
-            cJSON_Delete(body);
-            return api_error(400, "invalid frequency setting");
-        }
-        rc = ups_cmd_set_freq_tolerance(ctx->ups, fs->value);
-        result_msg = "frequency tolerance set";
-
     } else {
-        cJSON_Delete(body);
-        return api_error(400, "unknown action");
+        /* Descriptor-driven dispatch: look up command by name */
+        const ups_cmd_desc_t *cmd = ups_find_command(ctx->ups, act);
+        if (!cmd) {
+            cJSON_Delete(body);
+            return api_error(400, "unknown action");
+        }
+
+        /* For toggles, check if this is the "off" action (name_off convention) */
+        int is_off = 0;
+        if (cmd->type == UPS_CMD_TOGGLE) {
+            const cJSON *joff = cJSON_GetObjectItem(body, "off");
+            if (joff && cJSON_IsBool(joff)) is_off = cJSON_IsTrue(joff);
+        }
+
+        rc = ups_cmd_execute(ctx->ups, act, is_off);
+        result_msg = cmd->display_name;
     }
 
     cJSON_Delete(body);
@@ -390,6 +355,10 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
 
     if (reg->type == UPS_CFG_SCALAR) {
         cJSON_AddStringToObject(obj, "type", "scalar");
+        if (reg->meta.scalar.min != 0 || reg->meta.scalar.max != 0) {
+            cJSON_AddNumberToObject(obj, "min", reg->meta.scalar.min);
+            cJSON_AddNumberToObject(obj, "max", reg->meta.scalar.max);
+        }
     } else if (reg->type == UPS_CFG_BITFIELD) {
         cJSON_AddStringToObject(obj, "type", "bitfield");
         /* Find matching option name */
@@ -933,6 +902,45 @@ static api_response_t handle_restart(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+/* --- Command descriptors endpoint --- */
+
+static api_response_t handle_commands(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+
+    cJSON *arr = cJSON_CreateArray();
+    if (ctx->ups) {
+        size_t count;
+        const ups_cmd_desc_t *cmds = ups_get_commands(ctx->ups, &count);
+        for (size_t i = 0; i < count; i++) {
+            cJSON *obj = cJSON_CreateObject();
+            cJSON_AddStringToObject(obj, "name", cmds[i].name);
+            cJSON_AddStringToObject(obj, "display_name", cmds[i].display_name);
+            cJSON_AddStringToObject(obj, "description", cmds[i].description);
+            cJSON_AddStringToObject(obj, "group", cmds[i].group);
+            cJSON_AddStringToObject(obj, "confirm_title", cmds[i].confirm_title);
+            cJSON_AddStringToObject(obj, "confirm_body", cmds[i].confirm_body);
+            cJSON_AddStringToObject(obj, "type",
+                cmds[i].type == UPS_CMD_TOGGLE ? "toggle" : "simple");
+            cJSON_AddStringToObject(obj, "variant",
+                cmds[i].variant == UPS_CMD_DANGER ? "danger" :
+                cmds[i].variant == UPS_CMD_WARN ? "warn" : "default");
+            if (cmds[i].flags & UPS_CMD_IS_SHUTDOWN)
+                cJSON_AddBoolToObject(obj, "is_shutdown", 1);
+            if (cmds[i].flags & UPS_CMD_IS_MUTE)
+                cJSON_AddBoolToObject(obj, "is_mute", 1);
+            if (cmds[i].type == UPS_CMD_TOGGLE)
+                cJSON_AddNumberToObject(obj, "status_bit", cmds[i].status_bit);
+            cJSON_AddItemToArray(arr, obj);
+        }
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
 /* --- Threshold cache --- */
 
 void api_refresh_thresholds(route_ctx_t *ctx)
@@ -948,6 +956,7 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     /* Populate threshold cache at startup */
     api_refresh_thresholds(ctx);
     api_server_route(srv, "/api/status",       API_GET,  handle_status,         ctx);
+    api_server_route(srv, "/api/commands",     API_GET,  handle_commands,       ctx);
     api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,            ctx);
     api_server_route(srv, "/api/events",       API_GET,  handle_events,         ctx);
     api_server_route(srv, "/api/telemetry",    API_GET,  handle_telemetry,      ctx);

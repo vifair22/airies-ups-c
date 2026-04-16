@@ -30,48 +30,66 @@ const metrics: MetricDef[] = [
   { key: 'battery_voltage', label: 'Battery Voltage', unit: 'V', color: '#ef4444' },
   { key: 'output_frequency', label: 'Output Frequency', unit: 'Hz', color: '#06b6d4' },
   { key: 'output_current', label: 'Output Current', unit: 'A', color: '#f97316' },
-  { key: 'runtime_sec', label: 'Runtime', unit: 'min', color: '#14b8a6',
-    format: (v) => (v / 60).toFixed(1) },
+  { key: 'runtime_sec', label: 'Runtime', unit: 'min', color: '#14b8a6' },
   { key: 'efficiency', label: 'Efficiency', unit: '', color: '#a855f7',
     format: (v) => v >= 0 ? (v * 100 / 128).toFixed(1) + '%' : 'N/A' },
 ]
 
-function todayStr() {
-  const d = new Date()
-  return d.toISOString().split('T')[0]
-}
+const presets = [
+  { label: '5m', min: 5 },
+  { label: '15m', min: 15 },
+  { label: '30m', min: 30 },
+  { label: '1h', min: 60 },
+  { label: '2h', min: 120 },
+  { label: '6h', min: 360 },
+  { label: '12h', min: 720 },
+  { label: '1d', min: 1440 },
+  { label: '2d', min: 2880 },
+  { label: '5d', min: 7200 },
+  { label: '7d', min: 10080 },
+  { label: '15d', min: 21600 },
+  { label: '30d', min: 43200 },
+  { label: '60d', min: 86400 },
+  { label: '90d', min: 129600 },
+]
 
-function daysAgoStr(n: number) {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().split('T')[0]
+function tsToMs(ts: string): number {
+  return new Date(ts + 'Z').getTime()
 }
 
 export default function Telemetry() {
-  const [fromDate, setFromDate] = useState('')
+  const [activePreset, setActivePreset] = useState(60) /* default 1h */
+  const [fromDate, setFromDate] = useState(() => {
+    const from = new Date(Date.now() - 60 * 60000)
+    return from.toISOString().replace('T', ' ').slice(0, 19)
+  })
   const [toDate, setToDate] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  // No date filter = latest 500 points. With dates = filtered query.
-  const url = fromDate
-    ? `/api/telemetry?from=${fromDate}&to=${toDate || todayStr()} 23:59:59&limit=2000`
-    : '/api/telemetry?limit=500'
+  const url = `/api/telemetry?from=${encodeURIComponent(fromDate)}${toDate ? `&to=${encodeURIComponent(toDate)}` : ''}&limit=5000`
   const { data, error, loading } = useApi<TelemetryPoint[]>(url, 30000)
 
-  const setPreset = useCallback((days: number) => {
-    if (days === 0) {
-      setFromDate('')
-      setToDate('')
-    } else {
-      setFromDate(daysAgoStr(days))
-      setToDate(todayStr())
-    }
+  const setPreset = useCallback((minutes: number) => {
+    const from = new Date(Date.now() - minutes * 60000)
+    setFromDate(from.toISOString().replace('T', ' ').slice(0, 19))
+    setToDate('')
+    setActivePreset(minutes)
   }, [])
+
+  const setCustomRange = useCallback((from: string, to: string) => {
+    setFromDate(from)
+    setToDate(to)
+    setActivePreset(0)
+  }, [])
+
+  /* Time window for absolute scale */
+  const windowStartMs = tsToMs(fromDate)
+  const windowEndMs = toDate ? tsToMs(toDate) : Date.now()
+  const windowMs = windowEndMs - windowStartMs
 
   if (error) return <p className="text-red-400">{error}</p>
 
   const points = data ? (
-    // API returns DESC for default, ASC for date-filtered — ensure chronological
     data[0] && data[data.length-1] &&
     data[0].timestamp > data[data.length-1].timestamp
       ? [...data].reverse() : data
@@ -90,23 +108,24 @@ export default function Telemetry() {
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-gray-400">From</label>
-          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
+          <input type="datetime-local" value={fromDate.replace(' ', 'T').slice(0, 16)}
+            onChange={(e) => setCustomRange(e.target.value.replace('T', ' ') + ':00', toDate)}
             className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" />
         </div>
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-gray-400">To</label>
-          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
+          <input type="datetime-local" value={(toDate || new Date().toISOString().slice(0, 16)).replace(' ', 'T').slice(0, 16)}
+            onChange={(e) => setCustomRange(fromDate, e.target.value.replace('T', ' ') + ':00')}
             className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" />
         </div>
-        <div className="flex gap-1">
-          {[
-            { label: 'Latest', days: 0 },
-            { label: '7d', days: 7 },
-            { label: '30d', days: 30 },
-            { label: '90d', days: 90 },
-          ].map(({ label, days }) => (
-            <button key={label} onClick={() => setPreset(days)}
-              className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 border border-gray-700 transition-colors">
+        <div className="flex gap-1 flex-wrap">
+          {presets.map(({ label, min }) => (
+            <button key={label} onClick={() => setPreset(min)}
+              className={`px-2 py-1 text-xs rounded border transition-colors ${
+                activePreset === min
+                  ? 'bg-blue-900/60 border-blue-600 text-blue-300'
+                  : 'bg-gray-800 hover:bg-gray-700 border-gray-700'
+              }`}>
               {label}
             </button>
           ))}
@@ -124,17 +143,19 @@ export default function Telemetry() {
       {!loading && points.length === 0 && (
         <div className="text-center py-12 text-gray-500">
           <p className="text-lg mb-1">No telemetry data</p>
-          <p className="text-sm">No data in the selected date range. Data is recorded every 30 seconds.</p>
+          <p className="text-sm">No data in the selected time range.</p>
         </div>
       )}
 
-      {!loading && points.length > 0 && (
+      {!loading && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {metrics.map((m) => (
             <Chart
               key={m.key}
               metric={m}
               points={points}
+              windowStartMs={windowStartMs}
+              windowMs={windowMs}
               onClick={() => setExpanded(m.key)}
             />
           ))}
@@ -156,7 +177,7 @@ export default function Telemetry() {
                     <button onClick={() => setExpanded(null)}
                       className="text-gray-500 hover:text-gray-300 text-xl">&times;</button>
                   </div>
-                  <Chart metric={m} points={points} expanded />
+                  <Chart metric={m} points={points} windowStartMs={windowStartMs} windowMs={windowMs} expanded />
                 </>
               )
             })()}
@@ -167,9 +188,20 @@ export default function Telemetry() {
   )
 }
 
-function Chart({ metric, points, expanded, onClick }: {
+function fmtTimeLabel(ms: number, windowMs: number): string {
+  const d = new Date(ms)
+  if (windowMs > 2 * 86400000) /* >2 days: show date */
+    return `${d.getUTCMonth()+1}/${d.getUTCDate()}`
+  if (windowMs > 86400000) /* >1 day: show date + time */
+    return `${d.getUTCMonth()+1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`
+  return `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`
+}
+
+function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
   metric: MetricDef
   points: TelemetryPoint[]
+  windowStartMs: number
+  windowMs: number
   expanded?: boolean
   onClick?: () => void
 }) {
@@ -179,28 +211,48 @@ function Chart({ metric, points, expanded, onClick }: {
     return v
   }
 
+  if (points.length === 0) {
+    return (
+      <div className={`rounded-lg bg-gray-900 border border-gray-800 p-4 ${!expanded ? 'cursor-pointer hover:border-gray-700 transition-colors' : ''}`}
+        onClick={!expanded ? onClick : undefined}>
+        <div className="flex items-baseline justify-between mb-2">
+          <h3 className="text-sm text-gray-400">{metric.label}</h3>
+          <span className="text-xs text-gray-600">No data</span>
+        </div>
+        <svg viewBox={`0 0 400 80`} className="w-full h-20" preserveAspectRatio="none">
+          <line x1="0" y1="40" x2="400" y2="40" stroke="#374151" strokeWidth="0.5" strokeDasharray="4" />
+        </svg>
+        <div className="flex justify-between mt-2">
+          <span className="text-[10px] text-gray-600 font-mono">{fmtTimeLabel(windowStartMs, windowMs)}</span>
+          <span className="text-[10px] text-gray-600 font-mono">{fmtTimeLabel(windowStartMs + windowMs, windowMs)}</span>
+        </div>
+      </div>
+    )
+  }
+
   const values = points.map(getValue)
+  const timestamps = points.map(p => tsToMs(p.timestamp))
   const min = Math.min(...values)
   const max = Math.max(...values)
   const current = values[values.length - 1]
   const avg = values.reduce((a, b) => a + b, 0) / values.length
-  const range = max - min || 1
+  const vRange = max - min || 1
 
   const w = expanded ? 800 : 400
   const h = expanded ? 200 : 80
   const pad = 4
 
-  const pathPoints = values.map((v, i) => {
-    const x = (i / (values.length - 1 || 1)) * w
-    const y = h - pad - ((v - min) / range) * (h - pad * 2)
+  /* Absolute time scale: X position based on timestamp within window */
+  const pathPoints = timestamps.map((ts, i) => {
+    const x = ((ts - windowStartMs) / windowMs) * w
+    const y = h - pad - ((values[i] - min) / vRange) * (h - pad * 2)
     return `${x},${y}`
   })
 
-  const areaD = `M 0,${h} L ${pathPoints.join(' L ')} L ${w},${h} Z`
+  const areaD = `M ${pathPoints[0].split(',')[0]},${h} L ${pathPoints.join(' L ')} L ${pathPoints[pathPoints.length-1].split(',')[0]},${h} Z`
   const lineD = `M ${pathPoints.join(' L ')}`
 
   const fmtVal = metric.format || ((v: number) => v.toFixed(1))
-  const fmtTime = (ts: string) => ts.split(' ')[1]?.slice(0, 5) || ts.slice(5, 10)
 
   return (
     <div
@@ -220,12 +272,12 @@ function Chart({ metric, points, expanded, onClick }: {
       <svg viewBox={`0 0 ${w} ${h}`} className={expanded ? 'w-full h-52' : 'w-full h-20'}
         preserveAspectRatio="none">
         <path d={areaD} fill={metric.color} opacity="0.08" />
-        <path d={lineD} fill="none" stroke={metric.color} strokeWidth={expanded ? '1' : '1.5'} />
+        <path d={lineD} fill="none" stroke={metric.color} strokeWidth={expanded ? '0.8' : '1'} />
       </svg>
 
       <div className="flex justify-between items-center mt-2">
         <span className="text-[10px] text-gray-600 font-mono">
-          {fmtTime(points[0]?.timestamp || '')}
+          {fmtTimeLabel(windowStartMs, windowMs)}
         </span>
         <div className="flex gap-3 text-[10px] text-gray-600">
           <span>min: {fmtVal(min)}</span>
@@ -233,7 +285,7 @@ function Chart({ metric, points, expanded, onClick }: {
           <span>max: {fmtVal(max)}</span>
         </div>
         <span className="text-[10px] text-gray-600 font-mono">
-          {fmtTime(points[points.length - 1]?.timestamp || '')}
+          {fmtTimeLabel(windowStartMs + windowMs, windowMs)}
         </span>
       </div>
     </div>

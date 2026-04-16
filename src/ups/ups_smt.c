@@ -213,6 +213,64 @@ static int smt_cmd_beep_continuous(void *transport)
     return modbus_write_register(mb(transport), SMT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
 }
 
+/* --- Command descriptors --- */
+
+static const ups_cmd_desc_t smt_commands[] = {
+    { "shutdown", "Shutdown UPS", "Send the UPS shutdown command",
+      "power", "Shutdown UPS?",
+      "This sends the shutdown command directly to the UPS.",
+      UPS_CMD_SIMPLE, UPS_CMD_DANGER, UPS_CMD_IS_SHUTDOWN, 0,
+      smt_cmd_shutdown, NULL },
+
+    { "battery_test", "Battery Test", "Run a quick self-test to verify battery health",
+      "diagnostics", "Start Battery Test?",
+      "This will run a brief self-test where the UPS switches to battery power momentarily to verify battery health.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      smt_cmd_battery_test, NULL },
+
+    { "runtime_cal", "Runtime Calibration", "Deep discharge to recalibrate the runtime estimate",
+      "diagnostics", "Start Runtime Calibration?",
+      "Runtime calibration deeply discharges the battery to recalibrate the runtime estimate. The UPS will be on battery power for the entire duration. The battery will take a significant amount of time to recharge after calibration completes. If the battery is degraded, the UPS may not be able to sustain the load.",
+      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
+      smt_cmd_runtime_cal, NULL },
+
+    { "abort_runtime_cal", "Abort Calibration", "Cancel a running runtime calibration",
+      "diagnostics", "Abort Runtime Calibration?",
+      "This will abort the current runtime calibration and return the UPS to normal operation.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      smt_cmd_abort_runtime_cal, NULL },
+
+    { "beep_short", "Short Beep", "Verify the audible alarm is functional",
+      "diagnostics", "Short Beep Test?",
+      "This will emit a brief beep to verify the audible alarm.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      smt_cmd_beep_short, NULL },
+
+    { "beep_continuous", "Continuous Beep", "Continuous beep and LED test",
+      "diagnostics", "Continuous Beep Test?",
+      "This starts a continuous beep and LED test. The alarm will sound until you stop it.",
+      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
+      smt_cmd_beep_continuous, NULL },
+
+    { "mute", "Mute Alarm", "Silence the UPS audible alarm",
+      "alarm", "Mute Alarm?",
+      "This will silence the UPS audible alarm.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, UPS_CMD_IS_MUTE, 0,
+      smt_cmd_mute_alarm, NULL },
+
+    { "unmute", "Unmute Alarm", "Re-enable the UPS audible alarm",
+      "alarm", "Unmute Alarm?",
+      "This will re-enable the UPS audible alarm. Any active alarm conditions will immediately sound.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      smt_cmd_cancel_mute, NULL },
+
+    { "clear_faults", "Clear Faults", "Reset latched fault flags",
+      "alarm", "Clear Fault Flags?",
+      "This will reset all latched fault indicators on the UPS.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      smt_cmd_clear_faults, NULL },
+};
+
 /* --- Driver definition --- */
 
 const ups_driver_t ups_driver_smt = {
@@ -232,18 +290,8 @@ const ups_driver_t ups_driver_smt = {
     .read_dynamic        = smt_read_dynamic,
     .read_inventory      = smt_read_inventory,
     .read_thresholds     = smt_read_thresholds,
-    .cmd_shutdown        = smt_cmd_shutdown,
-    .cmd_battery_test    = smt_cmd_battery_test,
-    .cmd_runtime_cal     = smt_cmd_runtime_cal,
-    .cmd_abort_runtime_cal = smt_cmd_abort_runtime_cal,
-    .cmd_clear_faults    = smt_cmd_clear_faults,
-    .cmd_mute_alarm      = smt_cmd_mute_alarm,
-    .cmd_cancel_mute     = smt_cmd_cancel_mute,
-    .cmd_beep_short      = smt_cmd_beep_short,
-    .cmd_beep_continuous = smt_cmd_beep_continuous,
-    .cmd_bypass_enable   = NULL,
-    .cmd_bypass_disable  = NULL,
-    .cmd_set_freq_tolerance = NULL,
+    .commands            = smt_commands,
+    .commands_count      = sizeof(smt_commands) / sizeof(smt_commands[0]),
     .config_read         = NULL,
     .config_write        = NULL,
 };
