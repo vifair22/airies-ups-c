@@ -26,6 +26,15 @@ static cJSON *build_status_json(route_ctx_t *ctx)
     cJSON_AddStringToObject(obj, "driver", monitor_driver_name(ctx->monitor));
     cJSON_AddBoolToObject(obj, "connected", monitor_is_connected(ctx->monitor));
 
+    /* Topology */
+    const char *topo_str = "unknown";
+    switch (ups_topology(ctx->ups)) {
+    case UPS_TOPO_ONLINE_DOUBLE:    topo_str = "online_double"; break;
+    case UPS_TOPO_LINE_INTERACTIVE: topo_str = "line_interactive"; break;
+    case UPS_TOPO_STANDBY:          topo_str = "standby"; break;
+    }
+    cJSON_AddStringToObject(obj, "topology", topo_str);
+
     if (monitor_get_inventory(ctx->monitor, &inv) == 0) {
         cJSON *inv_obj = cJSON_CreateObject();
         cJSON_AddStringToObject(inv_obj, "model", inv.model);

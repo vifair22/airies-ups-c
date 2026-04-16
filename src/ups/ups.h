@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
-#include <modbus/modbus.h>
 #include "ups_driver.h"
 
 /* UPSStatus_BF (reg 0-1, uint32) — shared across APC Modbus models (990-9840) */
@@ -113,29 +112,33 @@ struct ups_inventory {
 };
 
 /* UPS context — holds connection and active driver.
- * The cmd_mutex serializes all command writes (freq tolerance, bypass, etc.)
- * so concurrent callers (API thread, weather thread) don't collide. */
+ * The cmd_mutex serializes all driver calls (reads, commands, config I/O)
+ * so concurrent callers (API thread, weather thread) don't collide.
+ * The driver functions can assume single-threaded access. */
 typedef struct ups_context {
-    modbus_t           *ctx;
+    void               *transport;  /* opaque, owned by driver */
     const ups_driver_t *driver;
     ups_inventory_t     inventory;  /* cached at connect time */
     int                 has_inventory;
-    pthread_mutex_t     cmd_mutex;  /* serializes command writes */
+    pthread_mutex_t     cmd_mutex;  /* serializes all driver calls */
     int                 consecutive_errors;
-    /* Connection params for reconnect */
-    char                device[256];
-    int                 baud;
-    int                 slave_id;
+    ups_conn_params_t   params;     /* saved for reconnect */
+    /* String storage for params (so params can outlive the caller's stack) */
+    char                _device_buf[256];
+    char                _serial_buf[64];
+    char                _host_buf[256];
 } ups_t;
 
-/* Connect and auto-detect driver from UPS model string.
- * Returns NULL on connection failure or unknown model. */
-ups_t *ups_connect(const char *device, int baud, int slave_id);
+/* Connect to a UPS and auto-detect the appropriate driver.
+ * Iterates registered drivers matching conn_type, calls connect() + detect().
+ * Returns NULL on connection failure or no matching driver. */
+ups_t *ups_connect(const ups_conn_params_t *params);
 void   ups_close(ups_t *ups);
 
-/* Query capabilities */
+/* Query capabilities and driver info */
 int ups_has_cap(const ups_t *ups, ups_cap_t cap);
 const char *ups_driver_name(const ups_t *ups);
+ups_topology_t ups_topology(const ups_t *ups);
 
 /* Frequency tolerance settings from the active driver */
 const ups_freq_setting_t *ups_get_freq_settings(const ups_t *ups, size_t *count);

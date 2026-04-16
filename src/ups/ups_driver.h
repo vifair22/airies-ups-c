@@ -3,11 +3,34 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <modbus/modbus.h>
 
 /* Forward declarations */
 typedef struct ups_data ups_data_t;
 typedef struct ups_inventory ups_inventory_t;
+
+/* Connection types */
+typedef enum {
+    UPS_CONN_SERIAL,    /* RS-232/RS-485 (Modbus RTU, etc.) */
+    UPS_CONN_USB,       /* USB HID */
+    UPS_CONN_TCP,       /* Modbus TCP, SNMP, vendor HTTP (future) */
+} ups_conn_type_t;
+
+/* Connection parameters — driver interprets based on conn_type */
+typedef struct {
+    ups_conn_type_t type;
+    union {
+        struct { const char *device; int baud; int slave_id; } serial;
+        struct { uint16_t vendor_id; uint16_t product_id; const char *serial; } usb;
+        struct { const char *host; int port; } tcp;
+    };
+} ups_conn_params_t;
+
+/* UPS topology — reported by driver, shapes the UI */
+typedef enum {
+    UPS_TOPO_ONLINE_DOUBLE,     /* full double-conversion (SRT) */
+    UPS_TOPO_LINE_INTERACTIVE,  /* AVR / line-interactive (SMT) */
+    UPS_TOPO_STANDBY,           /* standby / offline (Back-UPS) */
+} ups_topology_t;
 
 /* Capability flags — driver advertises what it supports */
 typedef enum {
@@ -64,12 +87,27 @@ typedef struct {
     } meta;
 } ups_config_reg_t;
 
-/* Driver vtable — each UPS family implements this */
+/* Driver vtable — each UPS family implements this.
+ *
+ * The void *transport parameter is an opaque handle allocated by the driver's
+ * connect() function. The driver casts it to whatever its transport library
+ * needs (modbus_t *, hid_device *, socket fd, etc.). The app layer never
+ * inspects or frees it — disconnect() handles cleanup.
+ *
+ * Thread safety: the app holds a mutex around every call into the driver.
+ * Driver functions can assume single-threaded access. */
 typedef struct ups_driver {
-    const char *name;  /* "srt", "smt" */
+    const char      *name;      /* "srt", "smt", "apc_hid" */
+    ups_conn_type_t  conn_type; /* what transport this driver uses */
+    ups_topology_t   topology;  /* power path topology */
 
-    /* Detection: return 1 if this driver handles the given model string */
-    int (*detect)(const char *model);
+    /* Connection lifecycle — driver owns the transport */
+    void *(*connect)(const ups_conn_params_t *params);
+    void  (*disconnect)(void *transport);
+
+    /* Detection: return 1 if this driver handles the connected UPS.
+     * Called after connect() succeeds. Transport is live. */
+    int (*detect)(void *transport);
 
     /* Capability bitfield */
     uint32_t caps;
@@ -83,24 +121,29 @@ typedef struct ups_driver {
     size_t                  config_regs_count;
 
     /* --- Reads --- */
-    int (*read_status)(modbus_t *ctx, ups_data_t *data);
-    int (*read_dynamic)(modbus_t *ctx, ups_data_t *data);
-    int (*read_inventory)(modbus_t *ctx, ups_inventory_t *inv);
-    int (*read_thresholds)(modbus_t *ctx, uint16_t *transfer_high, uint16_t *transfer_low);
+    int (*read_status)(void *transport, ups_data_t *data);
+    int (*read_dynamic)(void *transport, ups_data_t *data);
+    int (*read_inventory)(void *transport, ups_inventory_t *inv);
+    int (*read_thresholds)(void *transport, uint16_t *transfer_high, uint16_t *transfer_low);
 
     /* --- Commands --- */
-    int (*cmd_shutdown)(modbus_t *ctx);
-    int (*cmd_battery_test)(modbus_t *ctx);
-    int (*cmd_runtime_cal)(modbus_t *ctx);
-    int (*cmd_abort_runtime_cal)(modbus_t *ctx);
-    int (*cmd_clear_faults)(modbus_t *ctx);
-    int (*cmd_mute_alarm)(modbus_t *ctx);
-    int (*cmd_cancel_mute)(modbus_t *ctx);
-    int (*cmd_beep_short)(modbus_t *ctx);
-    int (*cmd_beep_continuous)(modbus_t *ctx);
-    int (*cmd_bypass_enable)(modbus_t *ctx);
-    int (*cmd_bypass_disable)(modbus_t *ctx);
-    int (*cmd_set_freq_tolerance)(modbus_t *ctx, uint16_t setting);
+    int (*cmd_shutdown)(void *transport);
+    int (*cmd_battery_test)(void *transport);
+    int (*cmd_runtime_cal)(void *transport);
+    int (*cmd_abort_runtime_cal)(void *transport);
+    int (*cmd_clear_faults)(void *transport);
+    int (*cmd_mute_alarm)(void *transport);
+    int (*cmd_cancel_mute)(void *transport);
+    int (*cmd_beep_short)(void *transport);
+    int (*cmd_beep_continuous)(void *transport);
+    int (*cmd_bypass_enable)(void *transport);
+    int (*cmd_bypass_disable)(void *transport);
+    int (*cmd_set_freq_tolerance)(void *transport, uint16_t setting);
+
+    /* --- Config register I/O (optional, NULL if no config_regs) --- */
+    int (*config_read)(void *transport, const ups_config_reg_t *reg,
+                       uint16_t *raw_value, char *str_buf, size_t str_bufsz);
+    int (*config_write)(void *transport, const ups_config_reg_t *reg, uint16_t value);
 } ups_driver_t;
 
 /* Driver registry — NULL-terminated array of available drivers.

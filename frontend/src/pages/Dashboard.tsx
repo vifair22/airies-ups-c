@@ -4,6 +4,7 @@ import { useApi } from '../hooks/useApi'
 
 interface UpsStatus {
   driver: string
+  topology?: string
   connected: boolean
   message?: string
   inventory?: {
@@ -328,9 +329,14 @@ export default function Dashboard() {
   const caps = s.capabilities
   const sogCfg = inv?.sog_config ?? 0
 
-  /* Topology detection */
-  const canBypass = hasCap(caps, 'bypass')
+  /* Topology from driver */
+  const topo = s.topology ?? 'online_double'
+  const isDoubleConversion = topo === 'online_double'
+  const isLineInteractive = topo === 'line_interactive'
+  const isStandby = topo === 'standby'
+  const canBypass = isDoubleConversion
   const canHE = hasCap(caps, 'he_mode')
+  void isLineInteractive; void isStandby  /* used for future topology-specific UI */
   const avr = detectAvr(inp?.voltage ?? 0, out?.voltage ?? 0)
 
   /* Classify planes */

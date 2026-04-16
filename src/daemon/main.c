@@ -103,8 +103,13 @@ int main(int argc, char *argv[])
     int baud = config_get_int(cfg, "ups.baud", 9600);
     int slave_id = config_get_int(cfg, "ups.slave_id", 1);
 
+    ups_conn_params_t conn_params = {
+        .type = UPS_CONN_SERIAL,
+        .serial = { .device = device, .baud = baud, .slave_id = slave_id },
+    };
+
     log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
-    ups_t *ups = ups_connect(device, baud, slave_id);
+    ups_t *ups = ups_connect(&conn_params);
     if (!ups) {
         log_error("failed to connect to UPS at %s — running without UPS", device);
         /* Don't exit — the API server should still run for config/setup */
