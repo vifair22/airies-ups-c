@@ -191,4 +191,10 @@ const char *ups_transfer_reason_str(uint16_t reason);
 const char *ups_status_str(uint32_t status, char *buf, size_t len);
 const char *ups_efficiency_str(int16_t raw, char *buf, size_t len);
 
+/* Error bitfield decoders — return number of active errors, write string
+ * pointers into the provided array. Caller must not free the strings. */
+int ups_decode_general_errors(uint16_t raw, const char **out, int max);
+int ups_decode_power_errors(uint32_t raw, const char **out, int max);
+int ups_decode_battery_errors(uint16_t raw, const char **out, int max);
+
 #endif

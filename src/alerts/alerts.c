@@ -158,5 +158,68 @@ uint32_t alerts_check(alert_state_t *state,
         state->prev_charge = data->charge_pct;
     }
 
+    /* Error register transitions — fire events when errors appear or clear */
+    {
+        const char *strs[16];
+        int n;
+
+        /* General errors */
+        uint16_t gen_new = data->general_error & (uint16_t)~state->prev_general_error;
+        uint16_t gen_clr = state->prev_general_error & (uint16_t)~data->general_error;
+        if (gen_new) {
+            n = ups_decode_general_errors(gen_new, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "General error: %s", strs[i]);
+                notify("UPS General Error", body);
+            }
+        }
+        if (gen_clr) {
+            n = ups_decode_general_errors(gen_clr, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "General error cleared: %s", strs[i]);
+                notify("UPS General Error Cleared", body);
+            }
+        }
+        state->prev_general_error = data->general_error;
+
+        /* Power system errors */
+        uint32_t pwr_new = data->power_system_error & ~state->prev_power_error;
+        uint32_t pwr_clr = state->prev_power_error & ~data->power_system_error;
+        if (pwr_new) {
+            n = ups_decode_power_errors(pwr_new, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "Power system error: %s", strs[i]);
+                notify("UPS Power System Error", body);
+            }
+        }
+        if (pwr_clr) {
+            n = ups_decode_power_errors(pwr_clr, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "Power system error cleared: %s", strs[i]);
+                notify("UPS Power System Error Cleared", body);
+            }
+        }
+        state->prev_power_error = data->power_system_error;
+
+        /* Battery system errors */
+        uint16_t bat_new = data->bat_system_error & (uint16_t)~state->prev_battery_error;
+        uint16_t bat_clr = state->prev_battery_error & (uint16_t)~data->bat_system_error;
+        if (bat_new) {
+            n = ups_decode_battery_errors(bat_new, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "Battery error: %s", strs[i]);
+                notify("UPS Battery Error", body);
+            }
+        }
+        if (bat_clr) {
+            n = ups_decode_battery_errors(bat_clr, strs, 16);
+            for (int i = 0; i < n; i++) {
+                snprintf(body, sizeof(body), "Battery error cleared: %s", strs[i]);
+                notify("UPS Battery Error Cleared", body);
+            }
+        }
+        state->prev_battery_error = data->bat_system_error;
+    }
+
     return alerted;
 }

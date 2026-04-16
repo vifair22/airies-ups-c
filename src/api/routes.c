@@ -104,12 +104,33 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         cJSON_AddStringToObject(obj, "transfer_reason",
                                 ups_transfer_reason_str(data.transfer_reason));
 
-        /* Error registers */
-        cJSON *errors = cJSON_CreateObject();
-        cJSON_AddNumberToObject(errors, "general", data.general_error);
-        cJSON_AddNumberToObject(errors, "power_system", data.power_system_error);
-        cJSON_AddNumberToObject(errors, "battery_system", data.bat_system_error);
-        cJSON_AddItemToObject(obj, "errors", errors);
+        /* Error registers — raw values + decoded string arrays */
+        {
+            cJSON *errors = cJSON_CreateObject();
+            cJSON_AddNumberToObject(errors, "general", data.general_error);
+            cJSON_AddNumberToObject(errors, "power_system", data.power_system_error);
+            cJSON_AddNumberToObject(errors, "battery_system", data.bat_system_error);
+
+            const char *strs[16];
+            int n;
+
+            n = ups_decode_general_errors(data.general_error, strs, 16);
+            cJSON *gen_arr = cJSON_CreateArray();
+            for (int i = 0; i < n; i++) cJSON_AddItemToArray(gen_arr, cJSON_CreateString(strs[i]));
+            cJSON_AddItemToObject(errors, "general_detail", gen_arr);
+
+            n = ups_decode_power_errors(data.power_system_error, strs, 16);
+            cJSON *pwr_arr = cJSON_CreateArray();
+            for (int i = 0; i < n; i++) cJSON_AddItemToArray(pwr_arr, cJSON_CreateString(strs[i]));
+            cJSON_AddItemToObject(errors, "power_system_detail", pwr_arr);
+
+            n = ups_decode_battery_errors(data.bat_system_error, strs, 16);
+            cJSON *bat_arr = cJSON_CreateArray();
+            for (int i = 0; i < n; i++) cJSON_AddItemToArray(bat_arr, cJSON_CreateString(strs[i]));
+            cJSON_AddItemToObject(errors, "battery_system_detail", bat_arr);
+
+            cJSON_AddItemToObject(obj, "errors", errors);
+        }
 
         /* Test/cal status */
         cJSON_AddNumberToObject(obj, "bat_test_status", data.bat_test_status);

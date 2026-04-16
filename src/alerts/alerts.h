@@ -14,14 +14,18 @@
 
 /* Alert state — tracks which alerts are currently active */
 typedef struct {
-    int    overload;
-    int    fault;
-    int    bat_replace;
-    int    input_high;
-    int    input_low;
-    int    load_high;
-    int    bat_low;
-    double prev_charge;
+    int      overload;
+    int      fault;
+    int      bat_replace;
+    int      input_high;
+    int      input_low;
+    int      load_high;
+    int      bat_low;
+    double   prev_charge;
+    /* Error register tracking — fire events on transitions */
+    uint16_t prev_general_error;
+    uint32_t prev_power_error;
+    uint16_t prev_battery_error;
 } alert_state_t;
 
 /* Transfer voltage thresholds (read from UPS) */

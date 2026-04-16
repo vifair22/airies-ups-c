@@ -125,37 +125,43 @@ int main(int argc, char *argv[])
 
     /* --- Phase 2: UPS connection --- */
 
-    const char *conn_type = config_get_str(cfg, "ups.conn_type");
-    if (!conn_type) conn_type = "serial";
+    int ups_configured = config_get_int(cfg, "setup.ups_done", 0);
+    ups_t *ups = NULL;
 
-    ups_conn_params_t conn_params = {0};
-
-    if (strcmp(conn_type, "usb") == 0) {
-        const char *vid_str = config_get_str(cfg, "ups.usb_vid");
-        const char *pid_str = config_get_str(cfg, "ups.usb_pid");
-        conn_params.type = UPS_CONN_USB;
-        conn_params.usb.vendor_id = (uint16_t)strtol(vid_str ? vid_str : "051d", NULL, 16);
-        conn_params.usb.product_id = (uint16_t)strtol(pid_str ? pid_str : "0002", NULL, 16);
-        conn_params.usb.serial = NULL;
-        log_info("connecting to UPS via USB (VID=%04x PID=%04x)",
-                 conn_params.usb.vendor_id, conn_params.usb.product_id);
+    if (!ups_configured) {
+        log_info("UPS not configured — skipping connection (setup required)");
     } else {
-        const char *device = config_get_str(cfg, "ups.device");
-        int baud = config_get_int(cfg, "ups.baud", 9600);
-        int slave_id = config_get_int(cfg, "ups.slave_id", 1);
-        conn_params.type = UPS_CONN_SERIAL;
-        conn_params.serial.device = device;
-        conn_params.serial.baud = baud;
-        conn_params.serial.slave_id = slave_id;
-        log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
-    }
+        const char *conn_type = config_get_str(cfg, "ups.conn_type");
+        if (!conn_type) conn_type = "serial";
 
-    ups_t *ups = ups_connect(&conn_params);
-    if (!ups) {
-        log_error("failed to connect to UPS — running without UPS");
-        /* Don't exit — the API server should still run for config/setup */
-    } else {
-        log_info("UPS connected — driver: %s", ups_driver_name(ups));
+        ups_conn_params_t conn_params = {0};
+
+        if (strcmp(conn_type, "usb") == 0) {
+            const char *vid_str = config_get_str(cfg, "ups.usb_vid");
+            const char *pid_str = config_get_str(cfg, "ups.usb_pid");
+            conn_params.type = UPS_CONN_USB;
+            conn_params.usb.vendor_id = (uint16_t)strtol(vid_str ? vid_str : "051d", NULL, 16);
+            conn_params.usb.product_id = (uint16_t)strtol(pid_str ? pid_str : "0002", NULL, 16);
+            conn_params.usb.serial = NULL;
+            log_info("connecting to UPS via USB (VID=%04x PID=%04x)",
+                     conn_params.usb.vendor_id, conn_params.usb.product_id);
+        } else {
+            const char *device = config_get_str(cfg, "ups.device");
+            int baud = config_get_int(cfg, "ups.baud", 9600);
+            int slave_id = config_get_int(cfg, "ups.slave_id", 1);
+            conn_params.type = UPS_CONN_SERIAL;
+            conn_params.serial.device = device;
+            conn_params.serial.baud = baud;
+            conn_params.serial.slave_id = slave_id;
+            log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
+        }
+
+        ups = ups_connect(&conn_params);
+        if (!ups) {
+            log_error("failed to connect to UPS — running without UPS");
+        } else {
+            log_info("UPS connected — driver: %s", ups_driver_name(ups));
+        }
     }
 
     /* --- Phase 3: Subsystems --- */

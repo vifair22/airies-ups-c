@@ -199,6 +199,15 @@ int ups_read_dynamic(ups_t *ups, ups_data_t *data)
     int rc = ups->driver->read_dynamic(ups->transport, data);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
+
+    /* Zero battery readings when battery is disconnected — the UPS reports
+     * stale values and the frontend shouldn't display them */
+    if (rc == 0 && (data->bat_system_error & UPS_BATERR_DISCONNECTED)) {
+        data->charge_pct = 0;
+        data->battery_voltage = 0;
+        data->runtime_sec = 0;
+    }
+
     return rc;
 }
 
@@ -403,4 +412,66 @@ const char *ups_efficiency_str(int16_t raw, char *buf, size_t len)
             snprintf(buf, len, "Unknown(%d)", raw);
     }
     return buf;
+}
+
+/* --- Error bitfield decoders --- */
+
+typedef struct { uint32_t bit; const char *name; } bit_label_t;
+
+static int decode_bits(uint32_t raw, const char **out, int max,
+                       const bit_label_t *table, size_t table_len)
+{
+    int n = 0;
+    for (size_t i = 0; i < table_len && n < max; i++) {
+        if (raw & table[i].bit)
+            out[n++] = table[i].name;
+    }
+    return n;
+}
+
+int ups_decode_general_errors(uint16_t raw, const char **out, int max)
+{
+    static const bit_label_t flags[] = {
+        { UPS_GENERR_SITE_WIRING,   "SiteWiring" },
+        { UPS_GENERR_EEPROM,        "EEPROM" },
+        { UPS_GENERR_AD_CONV,       "ADConverter" },
+        { UPS_GENERR_LOGIC_PSU,     "LogicPowerSupply" },
+        { UPS_GENERR_INTERNAL_COMM, "InternalComm" },
+        { UPS_GENERR_UI_BUTTON,     "UIButton" },
+        { UPS_GENERR_EPO_ACTIVE,    "EPOActive" },
+        { UPS_GENERR_FW_MISMATCH,   "FirmwareMismatch" },
+    };
+    return decode_bits(raw, out, max, flags,
+                       sizeof(flags) / sizeof(flags[0]));
+}
+
+int ups_decode_power_errors(uint32_t raw, const char **out, int max)
+{
+    static const bit_label_t flags[] = {
+        { UPS_PWRERR_OVERLOAD,      "Overload" },
+        { UPS_PWRERR_SHORT_CIRCUIT, "ShortCircuit" },
+        { UPS_PWRERR_OVERVOLTAGE,   "Overvoltage" },
+        { UPS_PWRERR_OVERTEMP,      "Overtemperature" },
+        { UPS_PWRERR_FAN,           "Fan" },
+        { UPS_PWRERR_INVERTER,      "Inverter" },
+    };
+    return decode_bits(raw, out, max, flags,
+                       sizeof(flags) / sizeof(flags[0]));
+}
+
+int ups_decode_battery_errors(uint16_t raw, const char **out, int max)
+{
+    static const bit_label_t flags[] = {
+        { UPS_BATERR_DISCONNECTED,  "Disconnected" },
+        { UPS_BATERR_OVERVOLTAGE,   "Overvoltage" },
+        { UPS_BATERR_REPLACE,       "NeedsReplacement" },
+        { UPS_BATERR_OVERTEMP_CRIT, "OvertemperatureCritical" },
+        { UPS_BATERR_CHARGER,       "ChargerFault" },
+        { UPS_BATERR_TEMP_SENSOR,   "TempSensorFault" },
+        { UPS_BATERR_OVERTEMP_WARN, "OvertemperatureWarning" },
+        { UPS_BATERR_GENERAL,       "GeneralError" },
+        { UPS_BATERR_COMM,          "CommunicationError" },
+    };
+    return decode_bits(raw, out, max, flags,
+                       sizeof(flags) / sizeof(flags[0]));
 }
