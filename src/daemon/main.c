@@ -16,6 +16,7 @@
 #include "weather/weather.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
@@ -51,7 +52,7 @@ static int auth_check(const api_request_t *req, const char *url, void *userdata)
     /* Public endpoints — no auth required */
     if (strcmp(url, "/api/auth/setup") == 0 ||
         strcmp(url, "/api/auth/login") == 0 ||
-        strcmp(url, "/api/setup/status") == 0)
+        strncmp(url, "/api/setup/", 11) == 0)
         return 1;
 
     /* If auth not set up yet, allow everything (setup mode) */
@@ -124,19 +125,34 @@ int main(int argc, char *argv[])
 
     /* --- Phase 2: UPS connection --- */
 
-    const char *device = config_get_str(cfg, "ups.device");
-    int baud = config_get_int(cfg, "ups.baud", 9600);
-    int slave_id = config_get_int(cfg, "ups.slave_id", 1);
+    const char *conn_type = config_get_str(cfg, "ups.conn_type");
+    if (!conn_type) conn_type = "serial";
 
-    ups_conn_params_t conn_params = {
-        .type = UPS_CONN_SERIAL,
-        .serial = { .device = device, .baud = baud, .slave_id = slave_id },
-    };
+    ups_conn_params_t conn_params = {0};
 
-    log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
+    if (strcmp(conn_type, "usb") == 0) {
+        const char *vid_str = config_get_str(cfg, "ups.usb_vid");
+        const char *pid_str = config_get_str(cfg, "ups.usb_pid");
+        conn_params.type = UPS_CONN_USB;
+        conn_params.usb.vendor_id = (uint16_t)strtol(vid_str ? vid_str : "051d", NULL, 16);
+        conn_params.usb.product_id = (uint16_t)strtol(pid_str ? pid_str : "0002", NULL, 16);
+        conn_params.usb.serial = NULL;
+        log_info("connecting to UPS via USB (VID=%04x PID=%04x)",
+                 conn_params.usb.vendor_id, conn_params.usb.product_id);
+    } else {
+        const char *device = config_get_str(cfg, "ups.device");
+        int baud = config_get_int(cfg, "ups.baud", 9600);
+        int slave_id = config_get_int(cfg, "ups.slave_id", 1);
+        conn_params.type = UPS_CONN_SERIAL;
+        conn_params.serial.device = device;
+        conn_params.serial.baud = baud;
+        conn_params.serial.slave_id = slave_id;
+        log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
+    }
+
     ups_t *ups = ups_connect(&conn_params);
     if (!ups) {
-        log_error("failed to connect to UPS at %s — running without UPS", device);
+        log_error("failed to connect to UPS — running without UPS");
         /* Don't exit — the API server should still run for config/setup */
     } else {
         log_info("UPS connected — driver: %s", ups_driver_name(ups));

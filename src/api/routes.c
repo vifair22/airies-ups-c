@@ -703,10 +703,13 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
         return api_error(400, "missing 'key' and 'value' strings");
     }
 
-    int rc = config_set_db(ctx->config, jkey->valuestring, jval->valuestring);
+    /* Try file-backed first, fall back to DB-backed */
+    int rc = config_set(ctx->config, jkey->valuestring, jval->valuestring);
+    if (rc != 0)
+        rc = config_set_db(ctx->config, jkey->valuestring, jval->valuestring);
     cJSON_Delete(body);
 
-    if (rc != 0) return api_error(400, "failed to update config");
+    if (rc != 0) return api_error(400, "unknown config key");
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "result", "updated");
@@ -1010,8 +1013,14 @@ static api_response_t handle_setup_status(const api_request_t *req, void *ud)
 {
     (void)req;
     route_ctx_t *ctx = ud;
+
+    int password_set  = auth_is_setup(ctx->db);
+    int ups_configured = config_get_int(ctx->config, "setup.ups_done", 0) != 0;
+
     cJSON *obj = cJSON_CreateObject();
-    cJSON_AddBoolToObject(obj, "needs_setup", !auth_is_setup(ctx->db));
+    cJSON_AddBoolToObject(obj, "needs_setup", !password_set || !ups_configured);
+    cJSON_AddBoolToObject(obj, "password_set", password_set != 0);
+    cJSON_AddBoolToObject(obj, "ups_configured", ups_configured);
     cJSON_AddBoolToObject(obj, "ups_connected", ctx->ups && monitor_is_connected(ctx->monitor));
     char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -1048,24 +1057,33 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
     cJSON *body = cJSON_Parse(req->body);
     if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jdev = cJSON_GetObjectItem(body, "device");
-    const cJSON *jbaud = cJSON_GetObjectItem(body, "baud");
-    const cJSON *jslave = cJSON_GetObjectItem(body, "slave_id");
+    const cJSON *jtype = cJSON_GetObjectItem(body, "conn_type");
+    const char *conn_type = (jtype && cJSON_IsString(jtype)) ? jtype->valuestring : "serial";
 
-    if (!jdev || !cJSON_IsString(jdev)) {
-        cJSON_Delete(body);
-        return api_error(400, "missing 'device' field");
+    ups_conn_params_t params = {0};
+
+    if (strcmp(conn_type, "usb") == 0) {
+        const cJSON *jvid = cJSON_GetObjectItem(body, "usb_vid");
+        const cJSON *jpid = cJSON_GetObjectItem(body, "usb_pid");
+        params.type = UPS_CONN_USB;
+        params.usb.vendor_id = (jvid && cJSON_IsString(jvid))
+            ? (uint16_t)strtol(jvid->valuestring, NULL, 16) : 0x051d;
+        params.usb.product_id = (jpid && cJSON_IsString(jpid))
+            ? (uint16_t)strtol(jpid->valuestring, NULL, 16) : 0x0002;
+    } else {
+        const cJSON *jdev = cJSON_GetObjectItem(body, "device");
+        const cJSON *jbaud = cJSON_GetObjectItem(body, "baud");
+        const cJSON *jslave = cJSON_GetObjectItem(body, "slave_id");
+        if (!jdev || !cJSON_IsString(jdev)) {
+            cJSON_Delete(body);
+            return api_error(400, "missing 'device' field");
+        }
+        params.type = UPS_CONN_SERIAL;
+        params.serial.device = jdev->valuestring;
+        params.serial.baud = (jbaud && cJSON_IsNumber(jbaud)) ? jbaud->valueint : 9600;
+        params.serial.slave_id = (jslave && cJSON_IsNumber(jslave)) ? jslave->valueint : 1;
     }
-
-    const char *device = jdev->valuestring;
-    int baud = (jbaud && cJSON_IsNumber(jbaud)) ? jbaud->valueint : 9600;
-    int slave_id = (jslave && cJSON_IsNumber(jslave)) ? jslave->valueint : 1;
     cJSON_Delete(body);
-
-    ups_conn_params_t params = {
-        .type = UPS_CONN_SERIAL,
-        .serial = { .device = device, .baud = baud, .slave_id = slave_id },
-    };
 
     ups_t *test_ups = ups_connect(&params);
     if (!test_ups) {

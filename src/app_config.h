@@ -13,11 +13,17 @@
 
 static const config_key_t app_file_keys[] = {
     /* UPS connection */
+    { "ups.conn_type", CFG_STRING, "serial",       "Connection type: serial or usb",
+      CFG_STORE_FILE, 0 },
     { "ups.device",    CFG_STRING, "/dev/ttyUSB0", "Serial port for UPS Modbus RTU",
-      CFG_STORE_FILE, 1 },
+      CFG_STORE_FILE, 0 },
     { "ups.baud",      CFG_INT,    "9600",         "Modbus baud rate",
       CFG_STORE_FILE, 0 },
     { "ups.slave_id",  CFG_INT,    "1",            "Modbus slave ID",
+      CFG_STORE_FILE, 0 },
+    { "ups.usb_vid",   CFG_STRING, "051d",         "USB vendor ID (hex)",
+      CFG_STORE_FILE, 0 },
+    { "ups.usb_pid",   CFG_STRING, "0002",         "USB product ID (hex)",
       CFG_STORE_FILE, 0 },
 
     /* HTTP server */
@@ -74,6 +80,11 @@ static const config_key_t app_db_keys[] = {
       "Bypass lower voltage limit (V) — match UPS LCD setting",
       CFG_STORE_DB, 0 },
 
+    /* Setup wizard completion flags */
+    { "setup.ups_done",             CFG_INT, "0",
+      "Set to 1 when UPS connection is configured via setup wizard",
+      CFG_STORE_DB, 0 },
+
     { NULL, 0, NULL, NULL, 0, 0 }  /* sentinel */
 };
 
@@ -87,6 +98,7 @@ static const config_section_t app_sections[] = {
     { "alerts",   "Alert Thresholds" },
     { "push",     "Push Notifications" },
     { "bypass",   "Bypass Settings" },
+    { "setup",    "Setup Wizard" },
     { NULL, NULL }  /* sentinel */
 };
 
