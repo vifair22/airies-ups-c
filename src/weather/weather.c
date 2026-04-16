@@ -105,8 +105,15 @@ struct weather {
     int     wind_speed_mph;
     char    severe_keywords[256];
     int     poll_interval;
-    char    severe_freq[32];   /* freq setting to apply during severe weather */
-    char    normal_freq[32];   /* freq setting to restore when clear */
+
+    /* Generic parameter control */
+    char     control_register[64];  /* config register name to control */
+    uint16_t severe_raw_value;      /* value to write during severe weather */
+    uint16_t normal_raw_value;      /* fallback restore value */
+
+    /* Saved register state for restore */
+    uint16_t saved_value;           /* register value before we wrote severe */
+    int      has_saved;             /* true if we read and saved a value */
 
     /* State */
     int     severe;
@@ -120,7 +127,7 @@ static int load_config(weather_t *w)
     int rc = db_execute(w->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
-        "severe_freq_setting, normal_freq_setting "
+        "control_register, severe_raw_value, normal_raw_value "
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
@@ -140,11 +147,13 @@ static int load_config(weather_t *w)
     snprintf(w->severe_keywords, sizeof(w->severe_keywords), "%s",
              result->rows[0][6] ? result->rows[0][6] : "");
     w->poll_interval = atoi(result->rows[0][7]);
-    snprintf(w->severe_freq, sizeof(w->severe_freq), "%s",
-             result->rows[0][8] ? result->rows[0][8] : "hz60_0_1");
-    snprintf(w->normal_freq, sizeof(w->normal_freq), "%s",
-             result->rows[0][9] ? result->rows[0][9] : "auto");
     if (w->poll_interval < 60) w->poll_interval = 300;
+
+    /* Generic param control */
+    snprintf(w->control_register, sizeof(w->control_register), "%s",
+             result->rows[0][8] ? result->rows[0][8] : "freq_tolerance");
+    w->severe_raw_value = result->rows[0][9] ? (uint16_t)atoi(result->rows[0][9]) : 0;
+    w->normal_raw_value = result->rows[0][10] ? (uint16_t)atoi(result->rows[0][10]) : 0;
 
     db_result_free(result);
     return 0;
@@ -181,7 +190,6 @@ static int check_alerts(weather_t *w, char *reasons, size_t reasons_sz)
         cJSON *event = cJSON_GetObjectItem(props, "event");
         if (!event || !cJSON_IsString(event)) continue;
 
-        /* Check if this event type is in our alert_types list */
         if (strstr(w->alert_types, event->valuestring)) {
             severe = 1;
             if (rpos > 0 && rpos < reasons_sz - 2)
@@ -213,17 +221,14 @@ static int check_forecast(weather_t *w, char *reasons, size_t reasons_sz,
     int severe = 0;
     int max_wind = 0;
 
-    /* Check first 3 hours */
     int nperiods = cJSON_GetArraySize(periods);
     int check = nperiods > 3 ? 3 : nperiods;
 
     for (int i = 0; i < check; i++) {
         cJSON *period = cJSON_GetArrayItem(periods, i);
 
-        /* Wind speed */
         cJSON *wind = cJSON_GetObjectItem(period, "windSpeed");
         if (wind && cJSON_IsString(wind)) {
-            /* Parse "15 mph" or "15 to 25 mph" */
             const char *ws = wind->valuestring;
             int speed = 0;
             char *to = strstr(ws, " to ");
@@ -232,16 +237,13 @@ static int check_forecast(weather_t *w, char *reasons, size_t reasons_sz,
             if (speed > max_wind) max_wind = speed;
         }
 
-        /* Severe keywords */
         cJSON *forecast = cJSON_GetObjectItem(period, "shortForecast");
         if (forecast && cJSON_IsString(forecast) && w->severe_keywords[0]) {
-            /* Check each keyword (comma-separated) */
             char kw_buf[256];
             snprintf(kw_buf, sizeof(kw_buf), "%s", w->severe_keywords);
             char *tok = strtok(kw_buf, ",");
             while (tok) {
                 while (*tok == ' ') tok++;
-                /* Case-insensitive search */
                 if (ci_strstr(forecast->valuestring, tok)) {
                     severe = 1;
                     if (rpos > 0 && rpos < reasons_sz - 2)
@@ -302,6 +304,66 @@ static void weather_event(weather_t *w, const char *severity,
         params, NULL);
 }
 
+/* --- Generic parameter control ---
+ *
+ * Read/save the current register value, then write the severe or restore value.
+ * If raw values aren't configured, fall back to legacy freq setting names. */
+
+static int write_param(weather_t *w, uint16_t value, const char *label)
+{
+    const ups_config_reg_t *reg = ups_find_config_reg(w->ups, w->control_register);
+    if (!reg) {
+        log_warn("weather: control register '%s' not found in driver",
+                 w->control_register);
+        return -1;
+    }
+    if (!reg->writable) {
+        log_warn("weather: control register '%s' is read-only", w->control_register);
+        return -1;
+    }
+
+    int rc = ups_config_write(w->ups, reg, value);
+    if (rc != 0)
+        log_error("weather: failed to write %s=%u to %s", label, value,
+                  w->control_register);
+    else
+        log_info("weather: wrote %s=%u to %s", label, value, w->control_register);
+
+    return rc;
+}
+
+static int read_and_save_param(weather_t *w)
+{
+    const ups_config_reg_t *reg = ups_find_config_reg(w->ups, w->control_register);
+    if (!reg) return -1;
+
+    uint16_t current = 0;
+    int rc = ups_config_read(w->ups, reg, &current, NULL, 0);
+    if (rc == 0) {
+        w->saved_value = current;
+        w->has_saved = 1;
+        log_info("weather: saved current %s=%u before override",
+                 w->control_register, current);
+    }
+    return rc;
+}
+
+static void apply_severe(weather_t *w)
+{
+    read_and_save_param(w);
+    write_param(w, w->severe_raw_value, "severe");
+}
+
+static void apply_restore(weather_t *w)
+{
+    if (w->has_saved) {
+        write_param(w, w->saved_value, "restore (saved)");
+        w->has_saved = 0;
+    } else {
+        write_param(w, w->normal_raw_value, "restore (default)");
+    }
+}
+
 /* --- Thread --- */
 
 static void *weather_thread(void *arg)
@@ -322,49 +384,38 @@ static void *weather_thread(void *arg)
         char reasons[512] = "";
         int severe = 0;
 
-        /* Check alerts */
         severe |= check_alerts(w, reasons, sizeof(reasons));
-
-        /* Check forecast + wind */
         severe |= check_forecast(w, reasons, sizeof(reasons), strlen(reasons));
 
-        /* Update state */
         w->severe = severe;
         snprintf(w->reasons, sizeof(w->reasons), "%s", reasons);
 
-        /* HE inhibit logic */
+        /* Parameter control logic */
         int he_active = monitor_he_inhibit_active(w->monitor);
         const char *he_source = monitor_he_inhibit_source(w->monitor);
 
         if (severe && !he_active) {
-            log_warn("weather: severe conditions (%s), setting freq to %s",
-                     reasons, w->severe_freq);
-            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, w->severe_freq);
-            if (fs) {
-                ups_cmd_set_freq_tolerance(w->ups, fs->value);
-                monitor_he_inhibit_set(w->monitor, "weather");
-            }
+            log_warn("weather: severe conditions (%s), applying override to %s",
+                     reasons, w->control_register);
+            apply_severe(w);
+            monitor_he_inhibit_set(w->monitor, "weather");
             weather_event(w, "warning", "Weather: Severe", reasons);
             push_send("UPS Weather Alert", reasons);
         } else if (!severe && he_active && strcmp(he_source, "weather") == 0) {
-            log_info("weather: conditions cleared, restoring freq to %s",
-                     w->normal_freq);
-            const ups_freq_setting_t *fs = ups_find_freq_setting(w->ups, w->normal_freq);
-            if (fs) {
-                ups_cmd_set_freq_tolerance(w->ups, fs->value);
-                monitor_he_inhibit_clear(w->monitor);
-            }
+            log_info("weather: conditions cleared, restoring %s",
+                     w->control_register);
+            apply_restore(w);
+            monitor_he_inhibit_clear(w->monitor);
             weather_event(w, "info", "Weather: Clear",
-                          "Conditions cleared, frequency tolerance restored");
+                          "Conditions cleared, parameter restored");
             push_send("UPS Weather Clear",
-                       "Conditions cleared, frequency tolerance restored");
+                       "Conditions cleared, parameter restored");
         } else if (severe && he_active && strcmp(he_source, "weather") == 0) {
             log_info("weather: still severe (%s)", reasons);
         } else if (!severe) {
             log_info("weather: all clear");
         }
 
-        /* Sleep in 1s increments so we can stop quickly */
         for (int i = 0; i < w->poll_interval && w->running; i++)
             sleep(1);
     }
@@ -389,8 +440,9 @@ weather_t *weather_create(cutils_db_t *db, monitor_t *monitor, ups_t *ups)
         return NULL;
     }
 
-    log_info("weather: zones=%s wind=%dmph poll=%ds",
-             w->alert_zones, w->wind_speed_mph, w->poll_interval);
+    log_info("weather: zones=%s wind=%dmph poll=%ds control=%s (severe=%u, normal=%u)",
+             w->alert_zones, w->wind_speed_mph, w->poll_interval,
+             w->control_register, w->severe_raw_value, w->normal_raw_value);
 
     return w;
 }
@@ -432,6 +484,7 @@ char *weather_status_json(weather_t *w)
     cJSON_AddStringToObject(obj, "alert_zones", w->alert_zones);
     cJSON_AddNumberToObject(obj, "wind_threshold_mph", w->wind_speed_mph);
     cJSON_AddNumberToObject(obj, "poll_interval", w->poll_interval);
+    cJSON_AddStringToObject(obj, "control_register", w->control_register);
 
     char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
