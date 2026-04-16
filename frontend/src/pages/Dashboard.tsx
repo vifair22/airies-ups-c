@@ -120,51 +120,33 @@ function classifyUtility(raw: number): UtilityHealth {
 }
 
 const utilityStyles: Record<UtilityHealth, PlaneStyle & { label: string }> = {
-  he:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'Utility OK -- HE Eligible' },
-  online:   { border: 'border-sky-700',    bg: 'bg-sky-950/30',    accent: 'text-sky-400',    label: 'Utility Present -- Online' },
-  degraded: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Utility Degraded' },
-  down:     { border: 'border-red-600',    bg: 'bg-red-950/30',    accent: 'text-red-400',    label: 'Utility Lost -- On Battery' },
+  he:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'OK (HE Eligible)' },
+  online:   { border: 'border-sky-700',    bg: 'bg-sky-950/30',    accent: 'text-sky-400',    label: 'OK' },
+  degraded: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Degraded' },
+  down:     { border: 'border-red-600',    bg: 'bg-red-950/30',    accent: 'text-red-400',    label: 'Lost' },
 }
 
 /* UPS plane — returns style + badge, topology-aware */
 
-function classifyUpsPlane(raw: number, hasBypass: boolean, isStandby: boolean, avr: AvrState): { style: PlaneStyle & { label: string } } {
+function classifyUpsPlane(raw: number, hasBypass: boolean): { style: PlaneStyle & { label: string } } {
   if (raw & (ST.FAULT | ST.FAULT_STATE))
     return { style: { border: 'border-red-600', bg: 'bg-red-950/30', accent: 'text-red-400', label: 'Fault' } }
   if (raw & ST.OUTPUT_OFF)
-    return { style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted', label: 'Output Off' } }
+    return { style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted', label: 'Off' } }
 
-  /* Bypass (double-conversion only) */
   if (hasBypass && (raw & ST.BYPASS)) {
     if (raw & ST.COMMANDED)
-      return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'Bypass (Commanded)' } }
-    return { style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Bypass (Fault-Forced)' } }
+      return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'Bypass' } }
+    return { style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Bypass (Forced)' } }
   }
 
-  /* On battery — all topologies */
   if (raw & ST.ON_BATTERY)
-    return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'On Battery -- Inverter' } }
+    return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'On Battery' } }
 
-  /* HE mode */
   if (raw & ST.HE_MODE)
-    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'High Efficiency' } }
+    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'HE' } }
 
-  /* Standby: normal online = passthrough */
-  if (isStandby)
-    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'Standby -- Passthrough' } }
-
-  /* Line-interactive: show AVR state */
-  if (!hasBypass) {
-    const avrLabels: Record<AvrState, string> = {
-      passthrough: 'AVR -- Passthrough',
-      boost:       'AVR -- Boost',
-      buck:        'AVR -- Buck',
-    }
-    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: avrLabels[avr] } }
-  }
-
-  /* Double-conversion: normal online */
-  return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'Double Conversion' } }
+  return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'Online' } }
 }
 
 /* Output plane */
@@ -176,11 +158,11 @@ function classifyOutput(raw: number, loadPct: number): { style: PlaneStyle; badg
 
   if (isOff && isFault) return {
     style: { border: 'border-red-600', bg: 'bg-red-950/30', accent: 'text-red-400' },
-    badge: 'Output Off (Fault)',
+    badge: 'Off (Fault)',
   }
   if (isOff) return {
     style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted' },
-    badge: 'Output Off',
+    badge: 'Off',
   }
   if (isOverload || loadPct > 80) return {
     style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400' },
@@ -192,7 +174,7 @@ function classifyOutput(raw: number, loadPct: number): { style: PlaneStyle; badg
   }
   return {
     style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400' },
-    badge: 'Output Stage Active',
+    badge: 'Active',
   }
 }
 
@@ -343,29 +325,14 @@ export default function Dashboard() {
   /* Classify planes */
   const utilHealth = classifyUtility(raw)
   const uStyle = utilityStyles[utilHealth]
-  const { style: upStyle } = classifyUpsPlane(raw, canBypass, isStandby, avr)
+  const { style: upStyle } = classifyUpsPlane(raw, canBypass)
   const { style: outStyle, badge: outBadge } = classifyOutput(raw, out?.load_pct ?? 0)
 
-  /* Operating mode label (topology-aware) */
-  const operatingMode =
-    (raw & ST.ON_BATTERY) ? 'On Battery' :
-    (raw & ST.HE_MODE) ? 'High Efficiency' :
-    isStandby ? 'Standby' :
-    canBypass ? ((raw & ST.BYPASS) ? 'Bypass' : 'Online / Double Conversion') :
-    `Line Interactive / AVR${avr !== 'passthrough' ? ` (${avr})` : ''}`
-
-  /* Topology label for UPS plane */
+  /* Topology — static hardware property, never changes with status */
   const topologyLabel =
-    (raw & ST.ON_BATTERY) ? 'Inverter (Battery)' :
-    (raw & ST.HE_MODE) ? 'HE / Standby' :
-    isStandby ? 'Standby / Offline' :
-    canBypass ? (
-      (raw & ST.BYPASS) ? 'Bypass (straight-through)' : 'Double Conversion'
-    ) : (
-      avr === 'boost' ? 'AVR Boost' :
-      avr === 'buck' ? 'AVR Buck' :
-      'AVR Passthrough'
-    )
+    isStandby ? 'Standby' :
+    canBypass ? 'Double Conversion' :
+    'Line Interactive'
 
   return (
     <div className="space-y-6">
@@ -458,26 +425,16 @@ export default function Dashboard() {
       {/* ── Cascading power planes ── */}
       <div className="space-y-3">
 
-        {/* Utility plane */}
-        <Plane title="Utility / Input" badge={uStyle.label} styles={uStyle}>
+        {/* Input plane */}
+        <Plane title="Input" badge={uStyle.label} styles={uStyle}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
-            <Metric label="Input Voltage" value={inp?.voltage.toFixed(1) ?? '--'} unit="VAC" accent={uStyle.accent} />
+            <Metric label="Voltage" value={inp?.voltage.toFixed(1) ?? '--'} unit="VAC" accent={uStyle.accent} />
+            <Metric label="Last Transfer" value={humanizeTransfer(s.transfer_reason)} />
             {canBypass && (
               <>
                 <Metric label="Bypass Voltage" value={s.bypass?.voltage.toFixed(1) ?? '--'} unit="VAC" />
                 <Metric label="Bypass Frequency" value={s.bypass?.frequency.toFixed(2) ?? '--'} unit="Hz" />
               </>
-            )}
-            <Metric label="Last Transfer" value={humanizeTransfer(s.transfer_reason)} />
-            <Metric label="Operating Mode" value={operatingMode} accent={uStyle.accent} />
-            <Metric label="Efficiency" value={s.efficiency != null && s.efficiency >= 0 ? `${s.efficiency.toFixed(1)}` : '--'} unit="%" />
-            {canHE && s.he_mode?.inhibited && (
-              <Metric label="HE Inhibit" value={s.he_mode.source} accent="text-yellow-400" />
-            )}
-            {!canBypass && !isStandby && avr !== 'passthrough' && (
-              <Metric label="AVR Correction" value={
-                inp && out ? `${(out.voltage - inp.voltage).toFixed(1)}V (${avr})` : '--'
-              } accent="text-sky-400" />
             )}
           </div>
         </Plane>
@@ -485,22 +442,22 @@ export default function Dashboard() {
         {/* UPS plane */}
         <Plane title="UPS" badge={upStyle.label} styles={upStyle}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
-            <Metric label="Battery Charge" value={bat?.charge_pct.toFixed(1) ?? '--'} unit="%" accent={
+            <Metric label="Topology" value={topologyLabel} />
+            <Metric label="Charge" value={bat?.charge_pct.toFixed(1) ?? '--'} unit="%" accent={
               bat && bat.charge_pct < 30 ? 'text-red-400' : bat && bat.charge_pct < 60 ? 'text-yellow-400' : 'text-green-400'
             } />
-            <Metric label="Battery Voltage" value={bat?.voltage.toFixed(1) ?? '--'} unit="VDC" />
+            <Metric label="Battery" value={bat?.voltage.toFixed(1) ?? '--'} unit="VDC" />
             <Metric label="Runtime" value={bat ? fmtRuntime(bat.runtime_sec) : '--'} />
-            <Metric label="Topology" value={topologyLabel} />
-            {canBypass && (raw & ST.BYPASS) !== 0 && (
-              <>
-                <Metric label="Bypass Voltage" value={s.bypass?.voltage.toFixed(1) ?? '--'} unit="VAC" />
-                <Metric label="Bypass Frequency" value={s.bypass?.frequency.toFixed(2) ?? '--'} unit="Hz" />
-              </>
+            {s.efficiency != null && s.efficiency >= 0 && (
+              <Metric label="Efficiency" value={s.efficiency.toFixed(1)} unit="%" />
             )}
-            {!canBypass && !isStandby && !(raw & ST.ON_BATTERY) && !(raw & ST.HE_MODE) && (
-              <Metric label="AVR State" value={
-                avr === 'boost' ? 'Boosting' : avr === 'buck' ? 'Bucking' : 'Passthrough'
+            {!canBypass && !isStandby && (
+              <Metric label="AVR" value={
+                avr === 'boost' ? 'Boost' : avr === 'buck' ? 'Buck' : 'Passthrough'
               } accent={avr !== 'passthrough' ? 'text-sky-400' : undefined} />
+            )}
+            {canHE && s.he_mode?.inhibited && (
+              <Metric label="HE Inhibit" value={s.he_mode.source} accent="text-yellow-400" />
             )}
             {(raw & ST.TEST) !== 0 && <Metric label="Self-Test" value="In Progress" accent="text-blue-400" />}
             {(raw & ST.SHUT_PENDING) !== 0 && <Metric label="Shutdown" value="Pending" accent="text-red-400" />}
@@ -515,11 +472,11 @@ export default function Dashboard() {
         {/* Output plane */}
         <Plane title="Output" badge={outBadge} styles={outStyle}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
-            <Metric label="Output Voltage" value={out?.voltage.toFixed(1) ?? '--'} unit="VAC" />
-            <Metric label="Output Frequency" value={out?.frequency.toFixed(2) ?? '--'} unit="Hz" />
-            <Metric label="Output Current" value={out?.current.toFixed(1) ?? '--'} unit="A" />
+            <Metric label="Voltage" value={out?.voltage.toFixed(1) ?? '--'} unit="VAC" />
+            <Metric label="Frequency" value={out?.frequency.toFixed(2) ?? '--'} unit="Hz" />
+            <Metric label="Current" value={out?.current.toFixed(1) ?? '--'} unit="A" />
             <Metric label="Real Power" value={out && nomW ? fmtWatts(out.load_pct, nomW) : '--'} />
-            <Metric label="Apparent Power" value={out && nomVA ? fmtVA(out.load_pct, nomVA) : '--'} />
+            <Metric label="Apparent" value={out && nomVA ? fmtVA(out.load_pct, nomVA) : '--'} />
             {out?.energy_wh != null && out.energy_wh > 0 && (
               <Metric label="Cumulative Energy" value={out.energy_wh >= 1000 ? `${(out.energy_wh / 1000).toFixed(1)} kWh` : `${out.energy_wh} Wh`} />
             )}
