@@ -318,11 +318,22 @@ int ups_cmd_cancel_mute(ups_t *ups)
     return rc;
 }
 
-int ups_cmd_beep_test(ups_t *ups)
+int ups_cmd_beep_short(ups_t *ups)
 {
-    if (!ups->driver->cmd_beep_test) return UPS_ERR_NOT_SUPPORTED;
+    if (!ups->driver->cmd_beep_short) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    int rc = ups->driver->cmd_beep_test(ups->ctx);
+    int rc = ups->driver->cmd_beep_short(ups->ctx);
+    modbus_flush(ups->ctx);
+    post_command_settle();
+    pthread_mutex_unlock(&ups->cmd_mutex);
+    return rc;
+}
+
+int ups_cmd_beep_continuous(ups_t *ups)
+{
+    if (!ups->driver->cmd_beep_continuous) return UPS_ERR_NOT_SUPPORTED;
+    pthread_mutex_lock(&ups->cmd_mutex);
+    int rc = ups->driver->cmd_beep_continuous(ups->ctx);
     modbus_flush(ups->ctx);
     post_command_settle();
     pthread_mutex_unlock(&ups->cmd_mutex);

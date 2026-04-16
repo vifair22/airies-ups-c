@@ -164,9 +164,14 @@ static int srt_cmd_cancel_mute(modbus_t *ctx)
     return modbus_write_register(ctx, SRT_REG_CMD_UI, 0x0008) == 1 ? 0 : -1;
 }
 
-static int srt_cmd_beep_test(modbus_t *ctx)
+static int srt_cmd_beep_short(modbus_t *ctx)
 {
     return modbus_write_register(ctx, SRT_REG_CMD_UI, 0x0001) == 1 ? 0 : -1;
+}
+
+static int srt_cmd_beep_continuous(modbus_t *ctx)
+{
+    return modbus_write_register(ctx, SRT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_bypass_enable(modbus_t *ctx)
@@ -340,7 +345,8 @@ const ups_driver_t ups_driver_srt = {
     .cmd_clear_faults    = srt_cmd_clear_faults,
     .cmd_mute_alarm      = srt_cmd_mute_alarm,
     .cmd_cancel_mute     = srt_cmd_cancel_mute,
-    .cmd_beep_test       = srt_cmd_beep_test,
+    .cmd_beep_short      = srt_cmd_beep_short,
+    .cmd_beep_continuous = srt_cmd_beep_continuous,
     .cmd_bypass_enable   = srt_cmd_bypass_enable,
     .cmd_bypass_disable  = srt_cmd_bypass_disable,
     .cmd_set_freq_tolerance = srt_cmd_set_freq_tolerance,

@@ -83,7 +83,9 @@ export default function Commands() {
               <CmdButton label="Runtime Calibration" action="runtime_cal" variant="warn"
                 confirm="Runtime calibration deeply discharges the battery. Continue?" />
             )}
-            {has('beep') && <CmdButton label="Beep Test" action="beep" />}
+            {has('beep') && <CmdButton label="Short Beep" action="beep_short" />}
+            {has('beep') && <CmdButton label="Continuous Test" action="beep_continuous" variant="warn"
+              confirm="This starts a continuous beep + LED test. Use Mute to stop it." />}
           </div>
         </Section>
 

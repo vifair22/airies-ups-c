@@ -189,7 +189,8 @@ static int cmd_cmd(const char *sock, int argc, char **argv)
     if (strcmp(sub, "clear-faults") == 0) return send_action(sock, "clear_faults", NULL, NULL);
     if (strcmp(sub, "mute") == 0)         return send_action(sock, "mute", NULL, NULL);
     if (strcmp(sub, "unmute") == 0)       return send_action(sock, "unmute", NULL, NULL);
-    if (strcmp(sub, "beep") == 0)         return send_action(sock, "beep", NULL, NULL);
+    if (strcmp(sub, "beep") == 0)         return send_action(sock, "beep_short", NULL, NULL);
+    if (strcmp(sub, "beep-continuous") == 0) return send_action(sock, "beep_continuous", NULL, NULL);
 
     if (strcmp(sub, "bypass") == 0) {
         const char *dir = find_subcmd(argc, argv, 3, NULL, 0);

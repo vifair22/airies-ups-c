@@ -96,7 +96,8 @@ typedef struct ups_driver {
     int (*cmd_clear_faults)(modbus_t *ctx);
     int (*cmd_mute_alarm)(modbus_t *ctx);
     int (*cmd_cancel_mute)(modbus_t *ctx);
-    int (*cmd_beep_test)(modbus_t *ctx);
+    int (*cmd_beep_short)(modbus_t *ctx);
+    int (*cmd_beep_continuous)(modbus_t *ctx);
     int (*cmd_bypass_enable)(modbus_t *ctx);
     int (*cmd_bypass_disable)(modbus_t *ctx);
     int (*cmd_set_freq_tolerance)(modbus_t *ctx, uint16_t setting);

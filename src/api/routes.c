@@ -160,9 +160,13 @@ static api_response_t handle_cmd(const api_request_t *req, void *ud)
         rc = ups_cmd_cancel_mute(ctx->ups);
         result_msg = "alarm unmuted";
 
-    } else if (strcmp(act, "beep") == 0) {
-        rc = ups_cmd_beep_test(ctx->ups);
-        result_msg = "beep test sent";
+    } else if (strcmp(act, "beep_short") == 0) {
+        rc = ups_cmd_beep_short(ctx->ups);
+        result_msg = "short beep test sent";
+
+    } else if (strcmp(act, "beep_continuous") == 0) {
+        rc = ups_cmd_beep_continuous(ctx->ups);
+        result_msg = "continuous test started";
 
     } else if (strcmp(act, "bypass_on") == 0) {
         rc = ups_cmd_bypass_enable(ctx->ups);
