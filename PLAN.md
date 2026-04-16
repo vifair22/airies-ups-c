@@ -301,6 +301,17 @@ React + Tailwind SPA, built on dev machine, static bundle served by daemon.
 - [ ] Graceful shutdown (drain in-flight requests, close DB cleanly)
 - [ ] Comprehensive testing
 
+### Data Capture Gaps
+
+Items not currently captured that should be addressed:
+
+- [ ] UPS config register change history — `ups_config` table exists but isn't populated on reads; should snapshot on change
+- [ ] Telemetry connectivity gaps — no record of when UPS was unreachable or how long
+- [ ] Outlet group states over time — MOG/SOG0/SOG1 state changes not tracked in telemetry
+- [ ] Cumulative energy consumption — `output_energy_wh` from dynamic block not recorded
+- [ ] Weather forecast data — severe/clear transitions go to events but raw NWS forecast data isn't stored
+- [ ] Auth/session audit log — login attempts, token creation not logged
+
 ---
 
 ## Dependencies
