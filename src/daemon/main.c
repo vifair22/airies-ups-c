@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 static volatile int running = 1;
+static volatile int restart_requested = 0;
 
 static void sig_handler(int sig)
 {
@@ -27,21 +28,39 @@ static void sig_handler(int sig)
     running = 0;
 }
 
+/* Called from API restart endpoint — sets flag for main loop.
+ * Declared extern in routes.c. */
+void app_request_restart(void);
+void app_request_restart(void)
+{
+    restart_requested = 1;
+    running = 0;
+}
+
 /* --- Event callback: push alerts to Pushover --- */
+
+static int severity_rank(const char *s)
+{
+    if (strcmp(s, "critical") == 0) return 4;
+    if (strcmp(s, "error") == 0)    return 3;
+    if (strcmp(s, "warning") == 0)  return 2;
+    if (strcmp(s, "info") == 0)     return 1;
+    return 0;
+}
 
 static void on_monitor_event(const char *severity, const char *category,
                              const char *title, const char *message,
                              void *userdata)
 {
-    (void)userdata;
+    cutils_config_t *cfg = userdata;
     (void)category;
 
-    /* Push warnings and above */
-    if (strcmp(severity, "warning") == 0 ||
-        strcmp(severity, "error") == 0 ||
-        strcmp(severity, "critical") == 0) {
+    const char *min = config_get_str(cfg, "push.min_severity");
+    if (!min) min = "warning";
+    if (strcmp(min, "off") == 0) return;
+
+    if (severity_rank(severity) >= severity_rank(min))
         push_send(title, message);
-    }
 }
 
 /* --- Alert integration --- */
@@ -66,8 +85,7 @@ static void on_monitor_poll(const ups_data_t *data, void *userdata)
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
+    appguard_set_argv(argc, argv);
 
     /* --- Phase 1: AppGuard (config, DB, migrations, logging, push) --- */
 
@@ -106,7 +124,7 @@ int main(int argc, char *argv[])
         int telem_sec = config_get_int(cfg, "monitor.telemetry_interval", 30);
         mon = monitor_create(ups, db, poll_sec, telem_sec);
         if (mon) {
-            monitor_on_event(mon, on_monitor_event, NULL);
+            monitor_on_event(mon, on_monitor_event, cfg);
 
             /* Wire alert engine into monitor poll cycle */
             alerts_init(&alert_ctx.state);
@@ -156,6 +174,7 @@ int main(int argc, char *argv[])
         .weather  = weather,
         .db       = db,
         .config   = cfg,
+        .guard    = guard,
     };
     api_register_routes(api, &route_ctx);
 
@@ -177,6 +196,14 @@ int main(int argc, char *argv[])
     if (mon) monitor_stop(mon);
     if (ups) ups_close(ups);
     shutdown_free(shutdown);
+
+    if (restart_requested) {
+        log_info("restarting via appguard_restart");
+        appguard_restart(guard);
+        /* only reached if execv fails */
+        log_error("restart failed, exiting");
+    }
+
     appguard_shutdown(guard);
 
     return 0;

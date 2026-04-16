@@ -25,24 +25,38 @@ export default function UpsConfig() {
     <div>
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
       <div className="rounded-lg border border-gray-800 overflow-hidden">
-        <div className="bg-gray-900 px-4 py-2.5">
-          <div className="h-3 w-24 bg-gray-800 rounded animate-pulse" />
+        {/* Header */}
+        <div className="bg-gray-900 px-4 py-2.5 flex gap-8">
+          <div className="flex-[4] h-3 w-20 bg-gray-800 rounded animate-pulse" />
+          <div className="flex-[3] h-3 w-12 bg-gray-800 rounded animate-pulse" />
+          <div className="flex-[1] h-3 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
+          <div className="flex-[2] h-3 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
         </div>
-        {[1,2,3,4,5,6,7,8].map(i => (
-          <div key={i} className="border-t border-gray-800 px-4 py-3 flex gap-8">
-            <div className="flex-[4]">
-              <div className="h-4 w-48 bg-gray-800 rounded animate-pulse mb-1" />
-              <div className="h-3 w-32 bg-gray-800/50 rounded animate-pulse" />
+        {/* Simulate 6 groups with varying register counts */}
+        {[3, 1, 9, 6, 2, 2].map((count, gi) => (
+          <div key={gi}>
+            {/* Group header */}
+            <div className="bg-gray-900/50 border-t border-gray-800 px-4 py-1.5">
+              <div className="h-2.5 w-28 bg-gray-800/50 rounded animate-pulse" />
             </div>
-            <div className="flex-[3]">
-              <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
-            </div>
-            <div className="flex-[1]">
-              <div className="h-4 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
-            </div>
-            <div className="flex-[2]">
-              <div className="h-4 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
-            </div>
+            {/* Register rows */}
+            {Array.from({ length: count }).map((_, ri) => (
+              <div key={ri} className="border-t border-gray-800 px-4 py-3 flex gap-8">
+                <div className="flex-[4]">
+                  <div className="h-4 w-48 bg-gray-800 rounded animate-pulse mb-1" />
+                  <div className="h-3 w-32 bg-gray-800/50 rounded animate-pulse" />
+                </div>
+                <div className="flex-[3]">
+                  <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
+                </div>
+                <div className="flex-[1]">
+                  <div className="h-4 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
+                </div>
+                <div className="flex-[2]">
+                  <div className="h-4 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
+                </div>
+              </div>
+            ))}
           </div>
         ))}
       </div>

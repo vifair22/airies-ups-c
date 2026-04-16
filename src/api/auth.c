@@ -93,7 +93,7 @@ char *auth_create_token(cutils_db_t *db, int expire_hours)
     char expires[32];
     time_t exp_time = time(NULL) + (time_t)expire_hours * 3600;
     struct tm tm;
-    localtime_r(&exp_time, &tm);
+    gmtime_r(&exp_time, &tm);
     strftime(expires, sizeof(expires), "%Y-%m-%d %H:%M:%S", &tm);
 
     const char *params[] = { token, expires, NULL };

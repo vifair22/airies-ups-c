@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=sysadmin
-WorkingDirectory=/home/sysadmin/airies-ups-c
-ExecStart=/home/sysadmin/airies-ups-c/airies-ups
+WorkingDirectory=/home/sysadmin/airies-ups
+ExecStart=/home/sysadmin/airies-ups/build/airies-upsd
 Restart=on-failure
 RestartSec=5
 RuntimeDirectory=airies-ups

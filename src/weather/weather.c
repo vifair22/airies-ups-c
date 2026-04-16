@@ -292,7 +292,7 @@ static void weather_event(weather_t *w, const char *severity,
     char ts[32];
     time_t now = time(NULL);
     struct tm tm;
-    localtime_r(&now, &tm);
+    gmtime_r(&now, &tm);
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
     const char *params[] = { ts, severity, "weather", title, message, NULL };

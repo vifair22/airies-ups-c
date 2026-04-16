@@ -14,7 +14,7 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
     /* Phase 1: Delete data older than retention_days */
     if (cfg->retention_days > 0) {
         time_t cutoff = now - (time_t)cfg->retention_days * 86400;
-        localtime_r(&cutoff, &tm);
+        gmtime_r(&cutoff, &tm);
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
         const char *params[] = { ts, NULL };
@@ -34,7 +34,7 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
      * closest to the window midpoint and delete the rest. */
     if (cfg->full_res_hours > 0 && cfg->downsample_minutes > 0) {
         time_t boundary = now - (time_t)cfg->full_res_hours * 3600;
-        localtime_r(&boundary, &tm);
+        gmtime_r(&boundary, &tm);
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
         /* Delete rows that are NOT the "representative" row for their

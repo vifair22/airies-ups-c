@@ -61,6 +61,19 @@ static const config_key_t app_db_keys[] = {
       "Voltage alert hysteresis deadband (V)",
       CFG_STORE_DB, 0 },
 
+    /* Pushover notification threshold */
+    { "push.min_severity",          CFG_STRING, "warning",
+      "Minimum event severity for Pushover notifications (off, info, warning, error, critical)",
+      CFG_STORE_DB, 0 },
+
+    /* Bypass voltage window (not readable via Modbus — set to match LCD) */
+    { "bypass.voltage_high",        CFG_INT, "140",
+      "Bypass upper voltage limit (V) — match UPS LCD setting",
+      CFG_STORE_DB, 0 },
+    { "bypass.voltage_low",         CFG_INT, "90",
+      "Bypass lower voltage limit (V) — match UPS LCD setting",
+      CFG_STORE_DB, 0 },
+
     { NULL, 0, NULL, NULL, 0, 0 }  /* sentinel */
 };
 
@@ -72,6 +85,8 @@ static const config_section_t app_sections[] = {
     { "pushover", "Pushover Notifications" },
     { "monitor",  "Monitor Settings" },
     { "alerts",   "Alert Thresholds" },
+    { "push",     "Push Notifications" },
+    { "bypass",   "Bypass Settings" },
     { NULL, NULL }  /* sentinel */
 };
 

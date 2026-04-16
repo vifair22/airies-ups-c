@@ -77,7 +77,7 @@ static void fire_event(monitor_t *mon, const char *severity,
     char ts[32];
     time_t now = time(NULL);
     struct tm tm;
-    localtime_r(&now, &tm);
+    gmtime_r(&now, &tm);
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
     const char *params[] = { ts, severity, category, title, message, NULL };
@@ -99,7 +99,7 @@ static void record_telemetry(monitor_t *mon, const ups_data_t *d)
     char ts[32];
     time_t now = time(NULL);
     struct tm tm;
-    localtime_r(&now, &tm);
+    gmtime_r(&now, &tm);
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
     char status_s[16], charge_s[16], runtime_s[16], bv_s[16];
@@ -233,19 +233,80 @@ static void *monitor_thread(void *arg)
             }
         }
 
-        /* State change detection */
-        uint64_t sig = status_signature(&data);
-        if (!mon->first_poll && sig != mon->prev_sig) {
-            char line[512];
-            format_status_line(&data, line, sizeof(line));
-            log_info("%s", line);
+        /* State change detection — per-bit transition events */
+        if (!mon->first_poll) {
+            uint32_t changed = mon->prev_status ^ data.status;
+            uint32_t set     = changed & data.status;
+            uint32_t cleared = changed & mon->prev_status;
+            char msg[512];
 
-            fire_event(mon, "info", "status", "UPS Status Change", line);
+            if (changed) {
+                format_status_line(&data, msg, sizeof(msg));
+                log_info("%s", msg);
+            }
+
+            /* Power events */
+            if (set & UPS_ST_ON_BATTERY) {
+                snprintf(msg, sizeof(msg),
+                         "UPS switched to battery — charge %.0f%%, runtime %um%us",
+                         data.charge_pct, data.runtime_sec / 60,
+                         data.runtime_sec % 60);
+                fire_event(mon, "warning", "power", "On Battery", msg);
+            }
+            if (cleared & UPS_ST_ON_BATTERY)
+                fire_event(mon, "info", "power", "Utility Restored",
+                           "UPS returned to utility power");
+            if (set & UPS_ST_OUTPUT_OFF)
+                fire_event(mon, "error", "power", "Output Off",
+                           "UPS output has been turned off");
+            if (cleared & UPS_ST_OUTPUT_OFF)
+                fire_event(mon, "info", "power", "Output Restored",
+                           "UPS output has been restored");
+
+            /* Mode events */
+            if (set & UPS_ST_HE_MODE)
+                fire_event(mon, "info", "mode", "HE Mode Entered",
+                           "UPS entered high efficiency mode");
+            if (cleared & UPS_ST_HE_MODE)
+                fire_event(mon, "info", "mode", "HE Mode Exited",
+                           "UPS exited high efficiency mode");
+            if (set & UPS_ST_BYPASS)
+                fire_event(mon, "warning", "mode", "Bypass Entered",
+                           (data.status & UPS_ST_COMMANDED)
+                               ? "UPS entered commanded bypass — output is unprotected"
+                               : "UPS transferred to bypass due to internal fault");
+            if (cleared & UPS_ST_BYPASS)
+                fire_event(mon, "info", "mode", "Bypass Exited",
+                           "UPS returned to normal operation from bypass");
+
+            /* Fault events */
+            if (set & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
+                fire_event(mon, "error", "fault", "Fault Detected",
+                           "UPS has entered a fault condition");
+            if (cleared & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
+                fire_event(mon, "info", "fault", "Fault Cleared",
+                           "UPS fault condition has been cleared");
+            if (set & UPS_ST_OVERLOAD)
+                fire_event(mon, "error", "fault", "Overload",
+                           "UPS output is overloaded");
+            if (cleared & UPS_ST_OVERLOAD)
+                fire_event(mon, "info", "fault", "Overload Cleared",
+                           "UPS overload condition has cleared");
+
+            /* Test events */
+            if (set & UPS_ST_TEST)
+                fire_event(mon, "info", "test", "Self-Test Started",
+                           "UPS self-test is in progress");
+            if (cleared & UPS_ST_TEST)
+                fire_event(mon, "info", "test", "Self-Test Ended",
+                           "UPS self-test has completed");
 
             /* Shutdown trigger: on battery + shutdown imminent */
             if ((data.status & UPS_ST_ON_BATTERY) &&
-                (data.sig_status & UPS_SIG_SHUTDOWN_IMMINENT)) {
-                char msg[256];
+                (data.sig_status & UPS_SIG_SHUTDOWN_IMMINENT) &&
+                !(mon->prev_status & UPS_ST_ON_BATTERY &&
+                  /* only fire once on transition */
+                  (mon->data.sig_status & UPS_SIG_SHUTDOWN_IMMINENT))) {
                 snprintf(msg, sizeof(msg),
                          "Battery: %.0f%% Runtime: %um%us — shutdown triggered",
                          data.charge_pct, data.runtime_sec / 60,
@@ -255,15 +316,17 @@ static void *monitor_thread(void *arg)
                            "Shutdown Triggered", msg);
             }
 
-            mon->prev_sig = sig;
             mon->prev_status = data.status;
         }
 
+        /* Also track the full signature for transfer reason changes */
+        uint64_t sig = status_signature(&data);
         if (mon->first_poll) {
             mon->prev_sig = sig;
             mon->prev_status = data.status;
             mon->first_poll = 0;
         }
+        mon->prev_sig = sig;
 
         /* Telemetry recording (downsampled) */
         time_t now = time(NULL);

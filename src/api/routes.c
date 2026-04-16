@@ -33,6 +33,8 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         cJSON_AddStringToObject(inv_obj, "firmware", inv.firmware);
         cJSON_AddNumberToObject(inv_obj, "nominal_va", inv.nominal_va);
         cJSON_AddNumberToObject(inv_obj, "nominal_watts", inv.nominal_watts);
+        cJSON_AddNumberToObject(inv_obj, "sog_config", inv.sog_config);
+        cJSON_AddNumberToObject(inv_obj, "freq_tolerance", inv.freq_tolerance);
         cJSON_AddItemToObject(obj, "inventory", inv_obj);
     }
 
@@ -56,20 +58,59 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         cJSON_AddNumberToObject(out, "frequency", data.output_frequency);
         cJSON_AddNumberToObject(out, "current", data.output_current);
         cJSON_AddNumberToObject(out, "load_pct", data.load_pct);
+        cJSON_AddNumberToObject(out, "energy_wh", data.output_energy_wh);
         cJSON_AddItemToObject(obj, "output", out);
+
+        /* Outlet group states */
+        cJSON *outlets = cJSON_CreateObject();
+        cJSON_AddNumberToObject(outlets, "mog", data.outlet_mog);
+        cJSON_AddNumberToObject(outlets, "sog0", data.outlet_sog0);
+        cJSON_AddNumberToObject(outlets, "sog1", data.outlet_sog1);
+        cJSON_AddItemToObject(obj, "outlets", outlets);
 
         cJSON *byp = cJSON_CreateObject();
         cJSON_AddNumberToObject(byp, "voltage", data.bypass_voltage);
         cJSON_AddNumberToObject(byp, "frequency", data.bypass_frequency);
+        cJSON_AddNumberToObject(byp, "status", data.bypass_status);
+        cJSON_AddNumberToObject(byp, "voltage_high",
+            config_get_int(ctx->config, "bypass.voltage_high", 140));
+        cJSON_AddNumberToObject(byp, "voltage_low",
+            config_get_int(ctx->config, "bypass.voltage_low", 90));
         cJSON_AddItemToObject(obj, "bypass", byp);
 
         cJSON *in = cJSON_CreateObject();
         cJSON_AddNumberToObject(in, "voltage", data.input_voltage);
+        cJSON_AddNumberToObject(in, "status", data.input_status);
+        if (ctx->transfer_high > 0) {
+            cJSON_AddNumberToObject(in, "transfer_high", ctx->transfer_high);
+            cJSON_AddNumberToObject(in, "transfer_low", ctx->transfer_low);
+            cJSON_AddNumberToObject(in, "warn_offset",
+                config_get_int(ctx->config, "alerts.voltage_warn_offset", 5));
+        }
         cJSON_AddItemToObject(obj, "input", in);
 
         cJSON_AddNumberToObject(obj, "efficiency", data.efficiency);
         cJSON_AddStringToObject(obj, "transfer_reason",
                                 ups_transfer_reason_str(data.transfer_reason));
+
+        /* Error registers */
+        cJSON *errors = cJSON_CreateObject();
+        cJSON_AddNumberToObject(errors, "general", data.general_error);
+        cJSON_AddNumberToObject(errors, "power_system", data.power_system_error);
+        cJSON_AddNumberToObject(errors, "battery_system", data.bat_system_error);
+        cJSON_AddItemToObject(obj, "errors", errors);
+
+        /* Test/cal status */
+        cJSON_AddNumberToObject(obj, "bat_test_status", data.bat_test_status);
+        cJSON_AddNumberToObject(obj, "rt_cal_status", data.rt_cal_status);
+        cJSON_AddNumberToObject(obj, "bat_lifetime_status", data.bat_lifetime_status);
+
+        /* Timers */
+        cJSON *timers = cJSON_CreateObject();
+        cJSON_AddNumberToObject(timers, "shutdown", data.timer_shutdown);
+        cJSON_AddNumberToObject(timers, "start", data.timer_start);
+        cJSON_AddNumberToObject(timers, "reboot", data.timer_reboot);
+        cJSON_AddItemToObject(obj, "timers", timers);
 
         /* HE inhibit */
         if (monitor_he_inhibit_active(ctx->monitor)) {
@@ -461,6 +502,11 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
 
+    /* Refresh cached thresholds if a transfer register was written */
+    if (strcmp(reg->name, "transfer_high") == 0 ||
+        strcmp(reg->name, "transfer_low") == 0)
+        api_refresh_thresholds(ctx);
+
     /* Return 200 even on rejection so the UI gets the current value */
     return api_ok(json);
 }
@@ -849,10 +895,40 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     return api_ok(json);
 }
 
+/* --- Restart endpoint --- */
+
+/* Defined in daemon/main.c — sets flag for main loop */
+extern void app_request_restart(void);
+
+static api_response_t handle_restart(const api_request_t *req, void *ud)
+{
+    (void)req;
+    (void)ud;
+
+    log_info("restart requested via API");
+    app_request_restart();
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "restarting");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
+/* --- Threshold cache --- */
+
+void api_refresh_thresholds(route_ctx_t *ctx)
+{
+    if (!ctx->ups) return;
+    ups_read_thresholds(ctx->ups, &ctx->transfer_high, &ctx->transfer_low);
+}
+
 /* --- Route registration --- */
 
 void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
 {
+    /* Populate threshold cache at startup */
+    api_refresh_thresholds(ctx);
     api_server_route(srv, "/api/status",       API_GET,  handle_status,         ctx);
     api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,            ctx);
     api_server_route(srv, "/api/events",       API_GET,  handle_events,         ctx);
@@ -865,6 +941,7 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/shutdown/targets", API_POST, handle_shutdown_targets_post, ctx);
     api_server_route(srv, "/api/config/app",   API_GET,  handle_app_config_get, ctx);
     api_server_route(srv, "/api/config/app",   API_POST, handle_app_config_set, ctx);
+    api_server_route(srv, "/api/restart",      API_POST, handle_restart,        ctx);
     api_server_route(srv, "/api/auth/setup",   API_POST, handle_auth_setup, ctx);
     api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login, ctx);
     api_server_route(srv, "/api/weather/status", API_GET,  handle_weather_status,     ctx);
