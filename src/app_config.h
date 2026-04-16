@@ -97,7 +97,7 @@ static inline appguard_config_t app_appguard_config(void)
     appguard_config_t cfg = {
         .app_name           = "airies-ups",
         .config_path        = NULL,  /* auto-detect: config.yaml next to binary */
-        .on_first_run       = CFG_FIRST_RUN_EXIT,
+        .on_first_run       = CFG_FIRST_RUN_CONTINUE,
         .file_keys          = app_file_keys,
         .db_keys            = app_db_keys,
         .sections           = app_sections,

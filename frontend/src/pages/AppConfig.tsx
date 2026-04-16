@@ -37,6 +37,8 @@ export default function AppConfig() {
         Changes to these settings require a daemon restart.
       </p>
 
+      <PasswordChange />
+
       {groups.map((group) => (
         <div key={group} className="mb-4">
           <div className="rounded-lg bg-gray-900 border border-gray-800">
@@ -53,6 +55,70 @@ export default function AppConfig() {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function PasswordChange() {
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    if (newPw.length < 4) { setMsg({ text: 'New password must be at least 4 characters', ok: false }); return }
+    if (newPw !== confirmPw) { setMsg({ text: 'Passwords do not match', ok: false }); return }
+    setSaving(true)
+    setMsg(null)
+    try {
+      const res = await apiPost<{ result?: string; error?: string }>('/api/auth/change', {
+        old_password: oldPw, new_password: newPw,
+      })
+      if (res.error) {
+        setMsg({ text: res.error, ok: false })
+      } else {
+        setMsg({ text: 'Password changed', ok: true })
+        setOldPw(''); setNewPw(''); setConfirmPw('')
+      }
+    } catch {
+      setMsg({ text: 'Failed to change password', ok: false })
+    }
+    setSaving(false)
+    setTimeout(() => setMsg(null), 4000)
+  }
+
+  return (
+    <div className="mb-4 rounded-lg bg-gray-900 border border-gray-800">
+      <div className="px-4 py-2.5 border-b border-gray-800">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Admin Password</h3>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-gray-400">Current Password</label>
+            <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)}
+              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400">New Password</label>
+            <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)}
+              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-400">Confirm New Password</label>
+            <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={submit} disabled={saving || !oldPw || !newPw || !confirmPw}
+            className="px-4 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-xs disabled:opacity-50">
+            {saving ? 'Saving...' : 'Change Password'}
+          </button>
+          {msg && <span className={`text-xs ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</span>}
+        </div>
+      </div>
     </div>
   )
 }

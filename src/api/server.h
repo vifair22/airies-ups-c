@@ -62,6 +62,13 @@ int api_server_route(api_server_t *srv, const char *pattern,
                      api_method_t method, api_handler_fn handler,
                      void *userdata);
 
+/* Set an auth check callback. Called before every API route handler.
+ * Return 1 if the request is authorized, 0 to reject with 401.
+ * The callback receives the request (with auth_token) and the route URL.
+ * If not set, all requests are allowed. */
+typedef int (*api_auth_fn)(const api_request_t *req, const char *url, void *userdata);
+void api_server_set_auth(api_server_t *srv, api_auth_fn fn, void *userdata);
+
 /* Start serving (non-blocking — runs in background threads via libmicrohttpd). */
 int api_server_start(api_server_t *srv);
 

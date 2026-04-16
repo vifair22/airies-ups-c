@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 /* --- Helper: build JSON status object --- */
 
@@ -902,6 +903,157 @@ static api_response_t handle_restart(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+static api_response_t handle_auth_change(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!req->body) return api_error(400, "request body required");
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jold = cJSON_GetObjectItem(body, "old_password");
+    const cJSON *jnew = cJSON_GetObjectItem(body, "new_password");
+    if (!jold || !cJSON_IsString(jold) || !jnew || !cJSON_IsString(jnew)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing 'old_password' and 'new_password'");
+    }
+    if (strlen(jnew->valuestring) < 4) {
+        cJSON_Delete(body);
+        return api_error(400, "new password must be at least 4 characters");
+    }
+    if (!auth_verify_password(ctx->db, jold->valuestring)) {
+        cJSON_Delete(body);
+        return api_error(401, "current password is incorrect");
+    }
+
+    int rc = auth_set_password(ctx->db, jnew->valuestring);
+    cJSON_Delete(body);
+
+    if (rc != 0) return api_error(500, "failed to update password");
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "password changed");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
+static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+
+    /* Delete the session token from DB */
+    if (req->auth_token) {
+        const char *tok = req->auth_token;
+        if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
+        const char *params[] = { tok, NULL };
+        db_execute_non_query(ctx->db,
+            "DELETE FROM sessions WHERE token = ?", params, NULL);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "logged out");
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
+/* --- Setup endpoints --- */
+
+static api_response_t handle_setup_status(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    cJSON *obj = cJSON_CreateObject();
+    cJSON_AddBoolToObject(obj, "needs_setup", !auth_is_setup(ctx->db));
+    cJSON_AddBoolToObject(obj, "ups_connected", ctx->ups && monitor_is_connected(ctx->monitor));
+    char *json = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    return api_ok(json);
+}
+
+static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
+{
+    (void)req;
+    (void)ud;
+    cJSON *arr = cJSON_CreateArray();
+
+    /* Scan for serial devices */
+    const char *patterns[] = { "/dev/ttyUSB", "/dev/ttyACM", "/dev/ttyS", NULL };
+    for (int p = 0; patterns[p]; p++) {
+        for (int i = 0; i < 10; i++) {
+            char path[64];
+            snprintf(path, sizeof(path), "%s%d", patterns[p], i);
+            if (access(path, R_OK | W_OK) == 0)
+                cJSON_AddItemToArray(arr, cJSON_CreateString(path));
+        }
+    }
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
+static api_response_t handle_setup_test(const api_request_t *req, void *ud)
+{
+    (void)ud;
+    if (!req->body) return api_error(400, "request body required");
+
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jdev = cJSON_GetObjectItem(body, "device");
+    const cJSON *jbaud = cJSON_GetObjectItem(body, "baud");
+    const cJSON *jslave = cJSON_GetObjectItem(body, "slave_id");
+
+    if (!jdev || !cJSON_IsString(jdev)) {
+        cJSON_Delete(body);
+        return api_error(400, "missing 'device' field");
+    }
+
+    const char *device = jdev->valuestring;
+    int baud = (jbaud && cJSON_IsNumber(jbaud)) ? jbaud->valueint : 9600;
+    int slave_id = (jslave && cJSON_IsNumber(jslave)) ? jslave->valueint : 1;
+    cJSON_Delete(body);
+
+    ups_conn_params_t params = {
+        .type = UPS_CONN_SERIAL,
+        .serial = { .device = device, .baud = baud, .slave_id = slave_id },
+    };
+
+    ups_t *test_ups = ups_connect(&params);
+    if (!test_ups) {
+        return api_error(502, "failed to connect — check device path, baud rate, and that the UPS is powered on");
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "result", "connected");
+    cJSON_AddStringToObject(resp, "driver", ups_driver_name(test_ups));
+
+    const char *topo = "unknown";
+    switch (ups_topology(test_ups)) {
+    case UPS_TOPO_ONLINE_DOUBLE:    topo = "online_double"; break;
+    case UPS_TOPO_LINE_INTERACTIVE: topo = "line_interactive"; break;
+    case UPS_TOPO_STANDBY:          topo = "standby"; break;
+    }
+    cJSON_AddStringToObject(resp, "topology", topo);
+
+    if (test_ups->has_inventory) {
+        cJSON *inv = cJSON_CreateObject();
+        cJSON_AddStringToObject(inv, "model", test_ups->inventory.model);
+        cJSON_AddStringToObject(inv, "serial", test_ups->inventory.serial);
+        cJSON_AddStringToObject(inv, "firmware", test_ups->inventory.firmware);
+        cJSON_AddNumberToObject(inv, "nominal_va", test_ups->inventory.nominal_va);
+        cJSON_AddNumberToObject(inv, "nominal_watts", test_ups->inventory.nominal_watts);
+        cJSON_AddItemToObject(resp, "inventory", inv);
+    }
+
+    ups_close(test_ups);
+
+    char *json = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    return api_ok(json);
+}
+
 /* --- Command descriptors endpoint --- */
 
 static api_response_t handle_commands(const api_request_t *req, void *ud)
@@ -971,6 +1123,11 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/restart",      API_POST, handle_restart,        ctx);
     api_server_route(srv, "/api/auth/setup",   API_POST, handle_auth_setup, ctx);
     api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login, ctx);
+    api_server_route(srv, "/api/auth/change", API_POST, handle_auth_change, ctx);
+    api_server_route(srv, "/api/auth/logout", API_POST, handle_auth_logout, ctx);
+    api_server_route(srv, "/api/setup/status", API_GET,  handle_setup_status, ctx);
+    api_server_route(srv, "/api/setup/ports",  API_GET,  handle_setup_ports,  ctx);
+    api_server_route(srv, "/api/setup/test",   API_POST, handle_setup_test,   ctx);
     api_server_route(srv, "/api/weather/status", API_GET,  handle_weather_status,     ctx);
     api_server_route(srv, "/api/weather/config", API_GET,  handle_weather_config_get, ctx);
     api_server_route(srv, "/api/weather/config", API_POST, handle_weather_config_set, ctx);

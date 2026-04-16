@@ -39,6 +39,8 @@ struct api_server {
     char              *static_dir;
     route_entry_t      routes[MAX_ROUTES];
     int                nroutes;
+    api_auth_fn        auth_fn;
+    void              *auth_ud;
 };
 
 /* --- Helpers --- */
@@ -225,6 +227,15 @@ static enum MHD_Result request_handler(void *cls,
             ._conn      = conn,
         };
 
+        /* Auth check */
+        if (srv->auth_fn && !srv->auth_fn(&req, url, srv->auth_ud)) {
+            free(pb->data);
+            free(pb);
+            *req_cls = NULL;
+            return send_response(conn, 401, "application/json",
+                strdup("{\"error\":\"unauthorized\"}"));
+        }
+
         api_response_t resp = route->handler(&req, route->userdata);
 
         enum MHD_Result ret = send_response(conn, resp.status,
@@ -367,6 +378,12 @@ int api_server_route(api_server_t *srv, const char *pattern,
     r->userdata = userdata;
 
     return CUTILS_OK;
+}
+
+void api_server_set_auth(api_server_t *srv, api_auth_fn fn, void *userdata)
+{
+    srv->auth_fn = fn;
+    srv->auth_ud = userdata;
 }
 
 int api_server_start(api_server_t *srv)

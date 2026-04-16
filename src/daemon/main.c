@@ -9,6 +9,7 @@
 #include "ups/ups.h"
 #include "api/server.h"
 #include "api/routes.h"
+#include "api/auth.h"
 #include "monitor/monitor.h"
 #include "alerts/alerts.h"
 #include "shutdown/shutdown.h"
@@ -35,6 +36,26 @@ void app_request_restart(void)
 {
     restart_requested = 1;
     running = 0;
+}
+
+/* --- Auth middleware --- */
+
+static int auth_check(const api_request_t *req, const char *url, void *userdata)
+{
+    cutils_db_t *db = userdata;
+
+    /* Public endpoints — no auth required */
+    if (strcmp(url, "/api/auth/setup") == 0 ||
+        strcmp(url, "/api/auth/login") == 0 ||
+        strcmp(url, "/api/setup/status") == 0)
+        return 1;
+
+    /* If auth not set up yet, allow everything (setup mode) */
+    if (!auth_is_setup(db))
+        return 1;
+
+    /* Validate token */
+    return auth_validate_token(db, req->auth_token);
 }
 
 /* --- Event callback: push alerts to Pushover --- */
@@ -182,6 +203,7 @@ int main(int argc, char *argv[])
         .guard    = guard,
     };
     api_register_routes(api, &route_ctx);
+    api_server_set_auth(api, auth_check, db);
 
     log_info("airies-upsd ready — http://localhost:%d", http_port);
 

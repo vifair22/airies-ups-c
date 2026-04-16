@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { useApi } from '../hooks/useApi'
+import { useApi, apiPost } from '../hooks/useApi'
 
 interface StatusBrief {
   driver: string
@@ -67,8 +67,16 @@ export default function Layout() {
           <SideLink key={n.to} {...n} />
         ))}
 
-        <div className="mt-auto px-3 py-2 text-[10px] text-gray-700 font-mono">
-          v0.1.0
+        <div className="mt-auto px-3 py-2 space-y-2">
+          <button onClick={async () => {
+            try { await apiPost('/api/auth/logout', {}) } catch {}
+            localStorage.removeItem('auth_token')
+            window.location.href = '/login'
+          }}
+            className="block w-full text-left text-xs text-gray-600 hover:text-gray-400 transition-colors">
+            Logout
+          </button>
+          <span className="text-[10px] text-gray-700 font-mono">v0.1.0</span>
         </div>
       </aside>
 
