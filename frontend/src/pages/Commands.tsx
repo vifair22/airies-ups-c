@@ -70,17 +70,17 @@ function ConfirmModal({ title, body, confirmLabel, confirmVariant = 'default', o
     ? 'bg-red-900/80 hover:bg-red-800 border-red-700'
     : confirmVariant === 'warn'
       ? 'bg-yellow-900/80 hover:bg-yellow-800 border-yellow-700'
-      : 'bg-gray-800 hover:bg-gray-700 border-gray-700'
-  const borderColor = confirmVariant === 'danger' ? 'border-red-800' : 'border-gray-700'
+      : 'bg-field hover:bg-field-hover border-edge-strong'
+  const borderColor = confirmVariant === 'danger' ? 'border-red-800' : 'border-edge-strong'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className={`bg-gray-900 border ${borderColor} rounded-lg p-6 max-w-md mx-4 shadow-xl`} onClick={e => e.stopPropagation()}>
-        <h3 className={`text-lg font-semibold mb-2 ${confirmVariant === 'danger' ? 'text-red-400' : 'text-gray-100'}`}>{title}</h3>
-        <p className="text-sm text-gray-400 mb-4">{body}</p>
+      <div className={`bg-panel border ${borderColor} rounded-lg p-6 max-w-md mx-4 shadow-xl`} onClick={e => e.stopPropagation()}>
+        <h3 className={`text-lg font-semibold mb-2 ${confirmVariant === 'danger' ? 'text-red-400' : 'text-primary'}`}>{title}</h3>
+        <p className="text-sm text-muted mb-4">{body}</p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel}
-            className="px-4 py-2 rounded text-sm border border-gray-700 bg-gray-800 hover:bg-gray-700 transition-colors">Cancel</button>
+            className="px-4 py-2 rounded text-sm border border-edge-strong bg-field hover:bg-field-hover transition-colors">Cancel</button>
           <button onClick={onConfirm} disabled={loading}
             className={`px-4 py-2 rounded text-sm border transition-colors disabled:opacity-50 ${confirmBg}`}>
             {loading ? '...' : confirmLabel}
@@ -109,7 +109,7 @@ function SimpleCmd({ cmd, onResult }: { cmd: CmdDesc; onResult: (msg: string, ty
     ? 'bg-red-900/80 hover:bg-red-800 border-red-700'
     : cmd.variant === 'warn'
       ? 'bg-yellow-900/60 hover:bg-yellow-800 border-yellow-700'
-      : 'bg-gray-800 hover:bg-gray-700 border-gray-700'
+      : 'bg-field hover:bg-field-hover border-edge-strong'
 
   return (
     <>
@@ -157,14 +157,14 @@ function ToggleCmd({ cmd, statusRaw, onResult }: {
         </span>
         {isActive ? (
           <button onClick={() => setModal('off')}
-            className="px-4 py-2 rounded text-sm border bg-gray-800 hover:bg-gray-700 border-gray-700 transition-colors">
+            className="px-4 py-2 rounded text-sm border bg-field hover:bg-field-hover border-edge-strong transition-colors">
             Disable {cmd.display_name}
           </button>
         ) : (
           <button onClick={() => setModal('on')}
             className={`px-4 py-2 rounded text-sm border transition-colors ${
               cmd.variant === 'warn' ? 'bg-yellow-900/60 hover:bg-yellow-800 border-yellow-700'
-              : 'bg-gray-800 hover:bg-gray-700 border-gray-700'
+              : 'bg-field hover:bg-field-hover border-edge-strong'
             }`}>
             Enable {cmd.display_name}
           </button>
@@ -201,7 +201,7 @@ function ShutdownWorkflow({ onResult }: { onResult: (msg: string, type: 'success
     <>
       <div className="flex gap-2">
         <button onClick={() => setModal('dry')}
-          className="px-4 py-2 rounded text-sm border bg-gray-800 hover:bg-gray-700 border-gray-700 transition-colors">
+          className="px-4 py-2 rounded text-sm border bg-field hover:bg-field-hover border-edge-strong transition-colors">
           Dry Run
         </button>
         <button onClick={() => setModal('real')}
@@ -260,8 +260,8 @@ export default function Commands() {
     return (
       <div>
         <h2 className="text-xl font-semibold mb-4">Commands</h2>
-        <div className="rounded-lg bg-gray-900 border border-gray-800 text-center py-12">
-          <p className="text-gray-500">UPS not connected. Commands unavailable.</p>
+        <div className="rounded-lg bg-panel border border-edge text-center py-12">
+          <p className="text-muted">UPS not connected. Commands unavailable.</p>
         </div>
       </div>
     )
@@ -290,17 +290,17 @@ export default function Commands() {
           const meta = groupLabels[group] || { title: group, description: '' }
 
           return (
-            <div key={group} className="rounded-lg bg-gray-900 border border-gray-800">
-              <div className="px-4 py-2.5 border-b border-gray-800">
-                <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">{meta.title}</h3>
-                {meta.description && <p className="text-xs text-gray-600 mt-0.5">{meta.description}</p>}
+            <div key={group} className="rounded-lg bg-panel border border-edge">
+              <div className="px-4 py-2.5 border-b border-edge">
+                <h3 className="text-xs font-medium text-muted uppercase tracking-wider">{meta.title}</h3>
+                {meta.description && <p className="text-xs text-faint mt-0.5">{meta.description}</p>}
               </div>
               <div className="px-4 py-3">
                 {cmds.map(cmd => (
-                  <div key={cmd.name} className="flex items-center justify-between py-2.5 border-b border-gray-800/60 last:border-0">
+                  <div key={cmd.name} className="flex items-center justify-between py-2.5 border-b border-edge/60 last:border-0">
                     <div className="mr-4">
-                      <span className="text-sm text-gray-200">{cmd.display_name}</span>
-                      <p className="text-xs text-gray-500 mt-0.5">{cmd.description}</p>
+                      <span className="text-sm text-primary">{cmd.display_name}</span>
+                      <p className="text-xs text-muted mt-0.5">{cmd.description}</p>
                     </div>
                     <div className="shrink-0">
                       {cmd.type === 'toggle' ? (
@@ -319,10 +319,10 @@ export default function Commands() {
 
                 {/* Inject shutdown workflow into power group */}
                 {group === 'power' && (
-                  <div className="flex items-center justify-between py-2.5 border-b border-gray-800/60 last:border-0">
+                  <div className="flex items-center justify-between py-2.5 border-b border-edge/60 last:border-0">
                     <div className="mr-4">
-                      <span className="text-sm text-gray-200">Shutdown Workflow</span>
-                      <p className="text-xs text-gray-500 mt-0.5">Executes the full orchestrated shutdown — shuts down all configured hosts, then the UPS itself</p>
+                      <span className="text-sm text-primary">Shutdown Workflow</span>
+                      <p className="text-xs text-muted mt-0.5">Executes the full orchestrated shutdown — shuts down all configured hosts, then the UPS itself</p>
                     </div>
                     <div className="shrink-0">
                       <ShutdownWorkflow onResult={push} />

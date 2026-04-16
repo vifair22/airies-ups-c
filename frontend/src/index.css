@@ -1,1 +1,23 @@
 @import "tailwindcss";
+
+@theme {
+  /* Surfaces */
+  --color-page: #030712;            /* gray-950 — page background */
+  --color-panel: #111827;           /* gray-900 — cards, panels */
+  --color-field: #1f2937;           /* gray-800 — inputs, nested surfaces */
+  --color-field-hover: #374151;     /* gray-700 — hover on fields/buttons */
+
+  /* Text (each tier +1 shade vs old palette for contrast) */
+  --color-primary: #f3f4f6;         /* gray-100 — headings, primary content */
+  --color-secondary: #d1d5db;       /* gray-300 — body text, descriptions */
+  --color-muted: #9ca3af;           /* gray-400 — labels, help text */
+  --color-faint: #6b7280;           /* gray-500 — least important text */
+
+  /* Borders */
+  --color-edge: #1f2937;            /* gray-800 — card/panel borders */
+  --color-edge-strong: #374151;     /* gray-700 — input borders, dividers */
+
+  /* Accent (primary action) */
+  --color-accent: #1d4ed8;          /* blue-700 — buttons */
+  --color-accent-hover: #2563eb;    /* blue-600 — button hover */
+}

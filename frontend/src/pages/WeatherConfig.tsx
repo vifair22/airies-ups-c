@@ -77,11 +77,11 @@ export default function WeatherConfig() {
             ? 'bg-red-900/30 border-red-700'
             : status.enabled
               ? 'bg-green-900/30 border-green-700'
-              : 'bg-gray-900 border-gray-800'
+              : 'bg-panel border-edge'
         }`}>
           <div className="flex items-center gap-3">
             <span className={`w-3 h-3 rounded-full ${
-              status.severe ? 'bg-red-400' : status.enabled ? 'bg-green-400' : 'bg-gray-600'
+              status.severe ? 'bg-red-400' : status.enabled ? 'bg-green-400' : 'bg-faint'
             }`} />
             <span className="text-sm font-medium">
               {status.severe ? 'Severe Weather Active' : status.enabled ? 'Monitoring — All Clear' : 'Disabled'}
@@ -96,8 +96,8 @@ export default function WeatherConfig() {
       {form && (
         <div className="space-y-6">
           {/* General settings */}
-          <div className="rounded-lg bg-gray-900 border border-gray-800 p-4 space-y-4">
-            <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Monitoring</h3>
+          <div className="rounded-lg bg-panel border border-edge p-4 space-y-4">
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wider">Monitoring</h3>
 
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={form.enabled}
@@ -121,17 +121,17 @@ export default function WeatherConfig() {
             </div>
 
             <div>
-              <label className="text-xs text-gray-400">Alert Types</label>
+              <label className="text-xs text-muted">Alert Types</label>
               <textarea value={form.alert_types}
                 onChange={(e) => setForm({ ...form, alert_types: e.target.value })}
-                className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm h-24" />
+                className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm h-24" />
             </div>
           </div>
 
           {/* Parameter control */}
-          <div className="rounded-lg bg-gray-900 border border-gray-800 p-4 space-y-4">
-            <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Parameter Override</h3>
-            <p className="text-xs text-gray-500">
+          <div className="rounded-lg bg-panel border border-edge p-4 space-y-4">
+            <h3 className="text-xs font-medium text-muted uppercase tracking-wider">Parameter Override</h3>
+            <p className="text-xs text-muted">
               During severe weather, the selected register is overridden with the severe value.
               When conditions clear, the register is restored to the value it had before the override.
             </p>
@@ -140,18 +140,18 @@ export default function WeatherConfig() {
               <div className="grid grid-cols-3 gap-4">
                 {[1,2,3].map(i => (
                   <div key={i}>
-                    <div className="h-3 w-24 bg-gray-800 rounded animate-pulse mb-2" />
-                    <div className="h-8 w-full bg-gray-800 rounded animate-pulse" />
+                    <div className="h-3 w-24 bg-field rounded animate-pulse mb-2" />
+                    <div className="h-8 w-full bg-field rounded animate-pulse" />
                   </div>
                 ))}
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="text-xs text-gray-400">Control Register</label>
+                  <label className="text-xs text-muted">Control Register</label>
                   <select value={form.control_register}
                     onChange={(e) => setForm({ ...form, control_register: e.target.value, severe_raw_value: undefined, normal_raw_value: undefined })}
-                    className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                    className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm">
                     {writableRegs.length > 0 ? (
                       writableRegs.map(r => (
                         <option key={r.name} value={r.name}>{r.display_name}</option>
@@ -165,10 +165,10 @@ export default function WeatherConfig() {
                 {selectedReg?.type === 'bitfield' && selectedReg.options ? (
                   <>
                     <div>
-                      <label className="text-xs text-gray-400">Severe Value</label>
+                      <label className="text-xs text-muted">Severe Value</label>
                       <select value={form.severe_raw_value ?? ''}
                         onChange={(e) => setForm({ ...form, severe_raw_value: parseInt(e.target.value) })}
-                        className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                        className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm">
                         <option value="">Select...</option>
                         {selectedReg.options.map(o => (
                           <option key={o.value} value={o.value}>{o.label}</option>
@@ -176,10 +176,10 @@ export default function WeatherConfig() {
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs text-gray-400">Normal Value (fallback)</label>
+                      <label className="text-xs text-muted">Normal Value (fallback)</label>
                       <select value={form.normal_raw_value ?? ''}
                         onChange={(e) => setForm({ ...form, normal_raw_value: parseInt(e.target.value) })}
-                        className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+                        className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm">
                         <option value="">Select...</option>
                         {selectedReg.options.map(o => (
                           <option key={o.value} value={o.value}>{o.label}</option>
@@ -201,7 +201,7 @@ export default function WeatherConfig() {
 
           <div className="flex items-center gap-3">
             <button onClick={save} disabled={saving}
-              className="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm disabled:opacity-50">
+              className="px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
               {saving ? 'Saving...' : 'Save'}
             </button>
             {saved && <span className="text-xs text-green-400">Saved — restart to apply</span>}
@@ -217,9 +217,9 @@ function Field({ label, value, onChange, type = 'text' }: {
 }) {
   return (
     <div>
-      <label className="text-xs text-gray-400">{label}</label>
+      <label className="text-xs text-muted">{label}</label>
       <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
-        className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm" />
+        className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm" />
     </div>
   )
 }

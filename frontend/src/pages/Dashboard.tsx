@@ -101,7 +101,7 @@ function outletState(raw: number): { label: string; color: string } {
   if (raw & (1 << 3)) return { label: 'Pending On', color: 'text-blue-400' }
   if (raw & (1 << 0)) return { label: 'On', color: 'text-green-400' }
   if (raw & (1 << 1)) return { label: 'Off', color: 'text-red-400' }
-  return { label: 'Unknown', color: 'text-gray-500' }
+  return { label: 'Unknown', color: 'text-muted' }
 }
 
 /* ── Classifiers ── */
@@ -128,11 +128,11 @@ const utilityStyles: Record<UtilityHealth, PlaneStyle & { label: string }> = {
 
 /* UPS plane — returns style + badge, topology-aware */
 
-function classifyUpsPlane(raw: number, hasBypass: boolean, avr: AvrState): { style: PlaneStyle & { label: string } } {
+function classifyUpsPlane(raw: number, hasBypass: boolean, isStandby: boolean, avr: AvrState): { style: PlaneStyle & { label: string } } {
   if (raw & (ST.FAULT | ST.FAULT_STATE))
     return { style: { border: 'border-red-600', bg: 'bg-red-950/30', accent: 'text-red-400', label: 'Fault' } }
   if (raw & ST.OUTPUT_OFF)
-    return { style: { border: 'border-gray-600', bg: 'bg-gray-900/50', accent: 'text-gray-400', label: 'Output Off' } }
+    return { style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted', label: 'Output Off' } }
 
   /* Bypass (double-conversion only) */
   if (hasBypass && (raw & ST.BYPASS)) {
@@ -141,17 +141,20 @@ function classifyUpsPlane(raw: number, hasBypass: boolean, avr: AvrState): { sty
     return { style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Bypass (Fault-Forced)' } }
   }
 
-  /* On battery — both topologies */
+  /* On battery — all topologies */
   if (raw & ST.ON_BATTERY)
     return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'On Battery -- Inverter' } }
 
-  /* HE mode — both topologies */
+  /* HE mode */
   if (raw & ST.HE_MODE)
     return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'High Efficiency' } }
 
-  /* Online — topology-specific labels */
+  /* Standby: normal online = passthrough */
+  if (isStandby)
+    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'Standby -- Passthrough' } }
+
+  /* Line-interactive: show AVR state */
   if (!hasBypass) {
-    /* Line-interactive: show AVR state */
     const avrLabels: Record<AvrState, string> = {
       passthrough: 'AVR -- Passthrough',
       boost:       'AVR -- Boost',
@@ -176,7 +179,7 @@ function classifyOutput(raw: number, loadPct: number): { style: PlaneStyle; badg
     badge: 'Output Off (Fault)',
   }
   if (isOff) return {
-    style: { border: 'border-gray-600', bg: 'bg-gray-900/50', accent: 'text-gray-400' },
+    style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted' },
     badge: 'Output Off',
   }
   if (isOverload || loadPct > 80) return {
@@ -199,10 +202,10 @@ function Metric({ label, value, unit, accent }: {
   label: string; value: string; unit?: string; accent?: string
 }) {
   return (
-    <div className="flex justify-between items-baseline py-1 border-b border-gray-800/60 last:border-0">
-      <span className="text-xs text-gray-500">{label}</span>
-      <span className={`text-sm font-mono ${accent || 'text-gray-200'}`}>
-        {value}{unit && <span className="text-gray-500 ml-0.5">{unit}</span>}
+    <div className="flex justify-between items-baseline py-1 border-b border-edge/60 last:border-0">
+      <span className="text-xs text-muted">{label}</span>
+      <span className={`text-sm font-mono ${accent || 'text-primary'}`}>
+        {value}{unit && <span className="text-muted ml-0.5">{unit}</span>}
       </span>
     </div>
   )
@@ -214,9 +217,9 @@ function BigStat({ value, unit, sub, color = 'text-white' }: {
   return (
     <div>
       <p className={`text-2xl font-bold leading-tight ${color}`}>
-        {value}<span className="text-sm font-normal text-gray-500 ml-1">{unit}</span>
+        {value}<span className="text-sm font-normal text-muted ml-1">{unit}</span>
       </p>
-      {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+      {sub && <p className="text-xs text-muted mt-0.5">{sub}</p>}
     </div>
   )
 }
@@ -225,9 +228,9 @@ function Card({ title, children, className = '' }: {
   title: string; children: React.ReactNode; className?: string
 }) {
   return (
-    <div className={`rounded-lg bg-gray-900 border border-gray-800 ${className}`}>
-      <div className="px-4 py-2 border-b border-gray-800">
-        <h3 className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">{title}</h3>
+    <div className={`rounded-lg bg-panel border border-edge ${className}`}>
+      <div className="px-4 py-2 border-b border-edge">
+        <h3 className="text-[11px] font-medium text-muted uppercase tracking-wider">{title}</h3>
       </div>
       <div className="px-4 py-3">{children}</div>
     </div>
@@ -241,7 +244,7 @@ function Plane({ title, badge, styles, children }: {
   return (
     <div className={`rounded-lg border ${styles.border} ${styles.bg}`}>
       <div className="flex items-center justify-between px-5 py-3 border-b border-white/5">
-        <h3 className="text-sm font-semibold text-gray-200">{title}</h3>
+        <h3 className="text-sm font-semibold text-primary">{title}</h3>
         <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles.accent} bg-black/30`}>{badge}</span>
       </div>
       <div className="px-5 py-4">{children}</div>
@@ -257,7 +260,7 @@ function OutletBadge({ label, raw }: { label: string; raw: number }) {
   return (
     <div className="flex items-center gap-2 py-1">
       <span className={`w-2 h-2 rounded-full ${dotColor}`} />
-      <span className="text-xs text-gray-400">{label}</span>
+      <span className="text-xs text-muted">{label}</span>
       <span className={`text-xs font-mono ml-auto ${st.color}`}>{st.label}</span>
     </div>
   )
@@ -285,7 +288,7 @@ function VoltageBar({ voltage, low, high, warnOffset = 5 }: {
 
   return (
     <div className="mt-2">
-      <div className="relative h-3 rounded-full bg-gray-800 overflow-hidden">
+      <div className="relative h-3 rounded-full bg-field overflow-hidden">
         <div className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${barColor}`}
              style={{ width: `${pct}%` }} />
         {/* Warn zone ticks */}
@@ -293,8 +296,8 @@ function VoltageBar({ voltage, low, high, warnOffset = 5 }: {
         <div className="absolute inset-y-0 w-px bg-yellow-700/50" style={{ left: `${warnHighPct}%` }} />
       </div>
       <div className="flex justify-between mt-1">
-        <span className="text-[10px] text-gray-600">{low}V</span>
-        <span className="text-[10px] text-gray-600">{high}V</span>
+        <span className="text-[10px] text-faint">{low}V</span>
+        <span className="text-[10px] text-faint">{high}V</span>
       </div>
     </div>
   )
@@ -332,23 +335,22 @@ export default function Dashboard() {
   /* Topology from driver */
   const topo = s.topology ?? 'online_double'
   const isDoubleConversion = topo === 'online_double'
-  const isLineInteractive = topo === 'line_interactive'
   const isStandby = topo === 'standby'
   const canBypass = isDoubleConversion
   const canHE = hasCap(caps, 'he_mode')
-  void isLineInteractive; void isStandby  /* used for future topology-specific UI */
   const avr = detectAvr(inp?.voltage ?? 0, out?.voltage ?? 0)
 
   /* Classify planes */
   const utilHealth = classifyUtility(raw)
   const uStyle = utilityStyles[utilHealth]
-  const { style: upStyle } = classifyUpsPlane(raw, canBypass, avr)
+  const { style: upStyle } = classifyUpsPlane(raw, canBypass, isStandby, avr)
   const { style: outStyle, badge: outBadge } = classifyOutput(raw, out?.load_pct ?? 0)
 
   /* Operating mode label (topology-aware) */
   const operatingMode =
     (raw & ST.ON_BATTERY) ? 'On Battery' :
     (raw & ST.HE_MODE) ? 'High Efficiency' :
+    isStandby ? 'Standby' :
     canBypass ? ((raw & ST.BYPASS) ? 'Bypass' : 'Online / Double Conversion') :
     `Line Interactive / AVR${avr !== 'passthrough' ? ` (${avr})` : ''}`
 
@@ -356,6 +358,7 @@ export default function Dashboard() {
   const topologyLabel =
     (raw & ST.ON_BATTERY) ? 'Inverter (Battery)' :
     (raw & ST.HE_MODE) ? 'HE / Standby' :
+    isStandby ? 'Standby / Offline' :
     canBypass ? (
       (raw & ST.BYPASS) ? 'Bypass (straight-through)' : 'Double Conversion'
     ) : (
@@ -371,11 +374,11 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <StatusDot raw={raw} canBypass={canBypass} />
         {inv && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
-            <span className="text-gray-200 font-medium">{inv.model.trim()}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
+            <span className="text-primary font-medium">{inv.model.trim()}</span>
             <span>{inv.serial.trim()}</span>
             <span>{inv.nominal_va} VA / {inv.nominal_watts} W</span>
-            <span className="text-gray-500">{s.driver.toUpperCase()} driver</span>
+            <span className="text-muted">{s.driver.toUpperCase()} driver</span>
           </div>
         )}
         {s.he_mode?.inhibited && (
@@ -471,7 +474,7 @@ export default function Dashboard() {
             {canHE && s.he_mode?.inhibited && (
               <Metric label="HE Inhibit" value={s.he_mode.source} accent="text-yellow-400" />
             )}
-            {!canBypass && avr !== 'passthrough' && (
+            {!canBypass && !isStandby && avr !== 'passthrough' && (
               <Metric label="AVR Correction" value={
                 inp && out ? `${(out.voltage - inp.voltage).toFixed(1)}V (${avr})` : '--'
               } accent="text-sky-400" />
@@ -494,7 +497,7 @@ export default function Dashboard() {
                 <Metric label="Bypass Frequency" value={s.bypass?.frequency.toFixed(2) ?? '--'} unit="Hz" />
               </>
             )}
-            {!canBypass && !(raw & ST.ON_BATTERY) && !(raw & ST.HE_MODE) && (
+            {!canBypass && !isStandby && !(raw & ST.ON_BATTERY) && !(raw & ST.HE_MODE) && (
               <Metric label="AVR State" value={
                 avr === 'boost' ? 'Boosting' : avr === 'buck' ? 'Bucking' : 'Passthrough'
               } accent={avr !== 'passthrough' ? 'text-sky-400' : undefined} />
@@ -523,7 +526,7 @@ export default function Dashboard() {
           </div>
           {s.outlets && (
             <div className="mt-3 pt-3 border-t border-white/5">
-              <h4 className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Outlet Groups</h4>
+              <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Outlet Groups</h4>
               <div className={`grid gap-4 ${hasSog(sogCfg, 0) || hasSog(sogCfg, 1) ? 'grid-cols-3' : 'grid-cols-1'}`}>
                 <OutletBadge label="Main (MOG)" raw={s.outlets.mog} />
                 {hasSog(sogCfg, 0) && <OutletBadge label="SOG 0" raw={s.outlets.sog0} />}
@@ -533,7 +536,7 @@ export default function Dashboard() {
           )}
           {s.timers && (s.timers.shutdown > 0 || s.timers.start > 0 || s.timers.reboot > 0) && (
             <div className="mt-3 pt-3 border-t border-white/5">
-              <h4 className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">Active Timers</h4>
+              <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Active Timers</h4>
               <div className="grid grid-cols-3 gap-4">
                 {s.timers.shutdown > 0 && <Metric label="Turn Off" value={`${s.timers.shutdown}s`} accent="text-red-400" />}
                 {s.timers.start > 0 && <Metric label="Turn On" value={`${s.timers.start}s`} accent="text-green-400" />}
@@ -559,7 +562,7 @@ function StatusDot({ raw, canBypass }: { raw: number; canBypass: boolean }) {
   const color = isFault ? 'bg-red-500'
     : isOnBattery ? 'bg-yellow-500'
     : isBypass ? (isCommanded ? 'bg-yellow-500' : 'bg-orange-500')
-    : isOnline ? 'bg-green-500' : 'bg-gray-500'
+    : isOnline ? 'bg-green-500' : 'bg-muted'
   const label = isFault ? 'Fault'
     : isOnBattery ? 'On Battery'
     : isBypass ? (isCommanded ? 'Bypass' : 'Bypass (Forced)')
@@ -569,7 +572,7 @@ function StatusDot({ raw, canBypass }: { raw: number; canBypass: boolean }) {
   return (
     <div className="flex items-center gap-2">
       <span className={`w-3 h-3 rounded-full ${color} animate-pulse`} />
-      <span className="text-xl font-semibold text-gray-100">{label}</span>
+      <span className="text-xl font-semibold text-primary">{label}</span>
     </div>
   )
 }
@@ -604,12 +607,12 @@ function humanizeTransfer(reason?: string): string {
 function LoadingPulse() {
   return (
     <div className="space-y-4">
-      <div className="h-8 w-64 bg-gray-800 rounded animate-pulse" />
+      <div className="h-8 w-64 bg-field rounded animate-pulse" />
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {[1,2,3,4].map(i => <div key={i} className="rounded-lg bg-gray-900 border border-gray-800 h-32 animate-pulse" />)}
+        {[1,2,3,4].map(i => <div key={i} className="rounded-lg bg-panel border border-edge h-32 animate-pulse" />)}
       </div>
       <div className="space-y-3">
-        {[1,2,3].map(i => <div key={i} className="rounded-lg bg-gray-900 border border-gray-800 h-24 animate-pulse" />)}
+        {[1,2,3].map(i => <div key={i} className="rounded-lg bg-panel border border-edge h-24 animate-pulse" />)}
       </div>
     </div>
   )

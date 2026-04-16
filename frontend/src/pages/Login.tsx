@@ -29,20 +29,20 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+    <div className="min-h-screen flex items-center justify-center bg-page">
       <div className="w-full max-w-sm">
         <h1 className="text-2xl font-bold text-center mb-6">airies-ups</h1>
-        <form onSubmit={submit} className="rounded-lg bg-gray-900 border border-gray-800 p-6 space-y-4">
+        <form onSubmit={submit} className="rounded-lg bg-panel border border-edge p-6 space-y-4">
           <div>
-            <label className="text-xs text-gray-400">Admin Password</label>
+            <label className="text-xs text-muted">Admin Password</label>
             <input type="password" value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoFocus
-              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mt-1" />
+              className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1" />
           </div>
           {error && <p className="text-sm text-red-400">{error}</p>}
           <button type="submit" disabled={loading || !password}
-            className="w-full px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm disabled:opacity-50">
+            className="w-full px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
             {loading ? 'Logging in...' : 'Login'}
           </button>
         </form>

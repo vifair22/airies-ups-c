@@ -100,23 +100,23 @@ export default function Telemetry() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Telemetry</h2>
         {points.length > 0 && (
-          <span className="text-xs text-gray-500">{points.length} samples</span>
+          <span className="text-xs text-muted">{points.length} samples</span>
         )}
       </div>
 
       {/* Date controls */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-400">From</label>
+          <label className="text-xs text-muted">From</label>
           <input type="datetime-local" value={fromDate.replace(' ', 'T').slice(0, 16)}
             onChange={(e) => setCustomRange(e.target.value.replace('T', ' ') + ':00', toDate)}
-            className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" />
+            className="bg-field border border-edge-strong rounded px-2 py-1 text-xs" />
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-400">To</label>
+          <label className="text-xs text-muted">To</label>
           <input type="datetime-local" value={(toDate || new Date().toISOString().slice(0, 16)).replace(' ', 'T').slice(0, 16)}
             onChange={(e) => setCustomRange(fromDate, e.target.value.replace('T', ' ') + ':00')}
-            className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs" />
+            className="bg-field border border-edge-strong rounded px-2 py-1 text-xs" />
         </div>
         <div className="flex gap-1 flex-wrap">
           {presets.map(({ label, min }) => (
@@ -124,7 +124,7 @@ export default function Telemetry() {
               className={`px-2 py-1 text-xs rounded border transition-colors ${
                 activePreset === min
                   ? 'bg-blue-900/60 border-blue-600 text-blue-300'
-                  : 'bg-gray-800 hover:bg-gray-700 border-gray-700'
+                  : 'bg-field hover:bg-field-hover border-edge-strong'
               }`}>
               {label}
             </button>
@@ -135,13 +135,13 @@ export default function Telemetry() {
       {loading && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {[1,2,3,4].map(i => (
-            <div key={i} className="rounded-lg bg-gray-900 border border-gray-800 h-40 animate-pulse" />
+            <div key={i} className="rounded-lg bg-panel border border-edge h-40 animate-pulse" />
           ))}
         </div>
       )}
 
       {!loading && points.length === 0 && (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-12 text-muted">
           <p className="text-lg mb-1">No telemetry data</p>
           <p className="text-sm">No data in the selected time range.</p>
         </div>
@@ -166,7 +166,7 @@ export default function Telemetry() {
       {expanded && points.length > 0 && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6"
           onClick={() => setExpanded(null)}>
-          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-4xl p-6"
+          <div className="bg-panel border border-edge-strong rounded-xl w-full max-w-4xl p-6"
             onClick={(e) => e.stopPropagation()}>
             {(() => {
               const m = metrics.find(m => m.key === expanded)!
@@ -175,7 +175,7 @@ export default function Telemetry() {
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-semibold">{m.label}</h3>
                     <button onClick={() => setExpanded(null)}
-                      className="text-gray-500 hover:text-gray-300 text-xl">&times;</button>
+                      className="text-muted hover:text-secondary text-xl">&times;</button>
                   </div>
                   <Chart metric={m} points={points} windowStartMs={windowStartMs} windowMs={windowMs} expanded />
                 </>
@@ -213,18 +213,18 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
 
   if (points.length === 0) {
     return (
-      <div className={`rounded-lg bg-gray-900 border border-gray-800 p-4 ${!expanded ? 'cursor-pointer hover:border-gray-700 transition-colors' : ''}`}
+      <div className={`rounded-lg bg-panel border border-edge p-4 ${!expanded ? 'cursor-pointer hover:border-edge-strong transition-colors' : ''}`}
         onClick={!expanded ? onClick : undefined}>
         <div className="flex items-baseline justify-between mb-2">
-          <h3 className="text-sm text-gray-400">{metric.label}</h3>
-          <span className="text-xs text-gray-600">No data</span>
+          <h3 className="text-sm text-muted">{metric.label}</h3>
+          <span className="text-xs text-faint">No data</span>
         </div>
         <svg viewBox={`0 0 400 80`} className="w-full h-20" preserveAspectRatio="none">
           <line x1="0" y1="40" x2="400" y2="40" stroke="#374151" strokeWidth="0.5" strokeDasharray="4" />
         </svg>
         <div className="flex justify-between mt-2">
-          <span className="text-[10px] text-gray-600 font-mono">{fmtTimeLabel(windowStartMs, windowMs)}</span>
-          <span className="text-[10px] text-gray-600 font-mono">{fmtTimeLabel(windowStartMs + windowMs, windowMs)}</span>
+          <span className="text-[10px] text-faint font-mono">{fmtTimeLabel(windowStartMs, windowMs)}</span>
+          <span className="text-[10px] text-faint font-mono">{fmtTimeLabel(windowStartMs + windowMs, windowMs)}</span>
         </div>
       </div>
     )
@@ -256,16 +256,16 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
 
   return (
     <div
-      className={`rounded-lg bg-gray-900 border border-gray-800 p-4 ${!expanded ? 'cursor-pointer hover:border-gray-700 transition-colors' : ''}`}
+      className={`rounded-lg bg-panel border border-edge p-4 ${!expanded ? 'cursor-pointer hover:border-edge-strong transition-colors' : ''}`}
       onClick={!expanded ? onClick : undefined}
     >
       <div className="flex items-baseline justify-between mb-2">
-        <h3 className="text-sm text-gray-400">{metric.label}</h3>
+        <h3 className="text-sm text-muted">{metric.label}</h3>
         <div className="text-right">
           <span className="text-xl font-semibold font-mono" style={{ color: metric.color }}>
             {fmtVal(current)}
           </span>
-          <span className="text-xs text-gray-500 ml-1">{metric.unit}</span>
+          <span className="text-xs text-muted ml-1">{metric.unit}</span>
         </div>
       </div>
 
@@ -276,15 +276,15 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
       </svg>
 
       <div className="flex justify-between items-center mt-2">
-        <span className="text-[10px] text-gray-600 font-mono">
+        <span className="text-[10px] text-faint font-mono">
           {fmtTimeLabel(windowStartMs, windowMs)}
         </span>
-        <div className="flex gap-3 text-[10px] text-gray-600">
+        <div className="flex gap-3 text-[10px] text-faint">
           <span>min: {fmtVal(min)}</span>
           <span>avg: {fmtVal(avg)}</span>
           <span>max: {fmtVal(max)}</span>
         </div>
-        <span className="text-[10px] text-gray-600 font-mono">
+        <span className="text-[10px] text-faint font-mono">
           {fmtTimeLabel(windowStartMs + windowMs, windowMs)}
         </span>
       </div>

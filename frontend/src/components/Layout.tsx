@@ -28,8 +28,8 @@ function SideLink({ to, label }: { to: string; label: string }) {
       className={({ isActive }) =>
         `block px-3 py-1.5 rounded text-sm transition-colors ${
           isActive
-            ? 'bg-gray-800 text-white font-medium'
-            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+            ? 'bg-field text-white font-medium'
+            : 'text-muted hover:text-primary hover:bg-field/50'
         }`
       }
     >
@@ -42,15 +42,15 @@ export default function Layout() {
   const { data: status } = useApi<StatusBrief>('/api/status', 5000)
 
   return (
-    <div className="flex min-h-screen bg-gray-950 text-gray-100">
-      <aside className="w-52 border-r border-gray-800 px-3 py-4 flex flex-col gap-0.5 shrink-0">
+    <div className="flex min-h-screen bg-page text-primary">
+      <aside className="w-52 border-r border-edge px-3 py-4 flex flex-col gap-0.5 shrink-0">
         <div className="px-3 py-2 mb-3">
           <h1 className="text-lg font-semibold tracking-tight">airies-ups</h1>
           <div className="flex items-center gap-1.5 mt-1">
             <span className={`w-2 h-2 rounded-full ${
-              status?.connected ? 'bg-green-400' : 'bg-gray-600'
+              status?.connected ? 'bg-green-400' : 'bg-faint'
             }`} />
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-muted">
               {status?.connected ? `${status.driver} connected` : 'disconnected'}
             </span>
           </div>
@@ -60,7 +60,7 @@ export default function Layout() {
           <SideLink key={n.to} to={n.to} label={n.label} />
         ))}
 
-        <p className="text-[10px] text-gray-600 uppercase tracking-widest px-3 mt-5 mb-1">
+        <p className="text-[10px] text-faint uppercase tracking-widest px-3 mt-5 mb-1">
           Configuration
         </p>
         {configNav.map((n) => (
@@ -73,10 +73,10 @@ export default function Layout() {
             localStorage.removeItem('auth_token')
             window.location.href = '/login'
           }}
-            className="block w-full text-left text-xs text-gray-600 hover:text-gray-400 transition-colors">
+            className="block w-full text-left text-xs text-faint hover:text-muted transition-colors">
             Logout
           </button>
-          <span className="text-[10px] text-gray-700 font-mono">v0.1.0</span>
+          <span className="text-[10px] text-faint font-mono">v0.1.0</span>
         </div>
       </aside>
 

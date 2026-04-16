@@ -26,36 +26,36 @@ export default function UpsConfig() {
   if (loading) return (
     <div>
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
-      <div className="rounded-lg border border-gray-800 overflow-hidden">
+      <div className="rounded-lg border border-edge overflow-hidden">
         {/* Header */}
-        <div className="bg-gray-900 px-4 py-2.5 flex gap-8">
-          <div className="flex-[4] h-3 w-20 bg-gray-800 rounded animate-pulse" />
-          <div className="flex-[3] h-3 w-12 bg-gray-800 rounded animate-pulse" />
-          <div className="flex-[1] h-3 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
-          <div className="flex-[2] h-3 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
+        <div className="bg-panel px-4 py-2.5 flex gap-8">
+          <div className="flex-[4] h-3 w-20 bg-field rounded animate-pulse" />
+          <div className="flex-[3] h-3 w-12 bg-field rounded animate-pulse" />
+          <div className="flex-[1] h-3 w-8 bg-field rounded animate-pulse ml-auto" />
+          <div className="flex-[2] h-3 w-12 bg-field rounded animate-pulse ml-auto" />
         </div>
         {/* Simulate 6 groups with varying register counts */}
         {[3, 1, 9, 6, 2, 2].map((count, gi) => (
           <div key={gi}>
             {/* Group header */}
-            <div className="bg-gray-900/50 border-t border-gray-800 px-4 py-1.5">
-              <div className="h-2.5 w-28 bg-gray-800/50 rounded animate-pulse" />
+            <div className="bg-panel/50 border-t border-edge px-4 py-1.5">
+              <div className="h-2.5 w-28 bg-field/50 rounded animate-pulse" />
             </div>
             {/* Register rows */}
             {Array.from({ length: count }).map((_, ri) => (
-              <div key={ri} className="border-t border-gray-800 px-4 py-3 flex gap-8">
+              <div key={ri} className="border-t border-edge px-4 py-3 flex gap-8">
                 <div className="flex-[4]">
-                  <div className="h-4 w-48 bg-gray-800 rounded animate-pulse mb-1" />
-                  <div className="h-3 w-32 bg-gray-800/50 rounded animate-pulse" />
+                  <div className="h-4 w-48 bg-field rounded animate-pulse mb-1" />
+                  <div className="h-3 w-32 bg-field/50 rounded animate-pulse" />
                 </div>
                 <div className="flex-[3]">
-                  <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
+                  <div className="h-4 w-24 bg-field rounded animate-pulse" />
                 </div>
                 <div className="flex-[1]">
-                  <div className="h-4 w-8 bg-gray-800 rounded animate-pulse ml-auto" />
+                  <div className="h-4 w-8 bg-field rounded animate-pulse ml-auto" />
                 </div>
                 <div className="flex-[2]">
-                  <div className="h-4 w-12 bg-gray-800 rounded animate-pulse ml-auto" />
+                  <div className="h-4 w-12 bg-field rounded animate-pulse ml-auto" />
                 </div>
               </div>
             ))}
@@ -69,7 +69,7 @@ export default function UpsConfig() {
   if (!regs || regs.length === 0) return (
     <div>
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
-      <p className="text-gray-500">No config registers available (UPS not connected or driver has none).</p>
+      <p className="text-muted">No config registers available (UPS not connected or driver has none).</p>
     </div>
   )
 
@@ -100,7 +100,7 @@ export default function UpsConfig() {
     <div>
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
 
-      <div className="rounded-lg border border-gray-800 overflow-hidden">
+      <div className="rounded-lg border border-edge overflow-hidden">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col className="w-[40%]" />
@@ -108,7 +108,7 @@ export default function UpsConfig() {
             <col className="w-[10%]" />
             <col className="w-[20%]" />
           </colgroup>
-          <thead className="bg-gray-900 text-gray-400 text-xs uppercase tracking-wider">
+          <thead className="bg-panel text-muted text-xs uppercase tracking-wider">
             <tr>
               <th className="text-left px-4 py-2.5">Register</th>
               <th className="text-left px-4 py-2.5">Value</th>
@@ -119,8 +119,8 @@ export default function UpsConfig() {
           <tbody>
             {groups.map((group) => (
               <>
-                <tr key={`hdr-${group}`} className="bg-gray-900/50">
-                  <td colSpan={4} className="px-4 py-1.5 text-[10px] text-gray-500 uppercase tracking-widest font-medium">
+                <tr key={`hdr-${group}`} className="bg-panel/50">
+                  <td colSpan={4} className="px-4 py-1.5 text-[10px] text-muted uppercase tracking-widest font-medium">
                     {group.replace(/_/g, ' ')}
                   </td>
                 </tr>
@@ -156,29 +156,29 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
   const [editing, setEditing] = useState(false)
 
   const rowBg = feedback === 'written'
-    ? 'bg-green-900/20 border-t border-gray-800'
+    ? 'bg-green-900/20 border-t border-edge'
     : feedback === 'rejected'
-      ? 'bg-yellow-900/20 border-t border-gray-800'
+      ? 'bg-yellow-900/20 border-t border-edge'
       : feedback === 'error'
-        ? 'bg-red-900/20 border-t border-gray-800'
+        ? 'bg-red-900/20 border-t border-edge'
         : saving === reg.name
-          ? 'bg-blue-900/10 border-t border-gray-800'
-          : 'border-t border-gray-800 hover:bg-gray-900/30'
+          ? 'bg-blue-900/10 border-t border-edge'
+          : 'border-t border-edge hover:bg-panel/30'
 
   return (
     <tr className={`transition-colors duration-300 ${rowBg}`}>
       <td className="px-4 py-2">
-        <p className="text-gray-200 text-sm">{reg.display_name}</p>
-        <p className="text-[11px] text-gray-600 font-mono">{reg.name}</p>
+        <p className="text-primary text-sm">{reg.display_name}</p>
+        <p className="text-[11px] text-faint font-mono">{reg.name}</p>
       </td>
-      <td className="px-4 py-2 text-gray-200 text-sm">
+      <td className="px-4 py-2 text-primary text-sm">
         {saving === reg.name ? (
-          <span className="text-gray-500 animate-pulse">saving...</span>
+          <span className="text-muted animate-pulse">saving...</span>
         ) : (
           displayValue
         )}
       </td>
-      <td className="px-4 py-2 text-right text-gray-600 font-mono text-xs">{reg.raw_value}</td>
+      <td className="px-4 py-2 text-right text-faint font-mono text-xs">{reg.raw_value}</td>
       <td className="px-4 py-2 text-right">
         {feedback && (
           <span className={`text-xs font-medium ${
@@ -198,7 +198,7 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
           </button>
         )}
         {!feedback && !reg.writable && (
-          <span className="text-[10px] text-gray-700">read-only</span>
+          <span className="text-[10px] text-faint">read-only</span>
         )}
         {reg.writable && editing && (
           <div className="flex gap-1.5 items-center justify-end">
@@ -206,7 +206,7 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
               <select
                 value={editVal}
                 onChange={(e) => setEditVal(e.target.value)}
-                className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs"
+                className="bg-field border border-edge-strong rounded px-2 py-1 text-xs"
               >
                 {reg.options.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -219,7 +219,7 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
                 onChange={(e) => setEditVal(e.target.value)}
                 min={reg.min}
                 max={reg.max}
-                className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-20 text-right"
+                className="bg-field border border-edge-strong rounded px-2 py-1 text-xs w-20 text-right"
               />
             )}
             <button
@@ -231,7 +231,7 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
             </button>
             <button
               onClick={() => setEditing(false)}
-              className="text-xs text-gray-500 hover:text-gray-400"
+              className="text-xs text-muted hover:text-muted"
             >
               Cancel
             </button>

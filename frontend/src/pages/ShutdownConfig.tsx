@@ -51,7 +51,7 @@ export default function ShutdownConfig() {
 
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Groups</h3>
+          <h3 className="text-sm font-medium text-muted uppercase tracking-wider">Groups</h3>
           <button onClick={() => setShowAddGroup(!showAddGroup)}
             className="text-xs text-blue-400 hover:text-blue-300">
             {showAddGroup ? 'Cancel' : '+ Add Group'}
@@ -59,33 +59,33 @@ export default function ShutdownConfig() {
         </div>
 
         {showAddGroup && (
-          <div className="rounded-lg bg-gray-900 border border-gray-800 p-4 mb-4 flex gap-3 items-end">
+          <div className="rounded-lg bg-panel border border-edge p-4 mb-4 flex gap-3 items-end">
             <div>
-              <label className="text-xs text-gray-400">Name</label>
+              <label className="text-xs text-muted">Name</label>
               <input value={newGroup.name} onChange={(e) => setNewGroup({ ...newGroup, name: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-40" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-40" />
             </div>
             <div>
-              <label className="text-xs text-gray-400">Order</label>
+              <label className="text-xs text-muted">Order</label>
               <input type="number" value={newGroup.execution_order}
                 onChange={(e) => setNewGroup({ ...newGroup, execution_order: parseInt(e.target.value) })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-16" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-16" />
             </div>
             <label className="flex items-center gap-1 text-sm">
               <input type="checkbox" checked={newGroup.parallel}
                 onChange={(e) => setNewGroup({ ...newGroup, parallel: e.target.checked })} />
               Parallel
             </label>
-            <button onClick={addGroup} className="px-3 py-1 bg-blue-700 hover:bg-blue-600 rounded text-sm">
+            <button onClick={addGroup} className="px-3 py-1 bg-accent hover:bg-accent-hover rounded text-sm">
               Create
             </button>
           </div>
         )}
 
         {groups && groups.length > 0 ? (
-          <div className="rounded-lg border border-gray-800 overflow-hidden">
+          <div className="rounded-lg border border-edge overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-900 text-gray-400">
+              <thead className="bg-panel text-muted">
                 <tr>
                   <th className="text-left px-4 py-2">Name</th>
                   <th className="text-left px-4 py-2">Order</th>
@@ -94,9 +94,9 @@ export default function ShutdownConfig() {
               </thead>
               <tbody>
                 {groups.map((g) => (
-                  <tr key={g.id} className="border-t border-gray-800">
+                  <tr key={g.id} className="border-t border-edge">
                     <td className="px-4 py-2">{g.name}</td>
-                    <td className="px-4 py-2 text-gray-400">{g.execution_order}</td>
+                    <td className="px-4 py-2 text-muted">{g.execution_order}</td>
                     <td className="px-4 py-2">
                       <span className={`px-2 py-0.5 rounded text-xs ${g.parallel ? 'bg-green-900 text-green-400' : 'bg-gray-700 text-gray-300'}`}>
                         {g.parallel ? 'parallel' : 'sequential'}
@@ -108,13 +108,13 @@ export default function ShutdownConfig() {
             </table>
           </div>
         ) : (
-          <p className="text-gray-500 text-sm">No shutdown groups configured.</p>
+          <p className="text-muted text-sm">No shutdown groups configured.</p>
         )}
       </div>
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Targets</h3>
+          <h3 className="text-sm font-medium text-muted uppercase tracking-wider">Targets</h3>
           <button onClick={() => setShowAddTarget(!showAddTarget)}
             className="text-xs text-blue-400 hover:text-blue-300">
             {showAddTarget ? 'Cancel' : '+ Add Target'}
@@ -122,48 +122,48 @@ export default function ShutdownConfig() {
         </div>
 
         {showAddTarget && groups && (
-          <div className="rounded-lg bg-gray-900 border border-gray-800 p-4 mb-4 grid grid-cols-2 gap-3">
+          <div className="rounded-lg bg-panel border border-edge p-4 mb-4 grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-gray-400">Group</label>
+              <label className="text-xs text-muted">Group</label>
               <select value={newTarget.group_id}
                 onChange={(e) => setNewTarget({ ...newTarget, group_id: parseInt(e.target.value) })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full">
                 <option value={0}>Select...</option>
                 {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-xs text-gray-400">Name</label>
+              <label className="text-xs text-muted">Name</label>
               <input value={newTarget.name} onChange={(e) => setNewTarget({ ...newTarget, name: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full" />
             </div>
             <div>
-              <label className="text-xs text-gray-400">Host</label>
+              <label className="text-xs text-muted">Host</label>
               <input value={newTarget.host} onChange={(e) => setNewTarget({ ...newTarget, host: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full" />
             </div>
             <div>
-              <label className="text-xs text-gray-400">Username</label>
+              <label className="text-xs text-muted">Username</label>
               <input value={newTarget.username} onChange={(e) => setNewTarget({ ...newTarget, username: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full" />
             </div>
             <div>
-              <label className="text-xs text-gray-400">Method</label>
+              <label className="text-xs text-muted">Method</label>
               <select value={newTarget.method}
                 onChange={(e) => setNewTarget({ ...newTarget, method: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full">
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full">
                 <option value="ssh_password">SSH Password</option>
                 <option value="ssh_key">SSH Key</option>
                 <option value="command">Command</option>
               </select>
             </div>
             <div>
-              <label className="text-xs text-gray-400">Command</label>
+              <label className="text-xs text-muted">Command</label>
               <input value={newTarget.command} onChange={(e) => setNewTarget({ ...newTarget, command: e.target.value })}
-                className="block bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm w-full" />
+                className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full" />
             </div>
             <div className="col-span-2">
-              <button onClick={addTarget} className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-sm">
+              <button onClick={addTarget} className="px-3 py-1.5 bg-accent hover:bg-accent-hover rounded text-sm">
                 Create Target
               </button>
             </div>
@@ -171,9 +171,9 @@ export default function ShutdownConfig() {
         )}
 
         {targets && targets.length > 0 ? (
-          <div className="rounded-lg border border-gray-800 overflow-hidden">
+          <div className="rounded-lg border border-edge overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-900 text-gray-400">
+              <thead className="bg-panel text-muted">
                 <tr>
                   <th className="text-left px-4 py-2">Name</th>
                   <th className="text-left px-4 py-2">Group</th>
@@ -185,22 +185,22 @@ export default function ShutdownConfig() {
               </thead>
               <tbody>
                 {targets.map((t) => (
-                  <tr key={t.id} className="border-t border-gray-800">
+                  <tr key={t.id} className="border-t border-edge">
                     <td className="px-4 py-2">{t.name}</td>
-                    <td className="px-4 py-2 text-gray-400">{t.group}</td>
+                    <td className="px-4 py-2 text-muted">{t.group}</td>
                     <td className="px-4 py-2 font-mono text-xs">{t.host}</td>
                     <td className="px-4 py-2">
                       <span className="px-2 py-0.5 rounded text-xs bg-gray-700">{t.method}</span>
                     </td>
-                    <td className="px-4 py-2 font-mono text-xs text-gray-400">{t.command}</td>
-                    <td className="px-4 py-2 text-gray-400">{t.timeout_sec}s</td>
+                    <td className="px-4 py-2 font-mono text-xs text-muted">{t.command}</td>
+                    <td className="px-4 py-2 text-muted">{t.timeout_sec}s</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <p className="text-gray-500 text-sm">No shutdown targets configured.</p>
+          <p className="text-muted text-sm">No shutdown targets configured.</p>
         )}
       </div>
     </div>

@@ -13,7 +13,7 @@ export default function AppConfig() {
   const { data: config, error, loading, refetch } = useApi<ConfigEntry[]>('/api/config/app')
   const [saving, setSaving] = useState<string | null>(null)
 
-  if (loading) return <p className="text-gray-500">Loading...</p>
+  if (loading) return <p className="text-muted">Loading...</p>
   if (error) return <p className="text-red-400">{error}</p>
   if (!config) return null
 
@@ -33,7 +33,7 @@ export default function AppConfig() {
   return (
     <div>
       <h2 className="text-xl font-semibold mb-1">App Settings</h2>
-      <p className="text-sm text-gray-500 mb-4">
+      <p className="text-sm text-muted mb-4">
         Changes to these settings require a daemon restart.
       </p>
 
@@ -41,11 +41,11 @@ export default function AppConfig() {
 
       {groups.map((group) => (
         <div key={group} className="mb-4">
-          <div className="rounded-lg bg-gray-900 border border-gray-800">
-            <div className="px-4 py-2.5 border-b border-gray-800">
-              <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">{group}</h3>
+          <div className="rounded-lg bg-panel border border-edge">
+            <div className="px-4 py-2.5 border-b border-edge">
+              <h3 className="text-xs font-medium text-muted uppercase tracking-wider">{group}</h3>
             </div>
-            <div className="divide-y divide-gray-800">
+            <div className="divide-y divide-edge">
               {config
                 .filter((c) => c.key.startsWith(group + '.'))
                 .map((c) => (
@@ -89,31 +89,31 @@ function PasswordChange() {
   }
 
   return (
-    <div className="mb-4 rounded-lg bg-gray-900 border border-gray-800">
-      <div className="px-4 py-2.5 border-b border-gray-800">
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Admin Password</h3>
+    <div className="mb-4 rounded-lg bg-panel border border-edge">
+      <div className="px-4 py-2.5 border-b border-edge">
+        <h3 className="text-xs font-medium text-muted uppercase tracking-wider">Admin Password</h3>
       </div>
       <div className="px-4 py-3 space-y-3">
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className="text-xs text-gray-400">Current Password</label>
+            <label className="text-xs text-muted">Current Password</label>
             <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)}
-              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+              className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm mt-1" />
           </div>
           <div>
-            <label className="text-xs text-gray-400">New Password</label>
+            <label className="text-xs text-muted">New Password</label>
             <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)}
-              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+              className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm mt-1" />
           </div>
           <div>
-            <label className="text-xs text-gray-400">Confirm New Password</label>
+            <label className="text-xs text-muted">Confirm New Password</label>
             <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-              className="block w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1" />
+              className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm mt-1" />
           </div>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={submit} disabled={saving || !oldPw || !newPw || !confirmPw}
-            className="px-4 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-xs disabled:opacity-50">
+            className="px-4 py-1.5 bg-accent hover:bg-accent-hover rounded text-xs disabled:opacity-50">
             {saving ? 'Saving...' : 'Change Password'}
           </button>
           {msg && <span className={`text-xs ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</span>}
@@ -137,27 +137,27 @@ function ConfigRow({ entry, saving, onSave }: {
     <div className="flex items-center gap-4 px-4 py-3">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-200 font-medium">{subKey}</label>
+          <label className="text-sm text-primary font-medium">{subKey}</label>
           {!isDefault && (
             <span className="text-[10px] text-yellow-600">modified</span>
           )}
         </div>
-        <p className="text-xs text-gray-500">{entry.description}</p>
+        <p className="text-xs text-muted">{entry.description}</p>
         {entry.default_value && (
-          <p className="text-[10px] text-gray-600 mt-0.5">default: {entry.default_value}</p>
+          <p className="text-[10px] text-faint mt-0.5">default: {entry.default_value}</p>
         )}
       </div>
       <input
         type={entry.type === 'int' ? 'number' : 'text'}
         value={val}
         onChange={(e) => setVal(e.target.value)}
-        className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm w-28 text-right font-mono"
+        className="bg-field border border-edge-strong rounded px-3 py-1.5 text-sm w-28 text-right font-mono"
       />
       {changed && (
         <button
           onClick={() => onSave(entry.key, val)}
           disabled={saving === entry.key}
-          className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-xs shrink-0 transition-colors">
+          className="px-3 py-1.5 bg-accent hover:bg-accent-hover rounded text-xs shrink-0 transition-colors">
           {saving === entry.key ? '...' : 'Save'}
         </button>
       )}

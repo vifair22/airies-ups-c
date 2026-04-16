@@ -45,8 +45,8 @@ function FilterChip({ label, active, color, onClick }: {
     <button onClick={onClick}
       className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
         active
-          ? `${color || 'bg-gray-700'} border-gray-600 text-gray-100`
-          : 'bg-transparent border-gray-800 text-gray-600 hover:text-gray-400 hover:border-gray-700'
+          ? `${color || 'bg-gray-700'} border-edge-strong text-primary`
+          : 'bg-transparent border-edge text-faint hover:text-muted hover:border-edge-strong'
       }`}>
       {label}
     </button>
@@ -89,7 +89,7 @@ export default function Events() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Events</h2>
         {events && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-muted">
             {hasFilters ? `${filtered.length} of ${events.length}` : events.length} entries
           </span>
         )}
@@ -97,7 +97,7 @@ export default function Events() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <span className="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Severity</span>
+        <span className="text-[10px] text-faint uppercase tracking-wider mr-1">Severity</span>
         {['info', 'warning', 'error', 'critical'].map(s => (
           <FilterChip key={s} label={s}
             active={severityFilter.has(s)}
@@ -106,9 +106,9 @@ export default function Events() {
           />
         ))}
 
-        <span className="w-px h-4 bg-gray-800 mx-1" />
+        <span className="w-px h-4 bg-edge mx-1" />
 
-        <span className="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Category</span>
+        <span className="text-[10px] text-faint uppercase tracking-wider mr-1">Category</span>
         {availableCategories.map(c => (
           <FilterChip key={c} label={c}
             active={categoryFilter.has(c)}
@@ -119,9 +119,9 @@ export default function Events() {
 
         {hasFilters && (
           <>
-            <span className="w-px h-4 bg-gray-800 mx-1" />
+            <span className="w-px h-4 bg-edge mx-1" />
             <button onClick={() => { setSeverityFilter(new Set()); setCategoryFilter(new Set()) }}
-              className="text-[11px] text-gray-500 hover:text-gray-300">
+              className="text-[11px] text-muted hover:text-secondary">
               Clear filters
             </button>
           </>
@@ -132,7 +132,7 @@ export default function Events() {
       {loading && <LoadingSkeleton />}
 
       {events && filtered.length === 0 && (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-12 text-muted">
           {hasFilters ? (
             <p className="text-sm">No events match the current filters.</p>
           ) : (
@@ -149,22 +149,22 @@ export default function Events() {
           {filtered.map((ev, i) => {
             const sev = severityStyle[ev.severity] || severityStyle.info
             return (
-              <div key={i} className="rounded-lg bg-gray-900 border border-gray-800 px-4 py-3">
+              <div key={i} className="rounded-lg bg-panel border border-edge px-4 py-3">
                 <div className="flex items-start gap-3">
                   <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${sev.dot}`} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-medium text-sm text-gray-200">{ev.title}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${categoryColor[ev.category] || 'bg-gray-700'} text-gray-300`}>
+                      <span className="font-medium text-sm text-primary">{ev.title}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${categoryColor[ev.category] || 'bg-gray-700'} text-secondary`}>
                         {ev.category}
                       </span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] ${sev.bg}`}>
                         {ev.severity}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-400 break-words">{ev.message}</p>
+                    <p className="text-sm text-muted break-words">{ev.message}</p>
                   </div>
-                  <span className="text-[11px] text-gray-600 whitespace-nowrap shrink-0" title={ev.timestamp + ' UTC'}>
+                  <span className="text-[11px] text-faint whitespace-nowrap shrink-0" title={ev.timestamp + ' UTC'}>
                     {relativeTime(ev.timestamp)}
                   </span>
                 </div>
@@ -181,7 +181,7 @@ function LoadingSkeleton() {
   return (
     <div className="space-y-1.5">
       {[1,2,3,4,5,6].map((i) => (
-        <div key={i} className="rounded-lg bg-gray-900 border border-gray-800 h-16 animate-pulse" />
+        <div key={i} className="rounded-lg bg-panel border border-edge h-16 animate-pulse" />
       ))}
     </div>
   )
