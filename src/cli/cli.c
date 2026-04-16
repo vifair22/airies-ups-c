@@ -155,76 +155,14 @@ static const help_entry_t HELP[] = {
     { "cmd",
       "Usage: airies-ups cmd <action> [options]\n"
       "\n"
-      "Actions:\n"
-      "  shutdown [--dry-run]         Trigger shutdown workflow\n"
-      "  battery-test                 Start battery self-test\n"
-      "  runtime-cal                  Start runtime calibration (deep discharge)\n"
-      "  bypass on|off                Toggle bypass mode\n"
-      "  freq <setting>               Set frequency tolerance\n"
-      "  mute                         Mute active alarms\n"
-      "  unmute                       Cancel alarm mute\n"
-      "  beep                         Short LED/beeper test\n"
-      "  clear-faults                 Clear UPS fault register\n"
-    },
-    { "cmd shutdown",
-      "Usage: airies-ups cmd shutdown [--dry-run]\n"
+      "Available actions are determined by the connected UPS driver.\n"
+      "Run 'airies-ups cmd' without arguments to see the list.\n"
       "\n"
-      "Execute the shutdown workflow. Groups run sequentially,\n"
-      "targets within groups run in parallel. Final phase sends\n"
-      "UPS shutdown command and shuts down the local host.\n"
+      "Special actions:\n"
+      "  shutdown [--dry-run]         Orchestrated shutdown workflow\n"
       "\n"
-      "Options:\n"
-      "  --dry-run                    Log what would happen without executing\n"
-    },
-    { "cmd battery-test",
-      "Usage: airies-ups cmd battery-test\n"
-      "\n"
-      "Start a battery self-test. UPS briefly runs on battery\n"
-      "to verify battery health. Results appear in events.\n"
-    },
-    { "cmd runtime-cal",
-      "Usage: airies-ups cmd runtime-cal\n"
-      "\n"
-      "Start a runtime calibration. Deeply discharges the battery\n"
-      "to recalibrate the runtime estimate. Use sparingly.\n"
-    },
-    { "cmd bypass",
-      "Usage: airies-ups cmd bypass on|off\n"
-      "\n"
-      "Enable or disable bypass mode. In bypass, power flows\n"
-      "directly from input to output without battery protection.\n"
-    },
-    { "cmd freq",
-      "Usage: airies-ups cmd freq <setting>\n"
-      "\n"
-      "Set the output frequency tolerance. Available settings\n"
-      "depend on the UPS model. Use 'airies-ups status' to see\n"
-      "driver capabilities.\n"
-      "\n"
-      "Common settings (SRT):\n"
-      "  auto       Automatic 50/60Hz\n"
-      "  hz60_0_1   60 Hz +/- 0.1 Hz (inhibits HE mode)\n"
-      "  hz60_3_0   60 Hz +/- 3.0 Hz (allows HE mode)\n"
-    },
-    { "cmd mute",
-      "Usage: airies-ups cmd mute\n"
-      "\n"
-      "Mute all active audible alarms on the UPS.\n"
-    },
-    { "cmd unmute",
-      "Usage: airies-ups cmd unmute\n"
-      "\n"
-      "Cancel alarm mute on the UPS.\n"
-    },
-    { "cmd beep",
-      "Usage: airies-ups cmd beep\n"
-      "\n"
-      "Send a short LED/beeper test to the UPS.\n"
-    },
-    { "cmd clear-faults",
-      "Usage: airies-ups cmd clear-faults\n"
-      "\n"
-      "Clear the UPS fault register.\n"
+      "Toggle commands (e.g., bypass) require 'on' or 'off':\n"
+      "  airies-ups cmd bypass on\n"
     },
 };
 

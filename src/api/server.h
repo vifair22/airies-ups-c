@@ -25,6 +25,7 @@ typedef struct {
     const char   *body;        /* POST/PUT body (JSON), NULL for GET/DELETE */
     size_t        body_len;
     const char   *auth_token;  /* from Authorization header, NULL if absent */
+    int           is_local;    /* 1 if request came via unix socket (trusted) */
     void         *_conn;       /* internal: MHD connection for query params */
 } api_request_t;
 

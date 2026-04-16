@@ -36,6 +36,13 @@ struct monitor {
     uint32_t      prev_status;
     int           first_poll;
 
+    /* Daily config snapshot */
+    time_t        last_config_snapshot;
+
+    /* Connectivity tracking */
+    int           was_connected;
+    time_t        disconnected_at;
+
     /* HE inhibit tracking */
     int           he_inhibit;
     char          he_source[32];
@@ -146,6 +153,49 @@ static void format_status_line(const ups_data_t *d, char *buf, size_t len)
              ups_transfer_reason_str(d->transfer_reason));
 }
 
+/* --- Config register snapshot --- */
+
+static void snapshot_config_registers(monitor_t *mon)
+{
+    size_t count;
+    const ups_config_reg_t *regs = ups_get_config_regs(mon->ups, &count);
+    if (!regs || count == 0) return;
+
+    char ts[32];
+    time_t now = time(NULL);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+
+    int snapped = 0;
+    for (size_t i = 0; i < count; i++) {
+        uint16_t raw = 0;
+        if (ups_config_read(mon->ups, &regs[i], &raw, NULL, 0) != 0)
+            continue;
+
+        char raw_s[16], display_s[64];
+        snprintf(raw_s, sizeof(raw_s), "%u", raw);
+        if (regs[i].scale > 1)
+            snprintf(display_s, sizeof(display_s), "%.1f%s%s",
+                     (double)raw / regs[i].scale,
+                     regs[i].unit ? " " : "", regs[i].unit ? regs[i].unit : "");
+        else
+            snprintf(display_s, sizeof(display_s), "%u%s%s",
+                     raw,
+                     regs[i].unit ? " " : "", regs[i].unit ? regs[i].unit : "");
+
+        const char *params[] = { regs[i].name, raw_s, display_s, ts, NULL };
+        db_execute_non_query(mon->db,
+            "INSERT INTO ups_config (register_name, raw_value, display_value, timestamp) "
+            "VALUES (?, ?, ?, ?)",
+            params, NULL);
+        snapped++;
+    }
+
+    if (snapped > 0)
+        log_info("config snapshot: recorded %d registers", snapped);
+}
+
 /* --- Monitor thread --- */
 
 static void *monitor_thread(void *arg)
@@ -184,6 +234,7 @@ static void *monitor_thread(void *arg)
         log_info("%s", line);
 
         fire_event(mon, "info", "system", "Monitor Started", line);
+        mon->was_connected = 1;
     }
 
     mon->last_telemetry = time(NULL);
@@ -201,6 +252,14 @@ static void *monitor_thread(void *arg)
             pthread_mutex_lock(&mon->mutex);
             mon->connected = 0;
             pthread_mutex_unlock(&mon->mutex);
+
+            /* Fire disconnect event on transition */
+            if (mon->was_connected) {
+                mon->was_connected = 0;
+                mon->disconnected_at = time(NULL);
+                fire_event(mon, "error", "system", "UPS Disconnected",
+                           "Lost communication with UPS");
+            }
             continue;
         }
 
@@ -209,6 +268,26 @@ static void *monitor_thread(void *arg)
         mon->has_data = 1;
         mon->connected = 1;
         pthread_mutex_unlock(&mon->mutex);
+
+        /* Fire reconnect event on transition */
+        if (!mon->was_connected && mon->disconnected_at > 0) {
+            time_t gap = time(NULL) - mon->disconnected_at;
+            char msg[128];
+            if (gap >= 3600)
+                snprintf(msg, sizeof(msg),
+                         "UPS communication restored after %ldh %ldm",
+                         gap / 3600, (gap % 3600) / 60);
+            else if (gap >= 60)
+                snprintf(msg, sizeof(msg),
+                         "UPS communication restored after %ldm %lds",
+                         gap / 60, gap % 60);
+            else
+                snprintf(msg, sizeof(msg),
+                         "UPS communication restored after %lds", gap);
+            fire_event(mon, "warning", "system", "UPS Reconnected", msg);
+            mon->disconnected_at = 0;
+        }
+        mon->was_connected = 1;
 
         /* Fire per-poll callbacks (alert engine runs here) */
         for (int i = 0; i < mon->npoll_cbs; i++) {
@@ -340,6 +419,12 @@ static void *monitor_thread(void *arg)
             retention_run(mon->db, &mon->retention);
             mon->last_retention = now;
         }
+
+        /* Daily config register snapshot (catches LCD-initiated changes) */
+        if (now - mon->last_config_snapshot >= 86400) {
+            snapshot_config_registers(mon);
+            mon->last_config_snapshot = now;
+        }
     }
 
     return NULL;
@@ -379,6 +464,7 @@ void monitor_set_retention(monitor_t *mon, const retention_config_t *cfg)
     mon->retention = *cfg;
     mon->retention_enabled = 1;
     mon->last_retention = time(NULL);
+    mon->last_config_snapshot = 0;  /* force snapshot on first pass */
 }
 
 int monitor_on_poll(monitor_t *mon, monitor_poll_fn fn, void *userdata)

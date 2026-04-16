@@ -44,6 +44,10 @@ static int auth_check(const api_request_t *req, const char *url, void *userdata)
 {
     cutils_db_t *db = userdata;
 
+    /* Unix socket (CLI) — trusted, no auth required */
+    if (req->is_local)
+        return 1;
+
     /* Public endpoints — no auth required */
     if (strcmp(url, "/api/auth/setup") == 0 ||
         strcmp(url, "/api/auth/login") == 0 ||

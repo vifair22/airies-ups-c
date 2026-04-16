@@ -469,6 +469,29 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     uint16_t readback = 0;
     ups_config_read(ctx->ups, reg, &readback, NULL, 0);
 
+    /* Snapshot the new value to ups_config table */
+    {
+        char ts[32], raw_s[16], display_s[64];
+        time_t now = time(NULL);
+        struct tm tm;
+        gmtime_r(&now, &tm);
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+        snprintf(raw_s, sizeof(raw_s), "%u", readback);
+        if (reg->scale > 1)
+            snprintf(display_s, sizeof(display_s), "%.1f%s%s",
+                     (double)readback / reg->scale,
+                     reg->unit ? " " : "", reg->unit ? reg->unit : "");
+        else
+            snprintf(display_s, sizeof(display_s), "%u%s%s",
+                     readback,
+                     reg->unit ? " " : "", reg->unit ? reg->unit : "");
+        const char *snap_params[] = { reg->name, raw_s, display_s, ts, NULL };
+        db_execute_non_query(ctx->db,
+            "INSERT INTO ups_config (register_name, raw_value, display_value, timestamp) "
+            "VALUES (?, ?, ?, ?)",
+            snap_params, NULL);
+    }
+
     cJSON *resp = reg_to_json(reg, readback, NULL);
     if (rc != 0) {
         if (readback != val)

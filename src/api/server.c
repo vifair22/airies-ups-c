@@ -41,7 +41,15 @@ struct api_server {
     int                nroutes;
     api_auth_fn        auth_fn;
     void              *auth_ud;
+    void              *_tcp_cls;   /* mhd_cls_t for TCP daemon */
+    void              *_unix_cls;  /* mhd_cls_t for unix daemon */
 };
+
+/* Wrapper passed as cls to MHD — carries the server + transport flag */
+typedef struct {
+    api_server_t *srv;
+    int           is_local;
+} mhd_cls_t;
 
 /* --- Helpers --- */
 
@@ -180,7 +188,9 @@ static enum MHD_Result request_handler(void *cls,
                                        void **req_cls)
 {
     (void)version;
-    api_server_t *srv = cls;
+    mhd_cls_t *mcls = cls;
+    api_server_t *srv = mcls->srv;
+    int is_local = mcls->is_local;
 
     /* First call: allocate POST body accumulator */
     if (*req_cls == NULL) {
@@ -224,6 +234,7 @@ static enum MHD_Result request_handler(void *cls,
             .body       = pb->data,
             .body_len   = pb->len,
             .auth_token = get_header(conn, "Authorization"),
+            .is_local   = is_local,
             ._conn      = conn,
         };
 
@@ -294,13 +305,21 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
     if (static_dir)
         srv->static_dir = strdup(static_dir);
 
+    /* Allocate cls wrappers (freed in api_server_stop) */
+    mhd_cls_t *tcp_cls = calloc(1, sizeof(*tcp_cls));
+    mhd_cls_t *unix_cls = calloc(1, sizeof(*unix_cls));
+    if (tcp_cls) { tcp_cls->srv = srv; tcp_cls->is_local = 0; }
+    if (unix_cls) { unix_cls->srv = srv; unix_cls->is_local = 1; }
+    srv->_tcp_cls = tcp_cls;
+    srv->_unix_cls = unix_cls;
+
     /* TCP daemon */
     if (tcp_port > 0) {
         srv->tcp_daemon = MHD_start_daemon(
             MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
             (uint16_t)tcp_port,
             NULL, NULL,
-            request_handler, srv,
+            request_handler, tcp_cls,
             MHD_OPTION_END);
 
         if (!srv->tcp_daemon) {
@@ -347,7 +366,7 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
             MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
             0,  /* port ignored for pre-bound socket */
             NULL, NULL,
-            request_handler, srv,
+            request_handler, unix_cls,
             MHD_OPTION_LISTEN_SOCKET, sock,
             MHD_OPTION_END);
 
@@ -413,6 +432,8 @@ void api_server_stop(api_server_t *srv)
     }
 
     free(srv->static_dir);
+    free(srv->_tcp_cls);
+    free(srv->_unix_cls);
     free(srv);
 }
 

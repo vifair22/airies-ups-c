@@ -92,37 +92,35 @@ static void print_json(const char *json)
 
 /* --- Command handlers --- */
 
+static int api_get_print(const char *sock, const char *path)
+{
+    char *resp = malloc(BUF_SIZE);
+    if (!resp) { fprintf(stderr, "error: out of memory\n"); return 1; }
+    if (http_request(sock, "GET", path, NULL, resp, BUF_SIZE) != 0) {
+        free(resp);
+        return 1;
+    }
+    print_json(resp);
+    free(resp);
+    return 0;
+}
+
 static int cmd_status(const char *sock, int argc, char **argv)
 {
     if (has_help_flag(argc, argv, 2)) { help_current(); return 0; }
-
-    char resp[BUF_SIZE];
-    if (http_request(sock, "GET", "/api/status", NULL, resp, sizeof(resp)) != 0)
-        return 1;
-    print_json(resp);
-    return 0;
+    return api_get_print(sock, "/api/status");
 }
 
 static int cmd_events(const char *sock, int argc, char **argv)
 {
     if (has_help_flag(argc, argv, 2)) { help_current(); return 0; }
-
-    char resp[BUF_SIZE];
-    if (http_request(sock, "GET", "/api/events", NULL, resp, sizeof(resp)) != 0)
-        return 1;
-    print_json(resp);
-    return 0;
+    return api_get_print(sock, "/api/events");
 }
 
 static int cmd_telemetry(const char *sock, int argc, char **argv)
 {
     if (has_help_flag(argc, argv, 2)) { help_current(); return 0; }
-
-    char resp[BUF_SIZE];
-    if (http_request(sock, "GET", "/api/telemetry", NULL, resp, sizeof(resp)) != 0)
-        return 1;
-    print_json(resp);
-    return 0;
+    return api_get_print(sock, "/api/telemetry");
 }
 
 static int send_action(const char *sock, const char *action,
@@ -135,11 +133,13 @@ static int send_action(const char *sock, const char *action,
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
 
-    char resp[BUF_SIZE];
-    int rc = http_request(sock, "POST", "/api/cmd", json, resp, sizeof(resp));
+    char *resp = malloc(BUF_SIZE);
+    if (!resp) { free(json); return 1; }
+    int rc = http_request(sock, "POST", "/api/cmd", json, resp, BUF_SIZE);
     free(json);
-    if (rc != 0) return 1;
+    if (rc != 0) { free(resp); return 1; }
     print_json(resp);
+    free(resp);
     return 0;
 }
 
@@ -152,69 +152,114 @@ static int cmd_cmd(const char *sock, int argc, char **argv)
     const char *sub = find_subcmd(argc, argv, 2,
                                   global_flags,
                                   sizeof(global_flags) / sizeof(global_flags[0]));
-    if (!sub) {
-        if (has_help_flag(argc, argv, 2)) { help_topic("cmd"); return 0; }
-        fprintf(stderr, "error: cmd requires an action\n");
-        help_topic("cmd");
+
+    /* Fetch available commands from daemon */
+    char *resp = malloc(BUF_SIZE);
+    if (!resp) return 1;
+    if (http_request(sock, "GET", "/api/commands", NULL, resp, BUF_SIZE) != 0) {
+        free(resp);
         return 1;
     }
 
-    /* Refine help topic */
-    char topic[64];
-    snprintf(topic, sizeof(topic), "cmd %s", sub);
-    set_topic(topic);
+    cJSON *cmds = cJSON_Parse(resp);
+    free(resp);
 
-    if (has_help_flag(argc, argv, 2)) { help_current(); return 0; }
+    if (!sub) {
+        /* No subcommand — list available actions */
+        if (has_help_flag(argc, argv, 2) || !sub) {
+            fprintf(stderr, "Usage: airies-ups cmd <action> [options]\n\n");
+            fprintf(stderr, "Actions:\n");
+            fprintf(stderr, "  shutdown [--dry-run]         Orchestrated shutdown workflow\n");
+            if (cmds) {
+                int n = cJSON_GetArraySize(cmds);
+                for (int i = 0; i < n; i++) {
+                    cJSON *c = cJSON_GetArrayItem(cmds, i);
+                    cJSON *jn = cJSON_GetObjectItemCaseSensitive(c, "name");
+                    cJSON *jd = cJSON_GetObjectItemCaseSensitive(c, "description");
+                    if (!jn || !cJSON_IsString(jn)) continue;
+                    fprintf(stderr, "  %-27s %s\n",
+                            jn->valuestring,
+                            (jd && cJSON_IsString(jd)) ? jd->valuestring : "");
+                }
+            }
+            fprintf(stderr, "\n");
+            cJSON_Delete(cmds);
+            return 0;
+        }
+    }
 
-    /* Dispatch actions */
+    if (has_help_flag(argc, argv, 2)) {
+        cJSON_Delete(cmds);
+        help_topic("cmd");
+        return 0;
+    }
+
+    /* Special case: shutdown workflow (app-level, not a UPS command) */
     if (strcmp(sub, "shutdown") == 0) {
+        cJSON_Delete(cmds);
         if (opt_has(argc, argv, 3, "--dry-run")) {
             cJSON *body = cJSON_CreateObject();
-            cJSON_AddStringToObject(body, "action", "shutdown");
+            cJSON_AddStringToObject(body, "action", "shutdown_workflow");
             cJSON_AddBoolToObject(body, "dry_run", 1);
             char *json = cJSON_PrintUnformatted(body);
             cJSON_Delete(body);
-            char resp[BUF_SIZE];
-            int rc = http_request(sock, "POST", "/api/cmd", json, resp, sizeof(resp));
+            char *r = malloc(BUF_SIZE);
+            if (!r) { free(json); return 1; }
+            int rc = http_request(sock, "POST", "/api/cmd", json, r, BUF_SIZE);
             free(json);
-            if (rc != 0) return 1;
-            print_json(resp);
+            if (rc != 0) { free(r); return 1; }
+            print_json(r);
+            free(r);
             return 0;
         }
-        return send_action(sock, "shutdown", NULL, NULL);
+        return send_action(sock, "shutdown_workflow", NULL, NULL);
     }
 
-    if (strcmp(sub, "battery-test") == 0) return send_action(sock, "battery_test", NULL, NULL);
-    if (strcmp(sub, "runtime-cal") == 0)  return send_action(sock, "runtime_cal", NULL, NULL);
-    if (strcmp(sub, "clear-faults") == 0) return send_action(sock, "clear_faults", NULL, NULL);
-    if (strcmp(sub, "mute") == 0)         return send_action(sock, "mute", NULL, NULL);
-    if (strcmp(sub, "unmute") == 0)       return send_action(sock, "unmute", NULL, NULL);
-    if (strcmp(sub, "beep") == 0)         return send_action(sock, "beep_short", NULL, NULL);
-    if (strcmp(sub, "beep-continuous") == 0) return send_action(sock, "beep_continuous", NULL, NULL);
+    /* Look up command in the descriptor list */
+    if (cmds) {
+        int n = cJSON_GetArraySize(cmds);
+        for (int i = 0; i < n; i++) {
+            cJSON *c = cJSON_GetArrayItem(cmds, i);
+            cJSON *jname = cJSON_GetObjectItemCaseSensitive(c, "name");
+            cJSON *jtype = cJSON_GetObjectItemCaseSensitive(c, "type");
+            if (!jname || !cJSON_IsString(jname)) continue;
 
-    if (strcmp(sub, "bypass") == 0) {
-        const char *dir = find_subcmd(argc, argv, 3, NULL, 0);
-        if (!dir || (strcmp(dir, "on") != 0 && strcmp(dir, "off") != 0)) {
-            fprintf(stderr, "error: bypass requires 'on' or 'off'\n");
-            help_current();
-            return 1;
+            if (strcmp(jname->valuestring, sub) == 0) {
+                int is_toggle = jtype && cJSON_IsString(jtype) &&
+                                strcmp(jtype->valuestring, "toggle") == 0;
+                cJSON_Delete(cmds);
+
+                /* Toggle commands: need on/off argument */
+                if (is_toggle) {
+                    const char *dir = find_subcmd(argc, argv, 3, NULL, 0);
+                    if (!dir || (strcmp(dir, "on") != 0 && strcmp(dir, "off") != 0)) {
+                        fprintf(stderr, "error: %s requires 'on' or 'off'\n", sub);
+                        return 1;
+                    }
+                    cJSON *body = cJSON_CreateObject();
+                    cJSON_AddStringToObject(body, "action", sub);
+                    cJSON_AddBoolToObject(body, "off", strcmp(dir, "off") == 0);
+                    char *json = cJSON_PrintUnformatted(body);
+                    cJSON_Delete(body);
+                    char *r = malloc(BUF_SIZE);
+                    if (!r) { free(json); return 1; }
+                    int rc = http_request(sock, "POST", "/api/cmd", json, r, BUF_SIZE);
+                    free(json);
+                    if (rc != 0) { free(r); return 1; }
+                    print_json(r);
+                    free(r);
+                    return 0;
+                }
+
+                /* Simple command */
+                return send_action(sock, sub, NULL, NULL);
+            }
         }
-        return send_action(sock, strcmp(dir, "on") == 0 ? "bypass_on" : "bypass_off",
-                           NULL, NULL);
     }
 
-    if (strcmp(sub, "freq") == 0) {
-        const char *setting = find_subcmd(argc, argv, 3, NULL, 0);
-        if (!setting) {
-            fprintf(stderr, "error: freq requires a setting name\n");
-            help_current();
-            return 1;
-        }
-        return send_action(sock, "freq", "setting", setting);
-    }
-
+    cJSON_Delete(cmds);
     fprintf(stderr, "error: unknown action '%s'\n", sub);
-    help_topic("cmd");
+    fprintf(stderr, "Run 'airies-ups cmd --help' to see available actions.\n");
     return 1;
 }
 
