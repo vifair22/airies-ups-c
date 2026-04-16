@@ -8,10 +8,12 @@
 
 extern const ups_driver_t ups_driver_srt;
 extern const ups_driver_t ups_driver_smt;
+extern const ups_driver_t ups_driver_backups_hid;
 
 const ups_driver_t *ups_drivers[] = {
     &ups_driver_srt,
     &ups_driver_smt,
+    &ups_driver_backups_hid,
     NULL,
 };
 

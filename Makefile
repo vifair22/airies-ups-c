@@ -12,7 +12,7 @@ VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 
 CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
-LIBS     := -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread
+LIBS     := -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
 
 # ---- Flags ---------------------------------------------------------------
 WARN_FLAGS := -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
@@ -43,7 +43,7 @@ endif
 
 # ---- Source files ---------------------------------------------------------
 
-UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c
+UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c src/ups/ups_backups_hid.c src/ups/hid_parser.c
 API_SRCS   = src/api/server.c src/api/routes.c src/api/auth.c
 MON_SRCS   = src/monitor/monitor.c \
              src/monitor/retention.c \
