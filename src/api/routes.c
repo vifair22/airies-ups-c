@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 
 /* --- Helper: build JSON status object --- */
@@ -716,6 +717,22 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
 
 /* --- Auth endpoints --- */
 
+static void auth_event(cutils_db_t *db, const char *severity,
+                       const char *title, const char *message)
+{
+    char ts[32];
+    time_t now = time(NULL);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+
+    const char *params[] = { ts, severity, "auth", title, message, NULL };
+    db_execute_non_query(db,
+        "INSERT INTO events (timestamp, severity, category, title, message) "
+        "VALUES (?, ?, ?, ?, ?)",
+        params, NULL);
+}
+
 static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
@@ -734,6 +751,7 @@ static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
 
     auth_set_password(ctx->db, jpw->valuestring);
     cJSON_Delete(body);
+    auth_event(ctx->db, "info", "Password Set", "Admin password configured during initial setup");
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "result", "password set");
@@ -757,9 +775,11 @@ static api_response_t handle_auth_login(const api_request_t *req, void *ud)
 
     if (!auth_verify_password(ctx->db, jpw->valuestring)) {
         cJSON_Delete(body);
+        auth_event(ctx->db, "warning", "Login Failed", "Invalid password attempt");
         return api_error(401, "invalid password");
     }
     cJSON_Delete(body);
+    auth_event(ctx->db, "info", "Login", "Admin login successful");
 
     char *token = auth_create_token(ctx->db, 24);
     if (!token) return api_error(500, "failed to create session");
@@ -953,6 +973,8 @@ static api_response_t handle_auth_change(const api_request_t *req, void *ud)
 
     if (rc != 0) return api_error(500, "failed to update password");
 
+    auth_event(ctx->db, "info", "Password Changed", "Admin password updated");
+
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "result", "password changed");
     char *json = cJSON_PrintUnformatted(resp);
@@ -972,6 +994,8 @@ static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
         db_execute_non_query(ctx->db,
             "DELETE FROM sessions WHERE token = ?", params, NULL);
     }
+
+    auth_event(ctx->db, "info", "Logout", "Admin session ended");
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "result", "logged out");

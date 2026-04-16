@@ -146,21 +146,27 @@ const ups_freq_setting_t *ups_find_freq_value(const ups_t *ups, uint16_t value)
 /* --- Error recovery --- */
 
 #define MAX_CONSECUTIVE_ERRORS 5
+#define RECONNECT_BACKOFF_SEC  2
 
 static void ups_clear_errors(ups_t *ups)
 {
     ups->consecutive_errors = 0;
 }
 
-/* After repeated failures, disconnect and reconnect through the driver. */
+/* After repeated failures, disconnect and reconnect through the driver.
+ * Includes a brief backoff delay to avoid hammering a misbehaving port. */
 static void ups_handle_error(ups_t *ups)
 {
     ups->consecutive_errors++;
 
     if (ups->consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
-        if (ups->driver->disconnect)
+        if (ups->transport && ups->driver->disconnect)
             ups->driver->disconnect(ups->transport);
         ups->transport = NULL;
+
+        /* Brief backoff before reconnect attempt */
+        struct timespec delay = { .tv_sec = RECONNECT_BACKOFF_SEC, .tv_nsec = 0 };
+        nanosleep(&delay, NULL);
 
         if (ups->driver->connect) {
             ups->transport = ups->driver->connect(&ups->params);

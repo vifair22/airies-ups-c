@@ -111,6 +111,7 @@ static void record_telemetry(monitor_t *mon, const ups_data_t *d)
 
     char status_s[16], charge_s[16], runtime_s[16], bv_s[16];
     char load_s[16], ov_s[16], of_s[16], oc_s[16], iv_s[16], eff_s[16];
+    char mog_s[16], sog0_s[16], sog1_s[16], energy_s[16];
 
     snprintf(status_s, sizeof(status_s), "%u", d->status);
     snprintf(charge_s, sizeof(charge_s), "%.1f", d->charge_pct);
@@ -122,16 +123,22 @@ static void record_telemetry(monitor_t *mon, const ups_data_t *d)
     snprintf(oc_s, sizeof(oc_s), "%.1f", d->output_current);
     snprintf(iv_s, sizeof(iv_s), "%.1f", d->input_voltage);
     snprintf(eff_s, sizeof(eff_s), "%.1f", d->efficiency);
+    snprintf(mog_s, sizeof(mog_s), "%u", d->outlet_mog);
+    snprintf(sog0_s, sizeof(sog0_s), "%u", d->outlet_sog0);
+    snprintf(sog1_s, sizeof(sog1_s), "%u", d->outlet_sog1);
+    snprintf(energy_s, sizeof(energy_s), "%u", d->output_energy_wh);
 
     const char *params[] = {
         ts, status_s, charge_s, runtime_s, bv_s, load_s,
-        ov_s, of_s, oc_s, iv_s, eff_s, NULL
+        ov_s, of_s, oc_s, iv_s, eff_s,
+        mog_s, sog0_s, sog1_s, energy_s, NULL
     };
     db_execute_non_query(mon->db,
         "INSERT INTO telemetry (timestamp, status, charge_pct, runtime_sec, "
         "battery_voltage, load_pct, output_voltage, output_frequency, "
-        "output_current, input_voltage, efficiency) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "output_current, input_voltage, efficiency, "
+        "outlet_mog, outlet_sog0, outlet_sog1, output_energy_wh) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params, NULL);
 }
 
