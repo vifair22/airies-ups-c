@@ -14,6 +14,7 @@ interface ConfigEntry {
 export default function AppConfig() {
   const { data: config, error, loading, refetch } = useApi<ConfigEntry[]>('/api/config/app')
   const [saving, setSaving] = useState<string | null>(null)
+  const [restarting, setRestarting] = useState(false)
 
   if (loading) return <p className="text-muted">Loading...</p>
   if (error) return <p className="text-red-400">{error}</p>
@@ -23,11 +24,18 @@ export default function AppConfig() {
     setSaving(key)
     try {
       await apiPost('/api/config/app', { key, value })
-      await refetch()
+      setRestarting(true)
+      await apiPost('/api/restart', {})
+      const poll = () => {
+        fetch('/api/status')
+          .then(r => { if (r.ok) { setRestarting(false); setSaving(null); refetch() } else setTimeout(poll, 500) })
+          .catch(() => setTimeout(poll, 500))
+      }
+      setTimeout(poll, 1500)
     } catch {
       alert('Failed to save')
+      setSaving(null)
     }
-    setSaving(null)
   }
 
   const groups = [...new Set(config.map((c) => c.key.split('.')[0]))]
@@ -36,7 +44,7 @@ export default function AppConfig() {
     <div>
       <h2 className="text-xl font-semibold mb-1">App Settings</h2>
       <p className="text-sm text-muted mb-4">
-        Changes to these settings require a daemon restart.
+        {restarting ? 'Restarting daemon...' : 'Changes are saved and applied automatically.'}
       </p>
 
       <ThemeSelector />
