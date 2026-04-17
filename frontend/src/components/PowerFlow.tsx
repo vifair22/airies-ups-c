@@ -59,11 +59,12 @@ function useThemeColors() {
 
 /* ── Animated flow line ── */
 
-function FlowLine({ points, color, active, reverse }: {
+function FlowLine({ points, color, active, reverse, slow }: {
   points: string
   color: string
   active: boolean
   reverse?: boolean
+  slow?: boolean
 }) {
   const C = useThemeColors()
   return (
@@ -88,7 +89,10 @@ function FlowLine({ points, color, active, reverse }: {
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeDasharray="6 8"
-          className={reverse ? 'animate-flow-reverse' : 'animate-flow'}
+          className={reverse
+            ? (slow ? 'animate-flow-reverse-slow' : 'animate-flow-reverse')
+            : (slow ? 'animate-flow-slow' : 'animate-flow')
+          }
         />
       )}
     </g>
@@ -242,12 +246,14 @@ export function PowerFlowSRT({
         <FlowLine
           points={`${iC.r},${iC.cy} ${rC.l},${rC.cy}`}
           color={mainColor} active={rectifierActive || batteryCharging}
+          slow={!rectifierActive && batteryCharging}
         />
 
         {/* Rectifier → DC Bus */}
         <FlowLine
           points={`${rC.r},${rC.cy} ${dC.l},${dC.cy}`}
           color={mainColor} active={rectifierActive || batteryCharging}
+          slow={!rectifierActive && batteryCharging}
         />
 
         {/* DC Bus → Inverter */}
@@ -268,6 +274,7 @@ export function PowerFlowSRT({
           color={batteryColor}
           active={batteryCharging || batteryDischarging}
           reverse={batteryDischarging}
+          slow={batteryCharging}
         />
 
         {/* Bypass path: Input → Output (arcs over the top) */}
@@ -457,6 +464,7 @@ export function PowerFlowStandby({
           color={batColor}
           active={batteryPath || batteryCharging}
           reverse={batteryPath}
+          slow={batteryCharging}
         />
 
         {/* Stage blocks */}

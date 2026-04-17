@@ -87,6 +87,12 @@ input, select, textarea {
 .animate-flow {
   animation: flow 1s linear infinite;
 }
+.animate-flow-slow {
+  animation: flow 2.5s linear infinite;
+}
 .animate-flow-reverse {
   animation: flow-reverse 1s linear infinite;
+}
+.animate-flow-reverse-slow {
+  animation: flow-reverse 2.5s linear infinite;
 }
