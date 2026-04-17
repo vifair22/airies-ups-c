@@ -1,5 +1,5 @@
 import { useApi } from '../hooks/useApi'
-import { PowerFlowSRT } from '../components/PowerFlow'
+import { PowerFlowSRT, PowerFlowStandby } from '../components/PowerFlow'
 
 /* ── Types ── */
 
@@ -114,17 +114,19 @@ type PlaneStyle = { border: string; bg: string; accent: string }
 
 /* Utility / Input plane */
 
-type UtilityHealth = 'he' | 'online' | 'degraded' | 'down'
+type UtilityHealth = 'he' | 'ok' | 'online' | 'degraded' | 'down'
 
-function classifyUtility(raw: number): UtilityHealth {
+function classifyUtility(raw: number, isStandby: boolean): UtilityHealth {
   if (raw & ST.ON_BATTERY)                        return 'down'
   if (raw & (ST.INPUT_BAD | ST.MAINS_BAD))        return 'degraded'
   if (raw & ST.HE_MODE)                           return 'he'
+  if (isStandby)                                  return 'ok'
   return 'online'
 }
 
 const utilityStyles: Record<UtilityHealth, PlaneStyle & { label: string }> = {
   he:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'OK (HE Eligible)' },
+  ok:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'OK' },
   online:   { border: 'border-sky-700',    bg: 'bg-sky-950/30',    accent: 'text-sky-400',    label: 'OK' },
   degraded: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Degraded' },
   down:     { border: 'border-red-600',    bg: 'bg-red-950/30',    accent: 'text-red-400',    label: 'Lost' },
@@ -327,7 +329,7 @@ export default function Dashboard() {
   const avr = detectAvr(inp?.voltage ?? 0, out?.voltage ?? 0)
 
   /* Classify planes */
-  const utilHealth = classifyUtility(raw)
+  const utilHealth = classifyUtility(raw, isStandby)
   const uStyle = utilityStyles[utilHealth]
   const { style: upStyle } = classifyUpsPlane(raw, canBypass)
   const { style: outStyle, badge: outBadge } = classifyOutput(raw, out?.load_pct ?? 0)
@@ -429,6 +431,19 @@ export default function Dashboard() {
       {/* ── Power flow diagram ── */}
       {isDoubleConversion && (
         <PowerFlowSRT
+          statusRaw={raw}
+          inputVoltage={inp?.voltage ?? 0}
+          outputVoltage={out?.voltage ?? 0}
+          batteryCharge={bat?.charge_pct ?? 0}
+          batteryVoltage={bat?.voltage ?? 0}
+          batteryError={s.errors?.battery_system ?? 0}
+          loadPct={out?.load_pct ?? 0}
+          efficiency={s.efficiency ?? -1}
+          outputFrequency={out?.frequency ?? 0}
+        />
+      )}
+      {isStandby && (
+        <PowerFlowStandby
           statusRaw={raw}
           inputVoltage={inp?.voltage ?? 0}
           outputVoltage={out?.voltage ?? 0}

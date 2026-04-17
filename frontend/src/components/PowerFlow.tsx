@@ -363,3 +363,139 @@ export function PowerFlowSRT({
     </div>
   )
 }
+
+/* ── Standby / Offline Diagram ──
+ *
+ *   ┌───────┐                          ┌────────┐
+ *   │ Input │─── Transfer Switch ─────►│ Output │
+ *   └───────┘         │                └────────┘
+ *                ┌────▼────┐
+ *                │ Battery │
+ *                └─────────┘
+ *
+ * On utility: input passes straight through to output.
+ * On battery: transfer switch flips, battery → inverter → output.
+ */
+
+export function PowerFlowStandby({
+  statusRaw: raw, inputVoltage, outputVoltage,
+  batteryCharge, batteryVoltage, batteryError,
+  loadPct,
+}: PowerFlowProps) {
+
+  const isOnline = !!(raw & ST.ONLINE)
+  const isOnBattery = !!(raw & ST.ON_BATTERY)
+  const isFault = !!(raw & (ST.FAULT | ST.FAULT_STATE))
+  const isOff = !!(raw & ST.OUTPUT_OFF)
+  const batFault = batteryError !== 0
+
+  /* Path states */
+  const utilityPath = isOnline && !isOnBattery && !isOff
+  const batteryPath = isOnBattery && !isOff
+  const batteryCharging = isOnline && !isOnBattery && !batFault && batteryCharge < 100
+
+  /* Colors */
+  const mainColor = isFault ? C.fault : C.active
+  const batColor = isOnBattery ? C.battery : C.active
+
+  /* Block borders */
+  const inputBorder = isOnline ? mainColor : isFault ? C.fault : C.inactive
+  const outBorder = (utilityPath || batteryPath) ? mainColor : isOff ? C.dead : C.inactive
+  const switchBorder = (utilityPath || batteryPath) ? mainColor : C.inactive
+  const batBorder = batFault ? C.fault : (batteryPath || batteryCharging) ? batColor : C.inactive
+
+  /* Layout */
+  const W = 460, H = 170
+  const bw = 80, bh = 44
+
+  const input    = { x: 10,  y: 20 }
+  const xswitch  = { x: 190, y: 20 }
+  const output   = { x: 370, y: 20 }
+  const battery  = { x: 190, y: 110 }
+
+  const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
+  const iC = cx(input), sC = cx(xswitch), oC = cx(output), bC = cx(battery)
+
+  const fmtV = (v: number) => v > 0 ? v.toFixed(1) : '--'
+  const fmtPct = (v: number) => v >= 0 ? v.toFixed(0) : '--'
+
+  return (
+    <div className="rounded-lg bg-panel border border-edge p-4">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '190px' }}>
+
+        {/* Input → Transfer Switch */}
+        <FlowLine
+          points={`${iC.r},${iC.cy} ${sC.l},${sC.cy}`}
+          color={mainColor} active={utilityPath || batteryCharging}
+        />
+
+        {/* Transfer Switch → Output */}
+        <FlowLine
+          points={`${sC.r},${sC.cy} ${oC.l},${oC.cy}`}
+          color={batteryPath ? batColor : mainColor}
+          active={utilityPath || batteryPath}
+        />
+
+        {/* Transfer Switch ↔ Battery */}
+        <FlowLine
+          points={`${sC.cx},${sC.b} ${bC.cx},${bC.t}`}
+          color={batColor}
+          active={batteryPath || batteryCharging}
+          reverse={batteryPath}
+        />
+
+        {/* Stage blocks */}
+        <StageBlock {...input} w={bw} h={bh} label="INPUT"
+          value={fmtV(inputVoltage)} unit="VAC"
+          borderColor={inputBorder}
+          color={isOnline ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...xswitch} w={bw} h={bh} label="TRANSFER"
+          value={isOnBattery ? 'Battery' : 'Utility'}
+          borderColor={switchBorder}
+          color={isOnBattery ? C.battery : utilityPath ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...output} w={bw} h={bh} label="OUTPUT"
+          value={fmtV(outputVoltage)} unit="VAC"
+          borderColor={outBorder}
+          color={(utilityPath || batteryPath) ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...battery} w={bw} h={bh} label="BATTERY"
+          value={batFault ? 'Missing' : `${fmtPct(batteryCharge)}%`}
+          borderColor={batBorder}
+          color={batFault ? C.fault :
+                 batteryPath ? C.battery :
+                 batteryCharge < 30 ? C.fault :
+                 batteryCharge < 60 ? C.bypass :
+                 C.active}
+        />
+
+        {/* Load badge below output */}
+        <text
+          x={oC.cx} y={output.y + bh + 14}
+          textAnchor="middle"
+          fill={loadPct > 80 ? C.fault : loadPct > 60 ? C.bypass : C.textDim}
+          fontSize="8"
+        >
+          {fmtPct(loadPct)}% load
+        </text>
+
+        {/* Battery voltage below battery block */}
+        {!batFault && (
+          <text
+            x={bC.cx} y={battery.y + bh + 14}
+            textAnchor="middle"
+            fill={C.textDim}
+            fontSize="8"
+          >
+            {fmtV(batteryVoltage)} VDC
+          </text>
+        )}
+
+      </svg>
+    </div>
+  )
+}
