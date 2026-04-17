@@ -119,6 +119,11 @@ struct weather {
     int     severe;
     char    reasons[512];
     char    forecast_url[256];
+
+    /* Simulation (injected via API, consumed by next poll cycle) */
+    volatile int  sim_severe;       /* 1 = inject severe, -1 = force clear, 0 = normal */
+    int           sim_active;       /* 1 = current severe state originated from simulation */
+    char          sim_reasons[256];
 };
 
 static int load_config(weather_t *w)
@@ -356,11 +361,18 @@ static void apply_severe(weather_t *w)
 
 static void apply_restore(weather_t *w)
 {
-    if (w->has_saved) {
-        write_param(w, w->saved_value, "restore (saved)");
-        w->has_saved = 0;
+    /* normal_raw_value of 0xFFFF (-1 from the UI) means "restore saved value".
+     * Any other value is a fixed restore target. */
+    if (w->normal_raw_value == 0xFFFF) {
+        if (w->has_saved) {
+            write_param(w, w->saved_value, "restore (saved)");
+            w->has_saved = 0;
+        } else {
+            log_warn("weather: restore requested but no saved value available");
+        }
     } else {
-        write_param(w, w->normal_raw_value, "restore (default)");
+        write_param(w, w->normal_raw_value, "restore (fixed)");
+        w->has_saved = 0;
     }
 }
 
@@ -386,6 +398,21 @@ static void *weather_thread(void *arg)
 
         severe |= check_alerts(w, reasons, sizeof(reasons));
         severe |= check_forecast(w, reasons, sizeof(reasons), strlen(reasons));
+
+        /* Simulation override: injected via API */
+        if (w->sim_severe == 1) {
+            severe = 1;
+            snprintf(reasons, sizeof(reasons), "[SIMULATED] %s", w->sim_reasons);
+            w->sim_severe = 0; /* one-shot: consumed */
+            w->sim_active = 1;
+        } else if (w->sim_severe == -1) {
+            severe = 0;
+            reasons[0] = '\0';
+            w->sim_severe = 0;
+            w->sim_active = 0;
+        } else if (!severe) {
+            w->sim_active = 0; /* real NWS cleared it */
+        }
 
         w->severe = severe;
         snprintf(w->reasons, sizeof(w->reasons), "%s", reasons);
@@ -485,6 +512,124 @@ char *weather_status_json(weather_t *w)
     cJSON_AddNumberToObject(obj, "wind_threshold_mph", w->wind_speed_mph);
     cJSON_AddNumberToObject(obj, "poll_interval", w->poll_interval);
     cJSON_AddStringToObject(obj, "control_register", w->control_register);
+
+    cJSON_AddBoolToObject(obj, "simulated", w->sim_active);
+
+    char *json = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    return json;
+}
+
+void weather_simulate_severe(weather_t *w, const char *reason)
+{
+    if (!w) return;
+    snprintf(w->sim_reasons, sizeof(w->sim_reasons), "%s",
+             reason ? reason : "Manual simulation");
+    w->sim_severe = 1;
+    log_info("weather: severe event simulated — %s", w->sim_reasons);
+}
+
+void weather_simulate_clear(weather_t *w)
+{
+    if (!w) return;
+    w->sim_severe = -1;
+    log_info("weather: simulation cleared, will restore on next cycle");
+}
+
+char *weather_report_json(weather_t *w)
+{
+    cJSON *obj = cJSON_CreateObject();
+    if (!w) {
+        cJSON_AddStringToObject(obj, "error", "weather subsystem not running");
+        char *json = cJSON_PrintUnformatted(obj);
+        cJSON_Delete(obj);
+        return json;
+    }
+
+    /* Fetch active alerts */
+    cJSON *alerts_arr = cJSON_CreateArray();
+    if (w->alert_zones[0]) {
+        char url[512];
+        snprintf(url, sizeof(url), "%s/alerts/active?zone=%s",
+                 NWS_BASE, w->alert_zones);
+        cJSON *nws = nws_get(url);
+        if (nws) {
+            cJSON *features = cJSON_GetObjectItem(nws, "features");
+            if (features && cJSON_IsArray(features)) {
+                int n = cJSON_GetArraySize(features);
+                for (int i = 0; i < n; i++) {
+                    cJSON *f = cJSON_GetArrayItem(features, i);
+                    cJSON *props = cJSON_GetObjectItem(f, "properties");
+                    if (!props) continue;
+
+                    cJSON *alert = cJSON_CreateObject();
+                    cJSON *ev = cJSON_GetObjectItem(props, "event");
+                    cJSON *hl = cJSON_GetObjectItem(props, "headline");
+                    cJSON *sv = cJSON_GetObjectItem(props, "severity");
+                    cJSON *ur = cJSON_GetObjectItem(props, "urgency");
+                    if (ev && cJSON_IsString(ev))
+                        cJSON_AddStringToObject(alert, "event", ev->valuestring);
+                    if (hl && cJSON_IsString(hl))
+                        cJSON_AddStringToObject(alert, "headline", hl->valuestring);
+                    if (sv && cJSON_IsString(sv))
+                        cJSON_AddStringToObject(alert, "severity", sv->valuestring);
+                    if (ur && cJSON_IsString(ur))
+                        cJSON_AddStringToObject(alert, "urgency", ur->valuestring);
+
+                    /* Check if this alert type matches our configured types */
+                    int matched = (ev && cJSON_IsString(ev) &&
+                                   strstr(w->alert_types, ev->valuestring)) ? 1 : 0;
+                    cJSON_AddBoolToObject(alert, "matched", matched);
+
+                    cJSON_AddItemToArray(alerts_arr, alert);
+                }
+            }
+            cJSON_Delete(nws);
+        }
+    }
+    cJSON_AddItemToObject(obj, "alerts", alerts_arr);
+
+    /* Fetch forecast periods */
+    cJSON *forecast_arr = cJSON_CreateArray();
+    if (w->forecast_url[0]) {
+        cJSON *nws = nws_get(w->forecast_url);
+        if (nws) {
+            cJSON *props = cJSON_GetObjectItem(nws, "properties");
+            cJSON *periods = props ? cJSON_GetObjectItem(props, "periods") : NULL;
+            if (periods && cJSON_IsArray(periods)) {
+                int n = cJSON_GetArraySize(periods);
+                int show = n > 6 ? 6 : n;
+                for (int i = 0; i < show; i++) {
+                    cJSON *p = cJSON_GetArrayItem(periods, i);
+                    cJSON *period = cJSON_CreateObject();
+
+                    cJSON *name = cJSON_GetObjectItem(p, "name");
+                    cJSON *temp = cJSON_GetObjectItem(p, "temperature");
+                    cJSON *wind = cJSON_GetObjectItem(p, "windSpeed");
+                    cJSON *wdir = cJSON_GetObjectItem(p, "windDirection");
+                    cJSON *sf = cJSON_GetObjectItem(p, "shortForecast");
+                    cJSON *df = cJSON_GetObjectItem(p, "detailedForecast");
+
+                    if (name && cJSON_IsString(name))
+                        cJSON_AddStringToObject(period, "name", name->valuestring);
+                    if (temp && cJSON_IsNumber(temp))
+                        cJSON_AddNumberToObject(period, "temperature", temp->valuedouble);
+                    if (wind && cJSON_IsString(wind))
+                        cJSON_AddStringToObject(period, "wind", wind->valuestring);
+                    if (wdir && cJSON_IsString(wdir))
+                        cJSON_AddStringToObject(period, "wind_direction", wdir->valuestring);
+                    if (sf && cJSON_IsString(sf))
+                        cJSON_AddStringToObject(period, "short_forecast", sf->valuestring);
+                    if (df && cJSON_IsString(df))
+                        cJSON_AddStringToObject(period, "detailed_forecast", df->valuestring);
+
+                    cJSON_AddItemToArray(forecast_arr, period);
+                }
+            }
+            cJSON_Delete(nws);
+        }
+    }
+    cJSON_AddItemToObject(obj, "forecast", forecast_arr);
 
     char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);

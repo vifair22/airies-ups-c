@@ -1262,6 +1262,45 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     return api_ok(json);
 }
 
+/* --- Weather simulation --- */
+
+static api_response_t handle_weather_simulate(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    if (!ctx->weather) return api_error(503, "weather subsystem not running");
+    if (!req->body) return api_error(400, "request body required");
+
+    cJSON *body = cJSON_Parse(req->body);
+    if (!body) return api_error(400, "invalid JSON");
+
+    const cJSON *jaction = cJSON_GetObjectItem(body, "action");
+    const char *action = (jaction && cJSON_IsString(jaction)) ? jaction->valuestring : "";
+
+    if (strcmp(action, "severe") == 0) {
+        const cJSON *jreason = cJSON_GetObjectItem(body, "reason");
+        const char *reason = (jreason && cJSON_IsString(jreason))
+            ? jreason->valuestring : "Manual simulation";
+        weather_simulate_severe(ctx->weather, reason);
+        cJSON_Delete(body);
+        return api_ok_msg("severe weather simulated");
+    } else if (strcmp(action, "clear") == 0) {
+        weather_simulate_clear(ctx->weather);
+        cJSON_Delete(body);
+        return api_ok_msg("simulation cleared");
+    }
+
+    cJSON_Delete(body);
+    return api_error(400, "action must be 'severe' or 'clear'");
+}
+
+static api_response_t handle_weather_report(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    char *json = weather_report_json(ctx->weather);
+    return api_ok(json);
+}
+
 /* --- Restart endpoint --- */
 
 /* Defined in daemon/main.c — sets flag for main loop */
@@ -1579,5 +1618,7 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/setup/test",   API_POST, handle_setup_test,   ctx);
     api_server_route(srv, "/api/weather/status", API_GET,  handle_weather_status,     ctx);
     api_server_route(srv, "/api/weather/config", API_GET,  handle_weather_config_get, ctx);
-    api_server_route(srv, "/api/weather/config", API_POST, handle_weather_config_set, ctx);
+    api_server_route(srv, "/api/weather/config",   API_POST, handle_weather_config_set, ctx);
+    api_server_route(srv, "/api/weather/simulate", API_POST, handle_weather_simulate,  ctx);
+    api_server_route(srv, "/api/weather/report",   API_GET,  handle_weather_report,    ctx);
 }
