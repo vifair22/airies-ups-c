@@ -85,6 +85,54 @@ static const config_key_t app_db_keys[] = {
       "Set to 1 when UPS connection is configured via setup wizard",
       CFG_STORE_DB, 0 },
 
+    /* Shutdown: trigger */
+    { "shutdown.trigger",           CFG_STRING, "software",
+      "Shutdown trigger mode: software, ups, or manual",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_source",    CFG_STRING, "runtime",
+      "Software trigger source: runtime or field",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_runtime_sec", CFG_INT, "300",
+      "Trigger when runtime drops below this (seconds, 0=disabled)",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_battery_pct", CFG_INT, "0",
+      "Trigger when battery drops below this (%, 0=disabled)",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_on_battery", CFG_INT, "1",
+      "Require on-battery status before triggering (1=yes, 0=no)",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_delay_sec", CFG_INT, "30",
+      "Condition must hold for this many seconds before triggering (debounce)",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_field",     CFG_STRING, "",
+      "UPS data field to watch (e.g. load_pct, input_voltage)",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_field_op",  CFG_STRING, "lt",
+      "Comparison operator: lt, gt, eq",
+      CFG_STORE_DB, 0 },
+    { "shutdown.trigger_field_value", CFG_INT, "0",
+      "Threshold value for the field trigger",
+      CFG_STORE_DB, 0 },
+
+    /* Shutdown: UPS action */
+    { "shutdown.ups_mode",          CFG_STRING, "command",
+      "UPS action on shutdown: command, register, or none",
+      CFG_STORE_DB, 0 },
+    { "shutdown.ups_register",      CFG_STRING, "",
+      "Config register name for register mode",
+      CFG_STORE_DB, 0 },
+    { "shutdown.ups_value",         CFG_INT, "0",
+      "Raw value to write in register mode",
+      CFG_STORE_DB, 0 },
+    { "shutdown.ups_delay",         CFG_INT, "5",
+      "Seconds to wait after UPS action",
+      CFG_STORE_DB, 0 },
+
+    /* Shutdown: controller */
+    { "shutdown.controller_enabled", CFG_INT, "1",
+      "Shut down this controller after all other steps (1=yes, 0=no)",
+      CFG_STORE_DB, 0 },
+
     { NULL, 0, NULL, NULL, 0, 0 }  /* sentinel */
 };
 
@@ -98,6 +146,7 @@ static const config_section_t app_sections[] = {
     { "alerts",   "Alert Thresholds" },
     { "push",     "Push Notifications" },
     { "bypass",   "Bypass Settings" },
+    { "shutdown", "Shutdown Orchestration" },
     { "setup",    "Setup Wizard" },
     { NULL, NULL }  /* sentinel */
 };

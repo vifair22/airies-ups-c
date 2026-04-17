@@ -60,6 +60,34 @@ export async function apiPost<T>(url: string, body: unknown): Promise<T> {
   return res.json()
 }
 
+export async function apiPut<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 401) {
+    localStorage.removeItem('auth_token')
+    window.location.href = '/login'
+    throw new Error('unauthorized')
+  }
+  return res.json()
+}
+
+export async function apiDelete<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 401) {
+    localStorage.removeItem('auth_token')
+    window.location.href = '/login'
+    throw new Error('unauthorized')
+  }
+  return res.json()
+}
+
 /* Unauthenticated POST — for login and setup endpoints */
 export async function apiPostPublic<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {

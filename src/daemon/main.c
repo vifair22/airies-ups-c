@@ -95,6 +95,7 @@ typedef struct {
     alert_state_t      state;
     alert_config_t     cfg;
     alert_thresholds_t thresh;
+    shutdown_mgr_t    *shutdown;
 } alert_ctx_t;
 
 static void alert_notify(const char *title, const char *body)
@@ -107,6 +108,8 @@ static void on_monitor_poll(const ups_data_t *data, void *userdata)
 {
     alert_ctx_t *actx = userdata;
     alerts_check(&actx->state, data, &actx->thresh, &actx->cfg, alert_notify);
+    if (actx->shutdown)
+        shutdown_check_trigger(actx->shutdown, data);
 }
 
 int main(int argc, char *argv[])
@@ -187,13 +190,15 @@ int main(int argc, char *argv[])
                 log_info("transfer thresholds: high=%uV low=%uV",
                          alert_ctx.thresh.transfer_high,
                          alert_ctx.thresh.transfer_low);
+            /* Shutdown orchestrator (created before monitor starts so
+             * the poll callback can evaluate trigger conditions) */
+            shutdown = shutdown_create(db, ups, cfg);
+            alert_ctx.shutdown = shutdown;
+
             monitor_on_poll(mon, on_monitor_poll, &alert_ctx);
 
             monitor_start(mon);
         }
-
-        /* Shutdown orchestrator */
-        shutdown = shutdown_create(db, ups);
     }
 
     /* Weather subsystem (starts only if enabled in DB config) */
