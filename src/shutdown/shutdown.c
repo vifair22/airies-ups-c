@@ -259,6 +259,11 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
     /* Wait for all children, respecting group timeout */
     time_t start = time(NULL);
     int *done = calloc((size_t)n, sizeof(int));
+    if (!done) {
+        log_error("allocation failed for done array");
+        free(pids);
+        return;
+    }
 
     for (;;) {
         int all_done = 1;
