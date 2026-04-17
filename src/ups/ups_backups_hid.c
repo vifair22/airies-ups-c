@@ -74,6 +74,13 @@ static const uint32_t UP_RUNTIME_TO_EMPTY[] = {
 static const uint32_t UP_PERCENT_LOAD[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_PERCENT_LOAD) };
 
+/* Power controls — single-usage lookup */
+static const uint32_t UP_TEST[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_TEST) };
+
+static const uint32_t UP_ALARM_CONTROL[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_AUDIBLE_ALARM_CTRL) };
+
 /* Power.Output.Frequency — standard HID usage 0x0032 (Hertz, no scaling).
  * Note: BE600M1 does not expose this field; output_frequency will be 0. */
 static const uint32_t UP_OUTPUT_FREQUENCY[] = {
@@ -93,6 +100,8 @@ typedef struct {
     const hid_field_t *transfer_low;
     const hid_field_t *transfer_high;
     const hid_field_t *sensitivity;
+    const hid_field_t *test;
+    const hid_field_t *alarm_control;
 } hid_fields_t;
 
 /* --- Transport --- */
@@ -242,6 +251,8 @@ static void resolve_fields(hid_transport_t *t)
     f->transfer_low      = hid_find_field(m, UP_TRANSFER_LOW, 2, HID_FIELD_FEATURE);
     f->transfer_high     = hid_find_field(m, UP_TRANSFER_HIGH, 2, HID_FIELD_FEATURE);
     f->sensitivity       = hid_find_field(m, UP_SENSITIVITY, 2, HID_FIELD_FEATURE);
+    f->test              = hid_find_field(m, UP_TEST, 1, HID_FIELD_FEATURE);
+    f->alarm_control     = hid_find_field(m, UP_ALARM_CONTROL, 1, HID_FIELD_FEATURE);
 
     /* Log what we found (and what's missing) */
     if (f->input_voltage)     log_info("backups_hid: input_voltage → RID 0x%02x", f->input_voltage->report_id);
@@ -500,22 +511,28 @@ static int backups_cmd_shutdown(void *transport)
 static int backups_cmd_mute_alarm(void *transport)
 {
     hid_transport_t *t = transport;
-    uint8_t buf[2] = { 0x09, 0x02 };
-    return hid_set_feature(t->fd, 0x09, buf, sizeof(buf)) >= 0 ? 0 : -1;
+    if (!t->f.alarm_control) return -1;
+    /* AudibleAlarmControl: 3 = Muted (§4.1.4) */
+    uint8_t buf[2] = { t->f.alarm_control->report_id, 0x03 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
 static int backups_cmd_cancel_mute(void *transport)
 {
     hid_transport_t *t = transport;
-    uint8_t buf[2] = { 0x09, 0x01 };
-    return hid_set_feature(t->fd, 0x09, buf, sizeof(buf)) >= 0 ? 0 : -1;
+    if (!t->f.alarm_control) return -1;
+    /* AudibleAlarmControl: 2 = Enabled (§4.1.4) */
+    uint8_t buf[2] = { t->f.alarm_control->report_id, 0x02 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
 static int backups_cmd_battery_test(void *transport)
 {
     hid_transport_t *t = transport;
-    uint8_t buf[2] = { 0x18, 0x01 };
-    return hid_set_feature(t->fd, 0x18, buf, sizeof(buf)) >= 0 ? 0 : -1;
+    if (!t->f.test) return -1;
+    /* Test: 1 = Quick test (§4.1.4) */
+    uint8_t buf[2] = { t->f.test->report_id, 0x01 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
 /* --- Config registers ---
