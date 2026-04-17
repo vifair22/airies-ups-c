@@ -1,9 +1,11 @@
+import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
 
 interface StatusBrief {
   driver: string
   connected: boolean
+  name?: string
 }
 
 const nav = [
@@ -41,11 +43,19 @@ function SideLink({ to, label }: { to: string; label: string }) {
 export default function Layout() {
   const { data: status } = useApi<StatusBrief>('/api/status', 5000)
 
+  useEffect(() => {
+    document.title = status?.name
+      ? `${status.name} — airies-ups`
+      : 'airies-ups'
+  }, [status?.name])
+
   return (
     <div className="flex min-h-screen bg-page text-primary">
       <aside className="w-52 border-r border-edge px-3 py-4 flex flex-col gap-0.5 shrink-0">
         <div className="px-3 py-2 mb-3">
-          <h1 className="text-lg font-semibold tracking-tight">airies-ups</h1>
+          <h1 className="text-lg font-semibold tracking-tight">
+            {status?.name || 'airies-ups'}
+          </h1>
           <div className="flex items-center gap-1.5 mt-1">
             <span className={`w-2 h-2 rounded-full ${
               status?.connected ? 'bg-green-400' : 'bg-faint'

@@ -43,13 +43,16 @@ export default function Setup() {
   const [passwordSaving, setPasswordSaving] = useState(false)
 
   /* Step 2: connection */
+  interface UsbDevice { vid: string; pid: string; name: string; device: string }
+  interface PortScan { serial: string[]; usb: UsbDevice[] }
   const [connType, setConnType] = useState('serial')
-  const [ports, setPorts] = useState<string[]>([])
+  const [portScan, setPortScan] = useState<PortScan>({ serial: [], usb: [] })
   const [device, setDevice] = useState('/dev/ttyUSB0')
   const [baud, setBaud] = useState(9600)
   const [slaveId, setSlaveId] = useState(1)
   const [usbVid, setUsbVid] = useState('051d')
   const [usbPid, setUsbPid] = useState('0002')
+  const [upsName, setUpsName] = useState('')
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [testing, setTesting] = useState(false)
 
@@ -76,10 +79,20 @@ export default function Setup() {
       .finally(() => setLoading(false))
   }, [navigate])
 
-  /* Load available ports when entering connection step */
+  /* Load available ports/devices when entering connection step */
   useEffect(() => {
     if (step === 'connection') {
-      fetch('/api/setup/ports').then(r => r.json()).then(setPorts).catch(() => {})
+      fetch('/api/setup/ports').then(r => r.json()).then((data: PortScan) => {
+        setPortScan(data)
+        /* Auto-select USB if a UPS-like device is detected and no serial ports */
+        if (data.usb.length > 0 && data.serial.length === 0) {
+          setConnType('usb')
+          setUsbVid(data.usb[0].vid)
+          setUsbPid(data.usb[0].pid)
+        } else if (data.serial.length > 0) {
+          setDevice(data.serial[0])
+        }
+      }).catch(() => {})
     }
   }, [step])
 
@@ -153,6 +166,7 @@ export default function Setup() {
         if (!res.ok) throw new Error(`Failed to save ${key}`)
       }
 
+      if (upsName) await setConfig('setup.ups_name', upsName)
       await setConfig('ups.conn_type', connType)
       if (connType === 'usb') {
         await setConfig('ups.usb_vid', usbVid)
@@ -176,7 +190,7 @@ export default function Setup() {
     } finally {
       setSaving(false)
     }
-  }, [connType, usbVid, usbPid, device, baud, slaveId, pushToken, pushUser])
+  }, [connType, usbVid, usbPid, device, baud, slaveId, upsName, pushToken, pushUser])
 
   const restart = useCallback(async () => {
     setRestarting(true)
@@ -277,6 +291,15 @@ export default function Setup() {
               <p className="text-sm text-secondary">Configure and test the connection to your UPS.</p>
 
               <div>
+                <label className="text-xs text-muted">UPS Name</label>
+                <input type="text" value={upsName}
+                  onChange={(e) => setUpsName(e.target.value)}
+                  placeholder="e.g. Server Room, Office, Lab"
+                  className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1" />
+                <p className="text-[10px] text-faint mt-1">A friendly name shown in the browser tab and header.</p>
+              </div>
+
+              <div>
                 <label className="text-xs text-muted">Connection Type</label>
                 <select value={connType} onChange={(e) => { setConnType(e.target.value); setTestResult(null) }}
                   className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1">
@@ -289,10 +312,10 @@ export default function Setup() {
                 <>
                   <div>
                     <label className="text-xs text-muted">Serial Device</label>
-                    {ports.length > 0 ? (
+                    {portScan.serial.length > 0 ? (
                       <select value={device} onChange={(e) => setDevice(e.target.value)}
                         className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1">
-                        {ports.map(p => <option key={p} value={p}>{p}</option>)}
+                        {portScan.serial.map(p => <option key={p} value={p}>{p}</option>)}
                         <option value="">Manual entry...</option>
                       </select>
                     ) : (
@@ -322,19 +345,44 @@ export default function Setup() {
               )}
 
               {connType === 'usb' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-muted">Vendor ID (hex)</label>
-                    <input type="text" value={usbVid} onChange={(e) => setUsbVid(e.target.value)}
-                      placeholder="051d"
-                      className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1 font-mono" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-muted">Product ID (hex)</label>
-                    <input type="text" value={usbPid} onChange={(e) => setUsbPid(e.target.value)}
-                      placeholder="0002"
-                      className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1 font-mono" />
-                  </div>
+                <div className="space-y-3">
+                  {portScan.usb.length > 0 ? (
+                    <div>
+                      <label className="text-xs text-muted">Detected USB Devices</label>
+                      <select
+                        value={`${usbVid}:${usbPid}`}
+                        onChange={(e) => {
+                          const [v, p] = e.target.value.split(':')
+                          setUsbVid(v); setUsbPid(p); setTestResult(null)
+                        }}
+                        className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1">
+                        {portScan.usb.map((d) => (
+                          <option key={d.device} value={`${d.vid}:${d.pid}`}>
+                            {d.name} ({d.vid}:{d.pid})
+                          </option>
+                        ))}
+                        <option value=":">Manual entry...</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">No USB HID devices detected.</p>
+                  )}
+                  {(portScan.usb.length === 0 || (usbVid === '' && usbPid === '')) && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs text-muted">Vendor ID (hex)</label>
+                        <input type="text" value={usbVid} onChange={(e) => setUsbVid(e.target.value)}
+                          placeholder="051d"
+                          className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1 font-mono" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted">Product ID (hex)</label>
+                        <input type="text" value={usbPid} onChange={(e) => setUsbPid(e.target.value)}
+                          placeholder="0002"
+                          className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1 font-mono" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

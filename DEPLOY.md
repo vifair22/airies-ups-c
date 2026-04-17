@@ -2,15 +2,20 @@
 
 airies-ups deploys to a Raspberry Pi via source sync + remote build. There is no cross-compilation — builds happen natively on the Pi.
 
-## Target
+## Targets
+
+| Name | Host | UPS | Web UI |
+|------|------|-----|--------|
+| upspi | `sysadmin@upspi.internal.airies.net` | APC SRT (Modbus RTU) | `http://upspi.internal.airies.net:8080` |
+| upspi2 | `sysadmin@upspi2.internal.airies.net` | APC Back-UPS ES 600M1 (USB HID) | `http://upspi2.internal.airies.net:8080` |
+
+Both use the same directory layout:
 
 | | |
 |---|---|
-| Host | `sysadmin@upspi.internal.airies.net` |
 | Source dir | `/home/sysadmin/airies-ups` |
 | c-utils dir | `/home/sysadmin/c-utils` |
 | Service | `airies-ups.service` (systemd) |
-| Web UI | `http://upspi.internal.airies.net:8080` |
 
 ## Prerequisites (Pi)
 
@@ -26,18 +31,22 @@ The dev machine needs `bun` for frontend builds (not installed on the Pi).
 ## Quick deploy
 
 ```bash
-./deploy.sh          # full: build frontend, sync, build on Pi, restart service
+./deploy.sh              # full deploy to all hosts
+./deploy.sh full upspi   # deploy to upspi only
+./deploy.sh full upspi2  # deploy to upspi2 only
 ```
 
 ## Deploy script modes
 
 | Command | What it does |
 |---------|-------------|
-| `./deploy.sh` or `./deploy.sh full` | Build frontend locally, rsync both repos, build c-utils + airies-ups on Pi, restart service |
-| `./deploy.sh build` | Build frontend + sync + build, but don't restart the service |
-| `./deploy.sh restart` | Restart the service only (no build) |
-| `./deploy.sh frontend` | Rebuild frontend locally, sync, restart (skip C rebuild) |
-| `./deploy.sh install-service` | Copy the service file to systemd and reload (one-time setup) |
+| `./deploy.sh [full] [target]` | Build frontend locally, rsync both repos, build on Pi(s), restart service |
+| `./deploy.sh build [target]` | Build frontend + sync + build, but don't restart the service |
+| `./deploy.sh restart [target]` | Restart the service only (no build) |
+| `./deploy.sh frontend [target]` | Rebuild frontend locally, sync, restart (skip C rebuild) |
+| `./deploy.sh install-service [target]` | Copy the service file to systemd and reload (one-time setup) |
+
+Target is `all` (default), `upspi`, or `upspi2`.
 
 ## What gets synced
 
@@ -88,13 +97,13 @@ Runtime settings (poll intervals, alert thresholds, etc.) are stored in the data
 
 ```bash
 # Status
-ssh sysadmin@upspi.internal.airies.net "systemctl status airies-ups"
+ssh sysadmin@upspi.internal.airies.net  # or upspi2 "systemctl status airies-ups"
 
 # Logs (follow)
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups -f"
+ssh sysadmin@upspi.internal.airies.net  # or upspi2 "journalctl -u airies-ups -f"
 
 # Restart
-ssh sysadmin@upspi.internal.airies.net "sudo systemctl restart airies-ups"
+ssh sysadmin@upspi.internal.airies.net  # or upspi2 "sudo systemctl restart airies-ups"
 
 # Install/update service file (after changing airies-ups.service)
 ./deploy.sh install-service
@@ -105,7 +114,7 @@ ssh sysadmin@upspi.internal.airies.net "sudo systemctl restart airies-ups"
 1. Ensure Pi has build dependencies installed
 2. Create the source directories on the Pi:
    ```bash
-   ssh sysadmin@upspi.internal.airies.net "mkdir -p /home/sysadmin/airies-ups /home/sysadmin/c-utils"
+   ssh sysadmin@upspi.internal.airies.net  # or upspi2 "mkdir -p /home/sysadmin/airies-ups /home/sysadmin/c-utils"
    ```
 3. Deploy:
    ```bash

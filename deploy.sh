@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — build and deploy airies-ups to the Pi
+# deploy.sh — build and deploy airies-ups to the Pis
 #
 # Usage:
-#   ./deploy.sh              # full deploy: sync, build, restart
+#   ./deploy.sh              # full deploy to all hosts: sync, build, restart
 #   ./deploy.sh build        # sync + build only (no service restart)
 #   ./deploy.sh restart      # restart the service (no build)
 #   ./deploy.sh frontend     # rebuild frontend locally, sync, restart
+#   ./deploy.sh install-service  # install systemd service file
 #
-# Requires: ssh access to PI_HOST, gcc + libs on the Pi, bun locally for frontend
+# Target selection:
+#   ./deploy.sh full upspi   # deploy to upspi only
+#   ./deploy.sh full upspi2  # deploy to upspi2 only
+#   ./deploy.sh full all     # deploy to all (default)
+#
+# Requires: ssh access to target hosts, gcc + libs on the Pi, bun locally for frontend
 
 set -euo pipefail
 
-PI_HOST="sysadmin@upspi.internal.airies.net"
+declare -A HOSTS=(
+    [upspi]="sysadmin@upspi.internal.airies.net"
+    [upspi2]="sysadmin@upspi2.internal.airies.net"
+)
+
 PI_APP_DIR="/home/sysadmin/airies-ups"
 PI_CUTILS_DIR="/home/sysadmin/c-utils"
 LOCAL_CUTILS_DIR="../c-utils"
@@ -33,38 +43,54 @@ RSYNC_EXCLUDE=(
 info()  { echo -e "\033[1;34m==>\033[0m $*"; }
 err()   { echo -e "\033[1;31m==>\033[0m $*" >&2; exit 1; }
 
-sync_source() {
-    info "Syncing c-utils to Pi..."
-    rsync -az --delete "${RSYNC_EXCLUDE[@]}" \
-        "$LOCAL_CUTILS_DIR/" "$PI_HOST:$PI_CUTILS_DIR/"
+# Resolve target list from second argument
+resolve_targets() {
+    local target="${1:-all}"
+    if [[ "$target" == "all" ]]; then
+        echo "${!HOSTS[@]}"
+    elif [[ -v "HOSTS[$target]" ]]; then
+        echo "$target"
+    else
+        err "unknown target: $target (available: ${!HOSTS[*]})"
+    fi
+}
 
-    info "Syncing airies-ups to Pi..."
+sync_source() {
+    local host="$1"
+    info "[$host] Syncing c-utils..."
     rsync -az --delete "${RSYNC_EXCLUDE[@]}" \
-        ./ "$PI_HOST:$PI_APP_DIR/"
+        "$LOCAL_CUTILS_DIR/" "${HOSTS[$host]}:$PI_CUTILS_DIR/"
+
+    info "[$host] Syncing airies-ups..."
+    rsync -az --delete "${RSYNC_EXCLUDE[@]}" \
+        ./ "${HOSTS[$host]}:$PI_APP_DIR/"
 }
 
 build_remote() {
-    info "Building c-utils on Pi..."
-    ssh "$PI_HOST" "cd $PI_CUTILS_DIR && make clean && make" || err "c-utils build failed"
+    local host="$1"
+    info "[$host] Building c-utils..."
+    ssh "${HOSTS[$host]}" "cd $PI_CUTILS_DIR && make clean && make" || err "[$host] c-utils build failed"
 
-    info "Building airies-ups on Pi..."
-    ssh "$PI_HOST" "cd $PI_APP_DIR && make clean && make" || err "airies-ups build failed"
+    info "[$host] Building airies-ups..."
+    ssh "${HOSTS[$host]}" "cd $PI_APP_DIR && make clean && make" || err "[$host] airies-ups build failed"
 
-    info "Build complete"
-    ssh "$PI_HOST" "ls -lh $PI_APP_DIR/build/airies-upsd $PI_APP_DIR/build/airies-ups"
+    info "[$host] Build complete"
+    ssh "${HOSTS[$host]}" "ls -lh $PI_APP_DIR/build/airies-upsd $PI_APP_DIR/build/airies-ups"
 }
 
 restart_service() {
-    info "Restarting $SERVICE..."
-    ssh "$PI_HOST" "sudo systemctl restart $SERVICE"
+    local host="$1"
+    info "[$host] Restarting $SERVICE..."
+    ssh "${HOSTS[$host]}" "sudo systemctl restart $SERVICE"
     sleep 1
-    ssh "$PI_HOST" "systemctl is-active $SERVICE" && info "Service is running" \
-        || err "Service failed to start — check: ssh $PI_HOST journalctl -u $SERVICE -n 30"
+    ssh "${HOSTS[$host]}" "systemctl is-active $SERVICE" && info "[$host] Service is running" \
+        || err "[$host] Service failed to start — check: ssh ${HOSTS[$host]} journalctl -u $SERVICE -n 30"
 }
 
 install_service() {
-    info "Installing service file..."
-    ssh "$PI_HOST" "sudo cp $PI_APP_DIR/airies-ups.service /etc/systemd/system/$SERVICE && sudo systemctl daemon-reload"
+    local host="$1"
+    info "[$host] Installing service file..."
+    ssh "${HOSTS[$host]}" "sudo cp $PI_APP_DIR/airies-ups.service /etc/systemd/system/$SERVICE && sudo systemctl daemon-reload"
 }
 
 build_frontend() {
@@ -72,31 +98,45 @@ build_frontend() {
     (cd frontend && bun install && bun run build) || err "Frontend build failed"
 }
 
-case "${1:-full}" in
+ACTION="${1:-full}"
+TARGET="${2:-all}"
+TARGETS=$(resolve_targets "$TARGET")
+
+case "$ACTION" in
     full)
         build_frontend
-        sync_source
-        build_remote
-        restart_service
+        for t in $TARGETS; do
+            sync_source "$t"
+            build_remote "$t"
+            restart_service "$t"
+        done
         ;;
     build)
         build_frontend
-        sync_source
-        build_remote
+        for t in $TARGETS; do
+            sync_source "$t"
+            build_remote "$t"
+        done
         ;;
     restart)
-        restart_service
+        for t in $TARGETS; do
+            restart_service "$t"
+        done
         ;;
     frontend)
         build_frontend
-        sync_source
-        restart_service
+        for t in $TARGETS; do
+            sync_source "$t"
+            restart_service "$t"
+        done
         ;;
     install-service)
-        install_service
+        for t in $TARGETS; do
+            install_service "$t"
+        done
         ;;
     *)
-        echo "Usage: $0 [full|build|restart|frontend|install-service]"
+        echo "Usage: $0 [full|build|restart|frontend|install-service] [upspi|upspi2|all]"
         exit 1
         ;;
 esac

@@ -84,6 +84,9 @@ static const config_key_t app_db_keys[] = {
     { "setup.ups_done",             CFG_INT, "0",
       "Set to 1 when UPS connection is configured via setup wizard",
       CFG_STORE_DB, 0 },
+    { "setup.ups_name",             CFG_STRING, "",
+      "User-defined name for this UPS instance",
+      CFG_STORE_DB, 0 },
 
     /* Shutdown: trigger */
     { "shutdown.trigger",           CFG_STRING, "software",

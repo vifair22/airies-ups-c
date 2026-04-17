@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
 
 /* --- Helpers --- */
 
@@ -28,6 +29,10 @@ static cJSON *build_status_json(route_ctx_t *ctx)
     cJSON *obj = cJSON_CreateObject();
     ups_data_t data;
     ups_inventory_t inv;
+
+    const char *ups_name = config_get_str(ctx->config, "setup.ups_name");
+    if (ups_name && ups_name[0])
+        cJSON_AddStringToObject(obj, "name", ups_name);
 
     if (!ctx->monitor || !ctx->ups) {
         cJSON_AddStringToObject(obj, "driver", "none");
@@ -1359,21 +1364,66 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
 {
     (void)req;
     (void)ud;
-    cJSON *arr = cJSON_CreateArray();
+
+    cJSON *obj = cJSON_CreateObject();
 
     /* Scan for serial devices */
+    cJSON *serial = cJSON_CreateArray();
     const char *patterns[] = { "/dev/ttyUSB", "/dev/ttyACM", "/dev/ttyS", NULL };
     for (int p = 0; patterns[p]; p++) {
         for (int i = 0; i < 10; i++) {
             char path[64];
             snprintf(path, sizeof(path), "%s%d", patterns[p], i);
             if (access(path, R_OK | W_OK) == 0)
-                cJSON_AddItemToArray(arr, cJSON_CreateString(path));
+                cJSON_AddItemToArray(serial, cJSON_CreateString(path));
         }
     }
+    cJSON_AddItemToObject(obj, "serial", serial);
 
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
+    /* Scan for USB HID power devices */
+    cJSON *usb = cJSON_CreateArray();
+    DIR *dir = opendir("/sys/class/hidraw");
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            char uevent[512];
+            snprintf(uevent, sizeof(uevent),
+                     "/sys/class/hidraw/%s/device/uevent", ent->d_name);
+            FILE *f = fopen(uevent, "r");
+            if (!f) continue;
+
+            char line[256];
+            unsigned int vid = 0, pid = 0;
+            char hid_name[128] = "";
+            while (fgets(line, sizeof(line), f)) {
+                unsigned int bus;
+                if (sscanf(line, "HID_ID=%x:%x:%x", &bus, &vid, &pid) == 3)
+                    continue;
+                if (sscanf(line, "HID_NAME=%127[^\n]", hid_name) == 1)
+                    continue;
+            }
+            fclose(f);
+
+            if (vid > 0) {
+                cJSON *dev = cJSON_CreateObject();
+                char vid_s[8], pid_s[8], devpath[512];
+                snprintf(vid_s, sizeof(vid_s), "%04x", vid);
+                snprintf(pid_s, sizeof(pid_s), "%04x", pid);
+                snprintf(devpath, sizeof(devpath), "/dev/%s", ent->d_name);
+                cJSON_AddStringToObject(dev, "vid", vid_s);
+                cJSON_AddStringToObject(dev, "pid", pid_s);
+                cJSON_AddStringToObject(dev, "name", hid_name);
+                cJSON_AddStringToObject(dev, "device", devpath);
+                cJSON_AddItemToArray(usb, dev);
+            }
+        }
+        closedir(dir);
+    }
+    cJSON_AddItemToObject(obj, "usb", usb);
+
+    char *json = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
     return api_ok(json);
 }
 
