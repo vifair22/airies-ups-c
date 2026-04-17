@@ -49,8 +49,8 @@ function ToastContainer({ toasts }: { toasts: Toast[] }) {
       {toasts.map(t => (
         <div key={t.id} className={`px-4 py-2.5 rounded-lg border text-sm shadow-lg ${
           t.type === 'error'
-            ? 'bg-red-900/90 border-red-700 text-red-200'
-            : 'bg-green-900/90 border-green-700 text-green-200'
+            ? 'bg-red-600 border-red-700 text-white'
+            : 'bg-green-600 border-green-700 text-white'
         }`}>
           {t.message}
         </div>
@@ -67,9 +67,9 @@ function ConfirmModal({ title, body, confirmLabel, confirmVariant = 'default', o
   onConfirm: () => void; onCancel: () => void; loading?: boolean
 }) {
   const confirmBg = confirmVariant === 'danger'
-    ? 'bg-red-900/80 hover:bg-red-800 border-red-700'
+    ? 'bg-red-700 hover:bg-red-600 text-white border-red-800'
     : confirmVariant === 'warn'
-      ? 'bg-yellow-900/80 hover:bg-yellow-800 border-yellow-700'
+      ? 'bg-yellow-600 hover:bg-yellow-700 text-white border-yellow-700'
       : 'bg-field hover:bg-field-hover border-edge-strong'
   const borderColor = confirmVariant === 'danger' ? 'border-red-800' : 'border-edge-strong'
 
@@ -106,9 +106,9 @@ function SimpleCmd({ cmd, onResult }: { cmd: CmdDesc; onResult: (msg: string, ty
   }
 
   const bg = cmd.variant === 'danger'
-    ? 'bg-red-900/80 hover:bg-red-800 border-red-700'
+    ? 'bg-red-700 hover:bg-red-600 text-white border-red-800'
     : cmd.variant === 'warn'
-      ? 'bg-yellow-900/60 hover:bg-yellow-800 border-yellow-700'
+      ? 'bg-yellow-600 hover:bg-yellow-700 text-white border-yellow-700'
       : 'bg-field hover:bg-field-hover border-edge-strong'
 
   return (
@@ -150,8 +150,8 @@ function ToggleCmd({ cmd, statusRaw, onResult }: {
     <>
       <div className="flex items-center gap-3">
         <span className={`text-xs font-mono px-2 py-0.5 rounded ${
-          isActive ? 'bg-yellow-900/50 text-yellow-400 border border-yellow-700'
-          : 'bg-green-900/50 text-green-400 border border-green-700'
+          isActive ? 'bg-yellow-500/15 text-yellow-700 border border-yellow-600'
+          : 'bg-green-500/15 text-green-700 border border-green-600'
         }`}>
           {isActive ? 'ACTIVE' : 'OFF'}
         </span>
@@ -163,7 +163,7 @@ function ToggleCmd({ cmd, statusRaw, onResult }: {
         ) : (
           <button onClick={() => setModal('on')}
             className={`px-4 py-2 rounded text-sm border transition-colors ${
-              cmd.variant === 'warn' ? 'bg-yellow-900/60 hover:bg-yellow-800 border-yellow-700'
+              cmd.variant === 'warn' ? 'bg-yellow-600 hover:bg-yellow-700 text-white border-yellow-700'
               : 'bg-field hover:bg-field-hover border-edge-strong'
             }`}>
             Enable {cmd.display_name}
@@ -205,7 +205,7 @@ function ShutdownWorkflow({ onResult }: { onResult: (msg: string, type: 'success
           Dry Run
         </button>
         <button onClick={() => setModal('real')}
-          className="px-4 py-2 rounded text-sm border bg-red-900/80 hover:bg-red-800 border-red-700 transition-colors">
+          className="px-4 py-2 rounded text-sm border bg-red-700 hover:bg-red-600 text-white border-red-800 transition-colors">
           Shutdown
         </button>
       </div>

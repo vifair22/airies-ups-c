@@ -201,7 +201,7 @@ export default function WeatherConfig() {
 
           <div className="flex items-center gap-3">
             <button onClick={save} disabled={saving}
-              className="px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+              className="px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
               {saving ? 'Saving...' : 'Save'}
             </button>
             {saved && <span className="text-xs text-green-400">Saved — restart to apply</span>}

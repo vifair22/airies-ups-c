@@ -76,7 +76,7 @@ export default function ShutdownConfig() {
                 onChange={(e) => setNewGroup({ ...newGroup, parallel: e.target.checked })} />
               Parallel
             </label>
-            <button onClick={addGroup} className="px-3 py-1 bg-accent hover:bg-accent-hover rounded text-sm">
+            <button onClick={addGroup} className="px-3 py-1 bg-accent hover:bg-accent-hover text-white rounded text-sm">
               Create
             </button>
           </div>
@@ -163,7 +163,7 @@ export default function ShutdownConfig() {
                 className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm w-full" />
             </div>
             <div className="col-span-2">
-              <button onClick={addTarget} className="px-3 py-1.5 bg-accent hover:bg-accent-hover rounded text-sm">
+              <button onClick={addTarget} className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-sm">
                 Create Target
               </button>
             </div>

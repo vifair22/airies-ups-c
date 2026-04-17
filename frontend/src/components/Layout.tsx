@@ -28,7 +28,7 @@ function SideLink({ to, label }: { to: string; label: string }) {
       className={({ isActive }) =>
         `block px-3 py-1.5 rounded text-sm transition-colors ${
           isActive
-            ? 'bg-field text-white font-medium'
+            ? 'bg-field text-primary font-medium'
             : 'text-muted hover:text-primary hover:bg-field/50'
         }`
       }

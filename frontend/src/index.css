@@ -2,24 +2,71 @@
 
 @theme {
   /* Surfaces */
-  --color-page: #030712;            /* gray-950 — page background */
-  --color-panel: #111827;           /* gray-900 — cards, panels */
-  --color-field: #1f2937;           /* gray-800 — inputs, nested surfaces */
-  --color-field-hover: #374151;     /* gray-700 — hover on fields/buttons */
+  --color-page: #0a0a0a;             /* neutral-950 */
+  --color-panel: #171717;            /* neutral-900 */
+  --color-field: #262626;            /* neutral-800 */
+  --color-field-hover: #404040;      /* neutral-700 */
 
-  /* Text (each tier +1 shade vs old palette for contrast) */
-  --color-primary: #f3f4f6;         /* gray-100 — headings, primary content */
-  --color-secondary: #d1d5db;       /* gray-300 — body text, descriptions */
-  --color-muted: #9ca3af;           /* gray-400 — labels, help text */
-  --color-faint: #6b7280;           /* gray-500 — least important text */
+  /* Text */
+  --color-primary: #f5f5f5;          /* neutral-100 */
+  --color-secondary: #d4d4d4;        /* neutral-300 */
+  --color-muted: #b3b3b3;            /* neutral-350 — 8.6:1 on panel */
+  --color-faint: #8a8a8a;            /* neutral-450 — 5.1:1 on panel */
 
   /* Borders */
-  --color-edge: #1f2937;            /* gray-800 — card/panel borders */
-  --color-edge-strong: #374151;     /* gray-700 — input borders, dividers */
+  --color-edge: #262626;             /* neutral-800 */
+  --color-edge-strong: #404040;      /* neutral-700 */
 
-  /* Accent (primary action) */
-  --color-accent: #1d4ed8;          /* blue-700 — buttons */
-  --color-accent-hover: #2563eb;    /* blue-600 — button hover */
+  /* Accent */
+  --color-accent: #1d4ed8;           /* blue-700 */
+  --color-accent-hover: #2563eb;     /* blue-600 */
+
+  /* Explicit white/black — Tailwind v4 needs these defined in @theme */
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* Status plane backgrounds (dark: tinted dark, light: tinted light) */
+  --color-status-green: rgba(34, 197, 94, 0.12);
+  --color-status-red: rgba(239, 68, 68, 0.12);
+  --color-status-yellow: rgba(234, 179, 8, 0.12);
+  --color-status-orange: rgba(249, 115, 22, 0.12);
+  --color-status-sky: rgba(56, 189, 248, 0.10);
+  --color-status-muted: rgba(115, 115, 115, 0.15);
+}
+
+/* Global base */
+html {
+  background-color: var(--color-page);
+  color: var(--color-primary);
+}
+input, select, textarea {
+  color: inherit;
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --color-page: #fafafa;             /* neutral-50 */
+  --color-panel: #ffffff;            /* white */
+  --color-field: #f5f5f5;            /* neutral-100 */
+  --color-field-hover: #e5e5e5;      /* neutral-200 */
+
+  --color-primary: #0a0a0a;          /* neutral-950 */
+  --color-secondary: #262626;        /* neutral-800 */
+  --color-muted: #525252;            /* neutral-600 */
+  --color-faint: #a3a3a3;            /* neutral-400 */
+
+  --color-edge: #e5e5e5;             /* neutral-200 */
+  --color-edge-strong: #d4d4d4;      /* neutral-300 */
+
+  --color-accent: #2563eb;           /* blue-600 — 5.2:1 with white text */
+  --color-accent-hover: #1d4ed8;     /* blue-700 — darker on hover */
+
+  --color-status-green: rgba(34, 197, 94, 0.10);
+  --color-status-red: rgba(239, 68, 68, 0.10);
+  --color-status-yellow: rgba(234, 179, 8, 0.10);
+  --color-status-orange: rgba(249, 115, 22, 0.10);
+  --color-status-sky: rgba(56, 189, 248, 0.08);
+  --color-status-muted: rgba(115, 115, 115, 0.08);
 }
 
 /* Power flow animations */

@@ -30,22 +30,32 @@ const ST = {
 
 /* ── Color palette ── */
 
-const C = {
-  active:   '#22c55e',   /* green-500 */
-  he:       '#22c55e',   /* green for HE (bypass is intentional) */
-  bypass:   '#eab308',   /* yellow-500 */
-  bypassF:  '#f97316',   /* orange-500 for forced bypass */
-  battery:  '#eab308',   /* yellow-500 */
-  fault:    '#ef4444',   /* red-500 */
-  heStandby: '#166534',  /* green-800 — inverter tracking in HE mode */
-  inactive: '#374151',   /* gray-700 */
-  dead:     '#1f2937',   /* gray-800 */
-  block:    '#111827',   /* panel */
-  blockBorder: '#374151', /* gray-700 */
-  text:     '#d1d5db',   /* secondary */
-  textDim:  '#6b7280',   /* faint */
-  textBright: '#f3f4f6', /* primary */
+/* Status colors are fixed (they need to read on both light and dark).
+ * Chrome colors read from CSS variables so they follow the theme. */
+function getCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
+
+function useThemeColors() {
+  /* Re-read on every render — cheap, and catches theme changes */
+  return {
+    active:      '#22c55e',
+    he:          '#22c55e',
+    bypass:      '#eab308',
+    bypassF:     '#f97316',
+    battery:     '#eab308',
+    fault:       '#ef4444',
+    heStandby:   '#166534',
+    inactive:    getCssVar('--color-edge-strong') || '#404040',
+    dead:        getCssVar('--color-edge') || '#262626',
+    block:       getCssVar('--color-panel') || '#171717',
+    blockBorder: getCssVar('--color-edge-strong') || '#404040',
+    text:        getCssVar('--color-secondary') || '#d4d4d4',
+    textDim:     getCssVar('--color-faint') || '#8a8a8a',
+    textBright:  getCssVar('--color-primary') || '#f5f5f5',
+  }
+}
+
 
 /* ── Animated flow line ── */
 
@@ -55,6 +65,7 @@ function FlowLine({ points, color, active, reverse }: {
   active: boolean
   reverse?: boolean
 }) {
+  const C = useThemeColors()
   return (
     <g>
       {/* Background line */}
@@ -94,6 +105,7 @@ function StageBlock({ x, y, w, h, label, value, unit, color, borderColor }: {
   color?: string
   borderColor?: string
 }) {
+  const C = useThemeColors()
   return (
     <g>
       <rect
@@ -131,6 +143,7 @@ function StageBlock({ x, y, w, h, label, value, unit, color, borderColor }: {
 /* ── Arrow head marker ── */
 
 function ArrowDefs() {
+  const C = useThemeColors()
   return (
     <defs>
       <marker id="arrow-active" viewBox="0 0 6 6" refX="5" refY="3"
@@ -164,6 +177,7 @@ export function PowerFlowSRT({
   batteryCharge, batteryVoltage, batteryError,
   loadPct, efficiency, outputFrequency,
 }: PowerFlowProps) {
+  const C = useThemeColors()
 
   const isOnline = !!(raw & ST.ONLINE)
   const isOnBattery = !!(raw & ST.ON_BATTERY)
@@ -382,6 +396,7 @@ export function PowerFlowStandby({
   batteryCharge, batteryVoltage, batteryError,
   loadPct,
 }: PowerFlowProps) {
+  const C = useThemeColors()
 
   const isOnline = !!(raw & ST.ONLINE)
   const isOnBattery = !!(raw & ST.ON_BATTERY)

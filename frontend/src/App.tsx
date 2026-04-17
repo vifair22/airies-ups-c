@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { useTheme } from './hooks/useTheme'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Events from './pages/Events'
@@ -44,6 +45,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  useTheme() /* Apply saved theme on mount */
   return (
     <Routes>
       {/* Public routes */}

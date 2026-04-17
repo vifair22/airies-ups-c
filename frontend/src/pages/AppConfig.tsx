@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
+import { useTheme } from '../hooks/useTheme'
+import type { ThemeMode } from '../hooks/useTheme'
 
 interface ConfigEntry {
   key: string
@@ -37,6 +39,7 @@ export default function AppConfig() {
         Changes to these settings require a daemon restart.
       </p>
 
+      <ThemeSelector />
       <PasswordChange />
 
       {groups.map((group) => (
@@ -55,6 +58,29 @@ export default function AppConfig() {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function ThemeSelector() {
+  const { mode, setMode } = useTheme()
+  return (
+    <div className="mb-4 rounded-lg bg-panel border border-edge">
+      <div className="px-4 py-2.5 border-b border-edge">
+        <h3 className="text-xs font-medium text-muted uppercase tracking-wider">Appearance</h3>
+      </div>
+      <div className="px-4 py-3 flex items-center gap-4">
+        <div className="flex-1 min-w-0">
+          <label className="text-sm text-primary font-medium">Theme</label>
+          <p className="text-xs text-muted">Auto follows your system preference</p>
+        </div>
+        <select value={mode} onChange={(e) => setMode(e.target.value as ThemeMode)}
+          className="bg-field border border-edge-strong rounded px-3 py-1.5 text-sm">
+          <option value="auto">Auto</option>
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
     </div>
   )
 }
@@ -113,7 +139,7 @@ function PasswordChange() {
         </div>
         <div className="flex items-center gap-3">
           <button onClick={submit} disabled={saving || !oldPw || !newPw || !confirmPw}
-            className="px-4 py-1.5 bg-accent hover:bg-accent-hover rounded text-xs disabled:opacity-50">
+            className="px-4 py-1.5 rounded text-sm bg-accent hover:bg-accent-hover text-white disabled:bg-field disabled:text-muted disabled:cursor-not-allowed">
             {saving ? 'Saving...' : 'Change Password'}
           </button>
           {msg && <span className={`text-xs ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</span>}
@@ -157,7 +183,7 @@ function ConfigRow({ entry, saving, onSave }: {
         <button
           onClick={() => onSave(entry.key, val)}
           disabled={saving === entry.key}
-          className="px-3 py-1.5 bg-accent hover:bg-accent-hover rounded text-xs shrink-0 transition-colors">
+          className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs shrink-0 transition-colors">
           {saving === entry.key ? '...' : 'Save'}
         </button>
       )}

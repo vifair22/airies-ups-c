@@ -125,34 +125,34 @@ function classifyUtility(raw: number, isStandby: boolean): UtilityHealth {
 }
 
 const utilityStyles: Record<UtilityHealth, PlaneStyle & { label: string }> = {
-  he:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'OK (HE Eligible)' },
-  ok:       { border: 'border-green-600',  bg: 'bg-green-950/40',  accent: 'text-green-400',  label: 'OK' },
-  online:   { border: 'border-sky-700',    bg: 'bg-sky-950/30',    accent: 'text-sky-400',    label: 'OK' },
-  degraded: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Degraded' },
-  down:     { border: 'border-red-600',    bg: 'bg-red-950/30',    accent: 'text-red-400',    label: 'Lost' },
+  he:       { border: 'border-green-600',  bg: 'bg-status-green',  accent: 'text-green-400',  label: 'OK (HE Eligible)' },
+  ok:       { border: 'border-green-600',  bg: 'bg-status-green',  accent: 'text-green-400',  label: 'OK' },
+  online:   { border: 'border-sky-700',    bg: 'bg-status-sky',    accent: 'text-sky-400',    label: 'OK' },
+  degraded: { border: 'border-orange-600', bg: 'bg-status-orange', accent: 'text-orange-400', label: 'Degraded' },
+  down:     { border: 'border-red-600',    bg: 'bg-status-red',    accent: 'text-red-400',    label: 'Lost' },
 }
 
 /* UPS plane — returns style + badge, topology-aware */
 
 function classifyUpsPlane(raw: number, hasBypass: boolean): { style: PlaneStyle & { label: string } } {
   if (raw & (ST.FAULT | ST.FAULT_STATE))
-    return { style: { border: 'border-red-600', bg: 'bg-red-950/30', accent: 'text-red-400', label: 'Fault' } }
+    return { style: { border: 'border-red-600', bg: 'bg-status-red', accent: 'text-red-400', label: 'Fault' } }
   if (raw & ST.OUTPUT_OFF)
-    return { style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted', label: 'Off' } }
+    return { style: { border: 'border-faint', bg: 'bg-status-muted', accent: 'text-muted', label: 'Off' } }
 
   if (hasBypass && (raw & ST.BYPASS)) {
     if (raw & ST.COMMANDED)
-      return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'Bypass' } }
-    return { style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400', label: 'Bypass (Forced)' } }
+      return { style: { border: 'border-yellow-600', bg: 'bg-status-yellow', accent: 'text-yellow-400', label: 'Bypass' } }
+    return { style: { border: 'border-orange-600', bg: 'bg-status-orange', accent: 'text-orange-400', label: 'Bypass (Forced)' } }
   }
 
   if (raw & ST.ON_BATTERY)
-    return { style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400', label: 'On Battery' } }
+    return { style: { border: 'border-yellow-600', bg: 'bg-status-yellow', accent: 'text-yellow-400', label: 'On Battery' } }
 
   if (raw & ST.HE_MODE)
-    return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'HE' } }
+    return { style: { border: 'border-green-600', bg: 'bg-status-green', accent: 'text-green-400', label: 'HE' } }
 
-  return { style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400', label: 'Online' } }
+  return { style: { border: 'border-green-600', bg: 'bg-status-green', accent: 'text-green-400', label: 'Online' } }
 }
 
 /* Output plane */
@@ -163,23 +163,23 @@ function classifyOutput(raw: number, loadPct: number): { style: PlaneStyle; badg
   const isOverload = !!(raw & ST.OVERLOAD)
 
   if (isOff && isFault) return {
-    style: { border: 'border-red-600', bg: 'bg-red-950/30', accent: 'text-red-400' },
+    style: { border: 'border-red-600', bg: 'bg-status-red', accent: 'text-red-400' },
     badge: 'Off (Fault)',
   }
   if (isOff) return {
-    style: { border: 'border-faint', bg: 'bg-panel/50', accent: 'text-muted' },
+    style: { border: 'border-faint', bg: 'bg-status-muted', accent: 'text-muted' },
     badge: 'Off',
   }
   if (isOverload || loadPct > 80) return {
-    style: { border: 'border-orange-600', bg: 'bg-orange-950/30', accent: 'text-orange-400' },
+    style: { border: 'border-orange-600', bg: 'bg-status-orange', accent: 'text-orange-400' },
     badge: isOverload ? 'Overload' : 'Load Critical',
   }
   if (loadPct > 60) return {
-    style: { border: 'border-yellow-600', bg: 'bg-yellow-950/30', accent: 'text-yellow-400' },
+    style: { border: 'border-yellow-600', bg: 'bg-status-yellow', accent: 'text-yellow-400' },
     badge: 'Load Elevated',
   }
   return {
-    style: { border: 'border-green-600', bg: 'bg-green-950/40', accent: 'text-green-400' },
+    style: { border: 'border-green-600', bg: 'bg-status-green', accent: 'text-green-400' },
     badge: 'Active',
   }
 }
@@ -199,7 +199,7 @@ function Metric({ label, value, unit, accent }: {
   )
 }
 
-function BigStat({ value, unit, sub, color = 'text-white' }: {
+function BigStat({ value, unit, sub, color = 'text-primary' }: {
   value: string; unit: string; sub?: string; color?: string
 }) {
   return (
@@ -231,9 +231,9 @@ function Plane({ title, badge, styles, children }: {
 }) {
   return (
     <div className={`rounded-lg border ${styles.border} ${styles.bg}`}>
-      <div className="flex items-center justify-between px-5 py-3 border-b border-white/5">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-edge">
         <h3 className="text-sm font-semibold text-primary">{title}</h3>
-        <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles.accent} bg-black/30`}>{badge}</span>
+        <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles.accent} bg-field/50`}>{badge}</span>
       </div>
       <div className="px-5 py-4">{children}</div>
     </div>
@@ -383,7 +383,7 @@ export default function Dashboard() {
             value={out?.load_pct.toFixed(1) ?? '--'}
             unit="%"
             sub={out && nomW ? fmtWatts(out.load_pct, nomW) : undefined}
-            color={out && out.load_pct > 80 ? 'text-red-400' : out && out.load_pct > 60 ? 'text-yellow-400' : 'text-white'}
+            color={out && out.load_pct > 80 ? 'text-red-400' : out && out.load_pct > 60 ? 'text-yellow-400' : 'text-primary'}
           />
           <div className="mt-2">
             <Metric label="Current" value={out?.current.toFixed(1) ?? '--'} unit="A" />
@@ -516,7 +516,7 @@ export default function Dashboard() {
             )}
           </div>
           {s.outlets && (
-            <div className="mt-3 pt-3 border-t border-white/5">
+            <div className="mt-3 pt-3 border-t border-edge">
               <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Outlet Groups</h4>
               <div className={`grid gap-4 ${hasSog(sogCfg, 0) || hasSog(sogCfg, 1) ? 'grid-cols-3' : 'grid-cols-1'}`}>
                 <OutletBadge label="Main (MOG)" raw={s.outlets.mog} />
@@ -526,7 +526,7 @@ export default function Dashboard() {
             </div>
           )}
           {s.timers && (s.timers.shutdown > 0 || s.timers.start > 0 || s.timers.reboot > 0) && (
-            <div className="mt-3 pt-3 border-t border-white/5">
+            <div className="mt-3 pt-3 border-t border-edge">
               <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Active Timers</h4>
               <div className="grid grid-cols-3 gap-4">
                 {s.timers.shutdown > 0 && <Metric label="Turn Off" value={`${s.timers.shutdown}s`} accent="text-red-400" />}

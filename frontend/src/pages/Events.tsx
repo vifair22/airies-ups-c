@@ -10,23 +10,24 @@ interface Event {
 }
 
 const severityStyle: Record<string, { dot: string; bg: string }> = {
-  info:     { dot: 'bg-blue-400',   bg: 'bg-blue-900/30 text-blue-300' },
-  warning:  { dot: 'bg-yellow-400', bg: 'bg-yellow-900/30 text-yellow-300' },
-  error:    { dot: 'bg-red-400',    bg: 'bg-red-900/30 text-red-300' },
-  critical: { dot: 'bg-red-500',    bg: 'bg-red-800/40 text-red-200' },
+  info:     { dot: 'bg-blue-400',   bg: 'bg-blue-500/15 text-blue-700' },
+  warning:  { dot: 'bg-yellow-400', bg: 'bg-yellow-500/15 text-yellow-700' },
+  error:    { dot: 'bg-red-400',    bg: 'bg-red-500/15 text-red-600' },
+  critical: { dot: 'bg-red-500',    bg: 'bg-red-500/25 text-red-600' },
 }
 
 const categoryColor: Record<string, string> = {
-  system:   'bg-gray-700',
-  status:   'bg-gray-700',
-  power:    'bg-amber-800',
-  mode:     'bg-indigo-800',
-  fault:    'bg-red-800',
-  alert:    'bg-orange-800',
-  test:     'bg-sky-800',
-  command:  'bg-indigo-800',
-  shutdown: 'bg-red-800',
-  weather:  'bg-sky-800',
+  system:   'bg-field-hover',
+  status:   'bg-field-hover',
+  power:    'bg-amber-500/20',
+  mode:     'bg-indigo-500/20',
+  fault:    'bg-red-500/20',
+  alert:    'bg-orange-500/20',
+  test:     'bg-sky-500/20',
+  command:  'bg-indigo-500/20',
+  shutdown: 'bg-red-500/20',
+  weather:  'bg-sky-500/20',
+  auth:     'bg-violet-500/20',
 }
 
 function relativeTime(ts: string): string {
@@ -45,7 +46,7 @@ function FilterChip({ label, active, color, onClick }: {
     <button onClick={onClick}
       className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
         active
-          ? `${color || 'bg-gray-700'} border-edge-strong text-primary`
+          ? `${color || 'bg-field-hover'} border-edge-strong text-primary`
           : 'bg-transparent border-edge text-faint hover:text-muted hover:border-edge-strong'
       }`}>
       {label}
@@ -155,7 +156,7 @@ export default function Events() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="font-medium text-sm text-primary">{ev.title}</span>
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${categoryColor[ev.category] || 'bg-gray-700'} text-secondary`}>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${categoryColor[ev.category] || 'bg-field-hover'} text-secondary`}>
                         {ev.category}
                       </span>
                       <span className={`px-1.5 py-0.5 rounded text-[10px] ${sev.bg}`}>

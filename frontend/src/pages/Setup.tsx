@@ -245,7 +245,7 @@ export default function Setup() {
               </div>
               {passwordError && <p className="text-sm text-red-400">{passwordError}</p>}
               <button onClick={submitPassword} disabled={!password || !passwordConfirm || passwordSaving}
-                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
                 {passwordSaving ? 'Setting up...' : 'Continue'}
               </button>
             </div>
@@ -264,7 +264,7 @@ export default function Setup() {
               </div>
               {passwordError && <p className="text-sm text-red-400">{passwordError}</p>}
               <button onClick={submitLogin} disabled={!password || passwordSaving}
-                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
                 {passwordSaving ? 'Logging in...' : 'Continue'}
               </button>
             </div>
@@ -339,7 +339,7 @@ export default function Setup() {
               )}
 
               <button onClick={testConnection} disabled={testing || (connType === 'serial' && !device)}
-                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
                 {testing ? 'Testing...' : 'Test Connection'}
               </button>
 
@@ -360,7 +360,7 @@ export default function Setup() {
               )}
 
               <button onClick={() => setStep('notifications')} disabled={!testResult?.result}
-                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+                className="w-full px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
                 Continue
               </button>
             </div>
@@ -392,7 +392,7 @@ export default function Setup() {
                   Back
                 </button>
                 <button onClick={saveConfig} disabled={saving}
-                  className="flex-1 px-4 py-2 bg-accent hover:bg-accent-hover rounded text-sm disabled:opacity-50">
+                  className="flex-1 px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm disabled:opacity-50">
                   {saving ? 'Saving...' : pushToken ? 'Save & Finish' : 'Skip & Finish'}
                 </button>
               </div>
@@ -407,7 +407,7 @@ export default function Setup() {
                 Configuration saved. Restart the daemon to connect to the UPS with the new settings.
               </p>
               <button onClick={restart}
-                className="px-6 py-2 bg-accent hover:bg-accent-hover rounded text-sm">
+                className="px-6 py-2 bg-accent hover:bg-accent-hover text-white rounded text-sm">
                 Restart & Go to Dashboard
               </button>
             </div>
