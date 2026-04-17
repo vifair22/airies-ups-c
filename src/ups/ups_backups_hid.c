@@ -74,11 +74,11 @@ static const uint32_t UP_RUNTIME_TO_EMPTY[] = {
 static const uint32_t UP_PERCENT_LOAD[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_PERCENT_LOAD) };
 
-/* Output frequency — APC vendor page, usage 0x24 in Battery collection.
- * This is an APC-specific mapping; the value is in quarter-Hz (/4). */
+/* Power.Output.Frequency — standard HID usage 0x0032 (Hertz, no scaling).
+ * Note: BE600M1 does not expose this field; output_frequency will be 0. */
 static const uint32_t UP_OUTPUT_FREQUENCY[] = {
-    HID_UP(HID_PAGE_POWER, HID_USAGE_BATTERY),
-    HID_UP(HID_PAGE_APC, 0x0024) };
+    HID_UP(HID_PAGE_POWER, HID_USAGE_OUTPUT),
+    HID_UP(HID_PAGE_POWER, HID_USAGE_FREQUENCY) };
 
 /* --- Resolved field cache (populated on connect) --- */
 
@@ -250,6 +250,7 @@ static void resolve_fields(hid_transport_t *t)
     if (f->percent_load)      log_info("backups_hid: percent_load → RID 0x%02x", f->percent_load->report_id);
     else                      log_warn("backups_hid: percent_load not found in descriptor");
     if (f->sensitivity)       log_info("backups_hid: sensitivity → RID 0x%02x", f->sensitivity->report_id);
+    if (f->output_frequency)  log_info("backups_hid: output_freq → RID 0x%02x", f->output_frequency->report_id);
 }
 
 /* Forward declarations */
@@ -366,12 +367,12 @@ static int backups_read_status(void *transport, ups_data_t *data)
     hid_transport_t *t = transport;
 
     /* Read the full status report. We need the report ID — find any 1-bit
-     * status field to get it. The AC Present bit is always present. */
+     * status field to get it. ACPresent (85:D0) is always present. */
     uint8_t status_rid = 0;
     for (size_t i = 0; i < t->map.count; i++) {
         const hid_field_t *f = &t->map.fields[i];
         if (f->type == HID_FIELD_FEATURE && f->bit_size == 1 &&
-            f->usage_page == HID_PAGE_POWER && f->usage_id == HID_USAGE_AC_PRESENT) {
+            f->usage_page == HID_PAGE_BATTERY && f->usage_id == HID_USAGE_BAT_AC_PRESENT) {
             status_rid = f->report_id;
             break;
         }
@@ -383,20 +384,24 @@ static int backups_read_status(void *transport, ups_data_t *data)
     int rc = ioctl(t->fd, HIDIOCGFEATURE(sizeof(buf)), buf);
     if (rc < 0) return UPS_ERR_IO;
 
-    /* Map HID status bits to our semantic status flags */
+    /* Map HID status bits to our semantic status flags.
+     * Page:usage mappings per APC AN178 §2.3 and USB HID PDC spec. */
     data->status = 0;
 
-    /* ACPresent: check both Power.ACPresent (0x65) and Battery.0xD0 (APC variant) */
-    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_AC_PRESENT, buf, rc) ||
-        read_status_bit(t, HID_PAGE_BATTERY, 0x00D0, buf, rc))
+    /* ACPresent — Battery page 85:D0 (APC AN178 §2.3.3) */
+    if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_AC_PRESENT, buf, rc))
         data->status |= UPS_ST_ONLINE;
+    /* Discharging — Battery page 85:45 */
     if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_DISCHARGING, buf, rc))
         data->status |= UPS_ST_ON_BATTERY;
-    if (read_status_bit(t, HID_PAGE_BATTERY, 0x00DB, buf, rc))  /* Overload */
+    /* Overload — Power Device page 84:65 (APC AN178 §2.3.11) */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_OVERLOAD, buf, rc))
         data->status |= UPS_ST_OVERLOAD;
-    if (read_status_bit(t, HID_PAGE_BATTERY, 0x0042, buf, rc))  /* ShutdownRequested */
+    /* ShutdownRequested — Power Device page 84:68 (APC AN178 §2.3.6) */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_SHUTDOWN_REQUESTED, buf, rc))
         data->status |= UPS_ST_SHUT_PENDING;
-    if (read_status_bit(t, HID_PAGE_BATTERY, 0x004B, buf, rc))  /* NeedReplacement */
+    /* NeedReplacement — Battery page 85:4B (APC AN178 §2.3.10) */
+    if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_NEED_REPLACEMENT, buf, rc))
         data->bat_system_error |= UPS_BATERR_REPLACE;
 
     /* Synthesize outlet state — Back-UPS has a single unswitched outlet group */
@@ -415,11 +420,17 @@ static int backups_read_dynamic(void *transport, ups_data_t *data)
     data->battery_voltage  = hid_field_read_scaled(t->fd, t->f.battery_voltage);
     data->runtime_sec      = (uint32_t)hid_field_read_scaled(t->fd, t->f.runtime_to_empty);
     data->input_voltage    = hid_field_read_scaled(t->fd, t->f.input_voltage);
-    data->output_voltage   = hid_field_read_scaled(t->fd, t->f.output_voltage);
+
+    /* Standby topology: output IS the input (passthrough) when online.
+     * On battery the inverter targets the nominal config voltage. */
+    if (data->status & UPS_ST_ON_BATTERY)
+        data->output_voltage = hid_field_read_scaled(t->fd, t->f.output_voltage);
+    else
+        data->output_voltage = data->input_voltage;
     data->load_pct         = hid_field_read_scaled(t->fd, t->f.percent_load);
 
-    /* Output frequency: APC vendor report, raw value in quarter-Hz */
-    data->output_frequency = hid_field_read_scaled(t->fd, t->f.output_frequency) / 4.0;
+    /* Output frequency: standard HID Frequency usage, value in Hz */
+    data->output_frequency = hid_field_read_scaled(t->fd, t->f.output_frequency);
 
     /* Derive output current from load % and nominal watts.
      * No current sensor on standby units, but we can estimate:
