@@ -1,6 +1,6 @@
 #include "api/routes.h"
+#include "app_config.h"
 #include "ups/ups.h"
-#include "alerts/alerts.h"
 #include <cutils/log.h>
 #include <cJSON.h>
 
@@ -1000,23 +1000,40 @@ static api_response_t handle_app_config_get(const api_request_t *req, void *ud)
 {
     (void)req;
     route_ctx_t *ctx = ud;
+
+    cJSON *arr = cJSON_CreateArray();
+
+    /* File-backed keys (UPS connection, HTTP, Pushover) */
+    for (int i = 0; app_file_keys[i].key; i++) {
+        const config_key_t *k = &app_file_keys[i];
+        const char *val = config_get_str(ctx->config, k->key);
+        cJSON *c = cJSON_CreateObject();
+        cJSON_AddStringToObject(c, "key", k->key);
+        cJSON_AddStringToObject(c, "value", val ? val : k->default_value);
+        cJSON_AddStringToObject(c, "type", k->type == CFG_INT ? "int" : "string");
+        cJSON_AddStringToObject(c, "default_value", k->default_value);
+        cJSON_AddStringToObject(c, "description", k->description);
+        cJSON_AddItemToArray(arr, c);
+    }
+
+    /* DB-backed keys */
     db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT key, value, type, default_value, description FROM config ORDER BY key",
         NULL, &result);
-    if (rc != 0 || !result) return api_error(500, "failed to query config");
-
-    cJSON *arr = cJSON_CreateArray();
-    for (int i = 0; i < result->nrows; i++) {
-        cJSON *c = cJSON_CreateObject();
-        cJSON_AddStringToObject(c, "key", result->rows[i][0]);
-        cJSON_AddStringToObject(c, "value", result->rows[i][1]);
-        cJSON_AddStringToObject(c, "type", result->rows[i][2]);
-        cJSON_AddStringToObject(c, "default_value", result->rows[i][3]);
-        cJSON_AddStringToObject(c, "description", result->rows[i][4]);
-        cJSON_AddItemToArray(arr, c);
+    if (rc == 0 && result) {
+        for (int i = 0; i < result->nrows; i++) {
+            cJSON *c = cJSON_CreateObject();
+            cJSON_AddStringToObject(c, "key", result->rows[i][0]);
+            cJSON_AddStringToObject(c, "value", result->rows[i][1]);
+            cJSON_AddStringToObject(c, "type", result->rows[i][2]);
+            cJSON_AddStringToObject(c, "default_value", result->rows[i][3]);
+            cJSON_AddStringToObject(c, "description", result->rows[i][4]);
+            cJSON_AddItemToArray(arr, c);
+        }
+        db_result_free(result);
     }
-    db_result_free(result);
+
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return api_ok(json);
