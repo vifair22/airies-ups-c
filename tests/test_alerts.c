@@ -15,6 +15,7 @@
 #define MAX_NOTIFICATIONS 32
 
 static struct {
+    char severities[MAX_NOTIFICATIONS][32];
     char titles[MAX_NOTIFICATIONS][128];
     char bodies[MAX_NOTIFICATIONS][512];
     int  count;
@@ -25,9 +26,11 @@ static void reset_notifs(void)
     memset(&g_notifs, 0, sizeof(g_notifs));
 }
 
-static void capture_notify(const char *title, const char *body)
+static void capture_notify(const char *severity, const char *title,
+                           const char *body)
 {
     if (g_notifs.count < MAX_NOTIFICATIONS) {
+        snprintf(g_notifs.severities[g_notifs.count], 32, "%s", severity);
         snprintf(g_notifs.titles[g_notifs.count], 128, "%s", title);
         snprintf(g_notifs.bodies[g_notifs.count], 512, "%s", body);
         g_notifs.count++;
@@ -114,8 +117,10 @@ static void test_overload_fires_on_set(void **state)
     assert_true(alerted & UPS_ST_OVERLOAD);
     int found = 0;
     for (int i = 0; i < g_notifs.count; i++)
-        if (strstr(g_notifs.titles[i], "Overload") && !strstr(g_notifs.titles[i], "Cleared"))
+        if (strstr(g_notifs.titles[i], "Overload") && !strstr(g_notifs.titles[i], "Cleared")) {
+            assert_string_equal(g_notifs.severities[i], "error");
             found++;
+        }
     assert_int_equal(found, 1);
 }
 
@@ -140,8 +145,10 @@ static void test_overload_fires_on_clear(void **state)
 
     int found = 0;
     for (int i = 0; i < g_notifs.count; i++)
-        if (strstr(g_notifs.titles[i], "Overload Cleared"))
+        if (strstr(g_notifs.titles[i], "Overload Cleared")) {
+            assert_string_equal(g_notifs.severities[i], "info");
             found++;
+        }
     assert_int_equal(found, 1);
 }
 
@@ -193,8 +200,10 @@ static void test_fault_fires_on_set(void **state)
 
     int found = 0;
     for (int i = 0; i < g_notifs.count; i++)
-        if (strcmp(g_notifs.titles[i], "UPS Fault") == 0)
+        if (strcmp(g_notifs.titles[i], "UPS Fault") == 0) {
+            assert_string_equal(g_notifs.severities[i], "error");
             found++;
+        }
     assert_int_equal(found, 1);
 }
 
@@ -234,8 +243,10 @@ static void test_input_voltage_high(void **state)
     alerts_check(&s, &d, &thresh, &acfg, capture_notify);
     high_alerts = 0;
     for (int i = 0; i < g_notifs.count; i++)
-        if (strstr(g_notifs.titles[i], "Voltage High"))
+        if (strstr(g_notifs.titles[i], "Voltage High")) {
+            assert_string_equal(g_notifs.severities[i], "warning");
             high_alerts++;
+        }
     assert_int_equal(high_alerts, 1);
 
     /* Drop below enter but above clear (deadband zone: 144-145) */

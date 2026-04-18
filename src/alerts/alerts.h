@@ -42,8 +42,10 @@ typedef struct {
     int voltage_deadband;
 } alert_config_t;
 
-/* Callback for alert notifications */
-typedef void (*alert_notify_fn)(const char *title, const char *body);
+/* Callback for alert notifications.
+ * severity: "info", "warning", "error", or "critical" */
+typedef void (*alert_notify_fn)(const char *severity, const char *title,
+                                const char *body);
 
 /* Initialize alert state (all clear). */
 void alerts_init(alert_state_t *state);

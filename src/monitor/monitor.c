@@ -554,6 +554,13 @@ void monitor_he_inhibit_set(monitor_t *mon, const char *source)
     snprintf(mon->he_source, sizeof(mon->he_source), "%s", source);
 }
 
+void monitor_fire_event(monitor_t *mon, const char *severity,
+                        const char *category, const char *title,
+                        const char *message)
+{
+    fire_event(mon, severity, category, title, message);
+}
+
 void monitor_he_inhibit_clear(monitor_t *mon)
 {
     mon->he_inhibit = 0;

@@ -62,6 +62,12 @@ const char *monitor_driver_name(monitor_t *mon);
 /* Is the UPS connected and responding? */
 int monitor_is_connected(monitor_t *mon);
 
+/* Fire an event from an external subsystem.
+ * Writes to the event journal and triggers registered callbacks. */
+void monitor_fire_event(monitor_t *mon, const char *severity,
+                        const char *category, const char *title,
+                        const char *message);
+
 /* HE inhibit state */
 int monitor_he_inhibit_active(monitor_t *mon);
 const char *monitor_he_inhibit_source(monitor_t *mon);

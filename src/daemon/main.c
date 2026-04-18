@@ -23,6 +23,7 @@
 
 static volatile int running = 1;
 static volatile int restart_requested = 0;
+static const char *g_ups_name = NULL;
 
 static void sig_handler(int sig)
 {
@@ -37,6 +38,64 @@ void app_request_restart(void)
 {
     restart_requested = 1;
     running = 0;
+}
+
+/* --- Push notification formatting --- */
+
+typedef struct {
+    const char *symbol;
+    const char *label;
+    const char *color;
+    int         priority;
+} sev_format_t;
+
+static sev_format_t sev_format(const char *severity)
+{
+    if (strcmp(severity, "critical") == 0)
+        return (sev_format_t){
+            .symbol = "\xe2\x9a\xa0", .label = "CRITICAL",
+            .color = "#ef4444", .priority = PUSH_PRIORITY_HIGH };
+    if (strcmp(severity, "error") == 0)
+        return (sev_format_t){
+            .symbol = "\xe2\x9a\xa0", .label = "ERROR",
+            .color = "#ef4444", .priority = PUSH_PRIORITY_HIGH };
+    if (strcmp(severity, "warning") == 0)
+        return (sev_format_t){
+            .symbol = "\xe2\x9a\xa0", .label = "WARNING",
+            .color = "#eab308", .priority = PUSH_PRIORITY_NORMAL };
+    /* info / default */
+    return (sev_format_t){
+        .symbol = "\xe2\x9c\x93", .label = "INFO",
+        .color = "#60a5fa", .priority = PUSH_PRIORITY_NORMAL };
+}
+
+static void push_notify(const char *severity, const char *title,
+                        const char *body)
+{
+    sev_format_t fmt = sev_format(severity);
+    char t[256], b[1024];
+
+    if (g_ups_name && g_ups_name[0])
+        snprintf(t, sizeof(t), "%s %s: %s", fmt.symbol, g_ups_name, title);
+    else
+        snprintf(t, sizeof(t), "%s %s", fmt.symbol, title);
+
+    if (g_ups_name && g_ups_name[0])
+        snprintf(b, sizeof(b),
+                 "<font color=\"%s\"><b>%s</b></font> \xe2\x80\x94 %s\n%s",
+                 fmt.color, fmt.label, g_ups_name, body);
+    else
+        snprintf(b, sizeof(b),
+                 "<font color=\"%s\"><b>%s</b></font>\n%s",
+                 fmt.color, fmt.label, body);
+
+    push_opts_t opts = {
+        .title    = t,
+        .message  = b,
+        .html     = 1,
+        .priority = fmt.priority,
+    };
+    push_send_opts(&opts);
 }
 
 /* --- Event callback: push alerts to Pushover --- */
@@ -62,7 +121,7 @@ static void on_monitor_event(const char *severity, const char *category,
     if (strcmp(min, "off") == 0) return;
 
     if (severity_rank(severity) >= severity_rank(min))
-        push_send(title, message);
+        push_notify(severity, title, message);
 }
 
 /* --- Alert integration --- */
@@ -74,10 +133,11 @@ typedef struct {
     shutdown_mgr_t    *shutdown;
 } alert_ctx_t;
 
-static void alert_notify(const char *title, const char *body)
+static void alert_notify(const char *severity, const char *title,
+                         const char *body)
 {
     log_info("ALERT: %s — %s", title, body);
-    push_send(title, body);
+    push_notify(severity, title, body);
 }
 
 static void on_monitor_poll(const ups_data_t *data, void *userdata)
@@ -101,6 +161,9 @@ int main(int argc, char *argv[])
 
     cutils_config_t *cfg = appguard_config(guard);
     cutils_db_t *db = appguard_db(guard);
+
+    const char *name = config_get_str(cfg, "setup.ups_name");
+    g_ups_name = (name && name[0]) ? strdup(name) : NULL;
 
     /* --- Phase 2: UPS connection --- */
 

@@ -1,7 +1,6 @@
 #include "weather/weather.h"
 #include "ups/ups.h"
 #include <cutils/log.h>
-#include <cutils/push.h>
 #include <cJSON.h>
 
 #include <curl/curl.h>
@@ -291,24 +290,6 @@ static void resolve_gridpoint(weather_t *w)
     cJSON_Delete(json);
 }
 
-/* --- Event journal helper --- */
-
-static void weather_event(weather_t *w, const char *severity,
-                          const char *title, const char *message)
-{
-    char ts[32];
-    time_t now = time(NULL);
-    struct tm tm;
-    gmtime_r(&now, &tm);
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
-
-    const char *params[] = { ts, severity, "weather", title, message, NULL };
-    db_execute_non_query(w->db,
-        "INSERT INTO events (timestamp, severity, category, title, message) "
-        "VALUES (?, ?, ?, ?, ?)",
-        params, NULL);
-}
-
 /* --- Generic parameter control ---
  *
  * Read/save the current register value, then write the severe or restore value.
@@ -426,17 +407,16 @@ static void *weather_thread(void *arg)
                      reasons, w->control_register);
             apply_severe(w);
             monitor_he_inhibit_set(w->monitor, "weather");
-            weather_event(w, "warning", "Weather: Severe", reasons);
-            push_send("UPS Weather Alert", reasons);
+            monitor_fire_event(w->monitor, "warning", "weather",
+                               "Weather: Severe", reasons);
         } else if (!severe && he_active && strcmp(he_source, "weather") == 0) {
             log_info("weather: conditions cleared, restoring %s",
                      w->control_register);
             apply_restore(w);
             monitor_he_inhibit_clear(w->monitor);
-            weather_event(w, "info", "Weather: Clear",
-                          "Conditions cleared, parameter restored");
-            push_send("UPS Weather Clear",
-                       "Conditions cleared, parameter restored");
+            monitor_fire_event(w->monitor, "info", "weather",
+                               "Weather: Clear",
+                               "Conditions cleared, parameter restored");
         } else if (severe && he_active && strcmp(he_source, "weather") == 0) {
             log_info("weather: still severe (%s)", reasons);
         } else if (!severe) {
