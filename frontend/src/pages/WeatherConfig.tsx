@@ -1,62 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
-
-interface WeatherStatus {
-  enabled: boolean
-  severe?: boolean
-  simulated?: boolean
-  reasons?: string
-  latitude?: number
-  longitude?: number
-  alert_zones?: string
-  wind_threshold_mph?: number
-  poll_interval?: number
-  control_register?: string
-}
-
-interface WeatherConfigData {
-  enabled: boolean
-  latitude: number
-  longitude: number
-  alert_zones: string
-  alert_types: string
-  wind_speed_mph: number
-  severe_keywords: string
-  poll_interval: number
-  control_register: string
-  severe_raw_value?: number
-  normal_raw_value?: number
-}
-
-interface WeatherAlert {
-  event: string
-  headline: string
-  severity: string
-  urgency: string
-  matched: boolean
-}
-
-interface ForecastPeriod {
-  name: string
-  temperature: number
-  wind: string
-  wind_direction: string
-  short_forecast: string
-  detailed_forecast: string
-}
-
-interface WeatherReport {
-  alerts: WeatherAlert[]
-  forecast: ForecastPeriod[]
-}
-
-interface ConfigReg {
-  name: string
-  display_name: string
-  writable: boolean
-  type: string
-  options?: { value: number; name: string; label: string }[]
-}
+import { Modal, WideModal } from '../components/Modal'
+import { Field } from '../components/Field'
+import type { WeatherStatus, WeatherConfigData, WeatherReport } from '../types/weather'
+import type { ConfigReg } from '../types/config'
 
 export default function WeatherConfig() {
   const { data: status } = useApi<WeatherStatus>('/api/weather/status', 5000)
@@ -113,24 +60,24 @@ export default function WeatherConfig() {
       {status && (
         <div className={`rounded-lg border p-4 mb-6 ${
           status.severe
-            ? 'bg-red-900/30 border-red-700'
+            ? 'bg-status-red border-red-600/30'
             : status.enabled
-              ? 'bg-green-900/30 border-green-700'
+              ? 'bg-status-green border-green-600/30'
               : 'bg-panel border-edge'
         }`}>
           <div className="flex items-center gap-3">
             <span className={`w-3 h-3 rounded-full ${
-              status.severe ? 'bg-red-400' : status.enabled ? 'bg-green-400' : 'bg-faint'
+              status.severe ? 'bg-red-500' : status.enabled ? 'bg-green-500' : 'bg-faint'
             }`} />
             <span className="text-sm font-medium">
               {status.severe ? 'Severe Weather Active' : status.enabled ? 'Monitoring — All Clear' : 'Disabled'}
             </span>
             {status.severe && status.simulated && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-800 text-yellow-300">SIMULATED</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-yellow text-yellow-600">SIMULATED</span>
             )}
           </div>
           {status.severe && status.reasons && (
-            <p className="text-sm text-red-300 mt-2">{status.reasons}</p>
+            <p className="text-sm text-red-600 mt-2">{status.reasons}</p>
           )}
         </div>
       )}
@@ -183,89 +130,85 @@ export default function WeatherConfig() {
 
       {/* Simulate modal */}
       {showSimModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowSimModal(false)}>
-          <div className="bg-panel border border-edge rounded-lg p-6 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-2">Simulate Severe Weather</h3>
-            <p className="text-sm text-muted mb-4">
-              Injects a weather event into the next poll cycle. The full severe weather flow will trigger including parameter override.
-            </p>
-            <div className="mb-4">
-              <label className="text-xs text-muted">Reason</label>
-              <input type="text" value={simReason} onChange={(e) => setSimReason(e.target.value)}
-                className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1" />
-            </div>
-            <div className="flex gap-3">
-              <button disabled={simulating}
-                onClick={async () => {
-                  setSimulating(true)
-                  try {
-                    await apiPost('/api/weather/simulate', { action: 'severe', reason: simReason })
-                    setToast('Severe weather event injected — will trigger on next poll cycle')
-                    setTimeout(() => setToast(''), 4000)
-                  } catch { /* ignore */ }
-                  setSimulating(false)
-                  setShowSimModal(false)
-                }}
-                className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded text-sm disabled:opacity-50">
-                {simulating ? 'Injecting...' : 'Trigger Severe'}
-              </button>
-              <button onClick={() => setShowSimModal(false)}
-                className="px-4 py-2 bg-field hover:bg-field-hover border border-edge-strong rounded text-sm">
-                Cancel
-              </button>
-            </div>
+        <Modal onClose={() => setShowSimModal(false)}>
+          <h3 className="text-lg font-semibold mb-2">Simulate Severe Weather</h3>
+          <p className="text-sm text-muted mb-4">
+            Injects a weather event into the next poll cycle. The full severe weather flow will trigger including parameter override.
+          </p>
+          <div className="mb-4">
+            <label className="text-xs text-muted">Reason</label>
+            <input type="text" value={simReason} onChange={(e) => setSimReason(e.target.value)}
+              className="block w-full bg-field border border-edge-strong rounded px-3 py-2 text-sm mt-1" />
           </div>
-        </div>
+          <div className="flex gap-3">
+            <button disabled={simulating}
+              onClick={async () => {
+                setSimulating(true)
+                try {
+                  await apiPost('/api/weather/simulate', { action: 'severe', reason: simReason })
+                  setToast('Severe weather event injected — will trigger on next poll cycle')
+                  setTimeout(() => setToast(''), 4000)
+                } catch { /* ignore */ }
+                setSimulating(false)
+                setShowSimModal(false)
+              }}
+              className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded text-sm disabled:opacity-50">
+              {simulating ? 'Injecting...' : 'Trigger Severe'}
+            </button>
+            <button onClick={() => setShowSimModal(false)}
+              className="px-4 py-2 bg-field hover:bg-field-hover border border-edge-strong rounded text-sm">
+              Cancel
+            </button>
+          </div>
+        </Modal>
       )}
 
       {/* Weather report modal */}
       {showReportModal && report && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-auto" onClick={() => setShowReportModal(false)}>
-          <div className="bg-panel border border-edge rounded-lg p-6 w-full max-w-2xl my-8 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">NWS Weather Report</h3>
-              <button onClick={() => setShowReportModal(false)} className="text-muted hover:text-primary text-sm">Close</button>
-            </div>
-
-            {/* Active Alerts */}
-            <h4 className="text-xs font-medium text-muted uppercase tracking-wider mb-2">Active Alerts</h4>
-            {report.alerts.length === 0 ? (
-              <p className="text-sm text-muted mb-4">No active alerts for configured zones.</p>
-            ) : (
-              <div className="space-y-2 mb-4">
-                {report.alerts.map((a, i) => (
-                  <div key={i} className={`rounded border p-3 ${a.matched ? 'border-red-700 bg-red-900/20' : 'border-edge bg-field'}`}>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{a.event}</span>
-                      {a.matched && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-800 text-red-300">MATCHED</span>}
-                      <span className="text-[10px] text-faint ml-auto">{a.severity} / {a.urgency}</span>
-                    </div>
-                    {a.headline && <p className="text-xs text-muted mt-1">{a.headline}</p>}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Forecast */}
-            <h4 className="text-xs font-medium text-muted uppercase tracking-wider mb-2">Hourly Forecast</h4>
-            {report.forecast.length === 0 ? (
-              <p className="text-sm text-muted">No forecast data available.</p>
-            ) : (
-              <div className="space-y-2">
-                {report.forecast.map((p, i) => (
-                  <div key={i} className="rounded border border-edge bg-field p-3">
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium w-28 shrink-0">{p.name}</span>
-                      <span className="text-sm">{p.temperature}°F</span>
-                      <span className="text-xs text-muted">{p.wind} {p.wind_direction}</span>
-                      <span className="text-xs text-muted ml-auto">{p.short_forecast}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+        <WideModal onClose={() => setShowReportModal(false)}>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">NWS Weather Report</h3>
+            <button onClick={() => setShowReportModal(false)} className="text-muted hover:text-primary text-sm">Close</button>
           </div>
-        </div>
+
+          {/* Active Alerts */}
+          <h4 className="text-xs font-medium text-muted uppercase tracking-wider mb-2">Active Alerts</h4>
+          {report.alerts.length === 0 ? (
+            <p className="text-sm text-muted mb-4">No active alerts for configured zones.</p>
+          ) : (
+            <div className="space-y-2 mb-4">
+              {report.alerts.map((a, i) => (
+                <div key={i} className={`rounded border p-3 ${a.matched ? 'border-red-600/30 bg-status-red' : 'border-edge bg-field'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{a.event}</span>
+                    {a.matched && <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-red text-red-600 border border-red-600/30">MATCHED</span>}
+                    <span className="text-[10px] text-faint ml-auto">{a.severity} / {a.urgency}</span>
+                  </div>
+                  {a.headline && <p className="text-xs text-muted mt-1">{a.headline}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Forecast */}
+          <h4 className="text-xs font-medium text-muted uppercase tracking-wider mb-2">Hourly Forecast</h4>
+          {report.forecast.length === 0 ? (
+            <p className="text-sm text-muted">No forecast data available.</p>
+          ) : (
+            <div className="space-y-2">
+              {report.forecast.map((p, i) => (
+                <div key={i} className="rounded border border-edge bg-field p-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium w-28 shrink-0">{p.name}</span>
+                    <span className="text-sm">{p.temperature}°F</span>
+                    <span className="text-xs text-muted">{p.wind} {p.wind_direction}</span>
+                    <span className="text-xs text-muted ml-auto">{p.short_forecast}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </WideModal>
       )}
 
       {form && (
@@ -409,14 +352,3 @@ export default function WeatherConfig() {
   )
 }
 
-function Field({ label, value, onChange, type = 'text' }: {
-  label: string; value: string; onChange: (v: string) => void; type?: string
-}) {
-  return (
-    <div>
-      <label className="text-xs text-muted">{label}</label>
-      <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
-        className="block w-full bg-field border border-edge-strong rounded px-3 py-1.5 text-sm" />
-    </div>
-  )
-}

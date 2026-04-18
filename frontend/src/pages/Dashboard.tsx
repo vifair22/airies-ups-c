@@ -1,64 +1,8 @@
 import { useApi } from '../hooks/useApi'
 import { PowerFlowSRT, PowerFlowStandby } from '../components/PowerFlow'
-
-/* ── Types ── */
-
-interface UpsStatus {
-  driver: string
-  topology?: string
-  connected: boolean
-  message?: string
-  inventory?: {
-    model: string
-    serial: string
-    firmware: string
-    nominal_va: number
-    nominal_watts: number
-    sog_config: number
-    freq_tolerance: number
-  }
-  status?: { raw: number; text: string }
-  battery?: { charge_pct: number; voltage: number; runtime_sec: number }
-  output?: {
-    voltage: number; frequency: number; current: number
-    load_pct: number; energy_wh: number
-  }
-  outlets?: { mog: number; sog0: number; sog1: number }
-  bypass?: { voltage: number; frequency: number; status: number }
-  input?: { voltage: number; status: number; transfer_high?: number; transfer_low?: number; warn_offset?: number }
-  errors?: {
-    general: number; power_system: number; battery_system: number
-    general_detail: string[]; power_system_detail: string[]; battery_system_detail: string[]
-  }
-  timers?: { shutdown: number; start: number; reboot: number }
-  efficiency?: number
-  transfer_reason?: string
-  bat_test_status?: number
-  rt_cal_status?: number
-  bat_lifetime_status?: number
-  capabilities?: string[]
-  he_mode?: { inhibited: boolean; source: string }
-}
-
-/* ── Status bit constants (mirrors ups.h) ── */
-
-const ST = {
-  ONLINE:         1 << 1,
-  ON_BATTERY:     1 << 2,
-  BYPASS:         1 << 3,
-  OUTPUT_OFF:     1 << 4,
-  FAULT:          1 << 5,
-  INPUT_BAD:      1 << 6,
-  TEST:           1 << 7,
-  PENDING_ON:     1 << 8,
-  SHUT_PENDING:   1 << 9,
-  COMMANDED:      1 << 10,
-  HE_MODE:        1 << 13,
-  FAULT_STATE:    1 << 15,
-  MAINS_BAD:      1 << 19,
-  FAULT_RECOVERY: 1 << 20,
-  OVERLOAD:       1 << 21,
-} as const
+import type { UpsStatus } from '../types/ups'
+import { ST } from '../types/ups'
+import { fmtRuntime, fmtWatts, fmtVA, humanizeTransfer } from '../utils/format'
 
 /* ── Topology helpers ── */
 
@@ -80,24 +24,6 @@ function detectAvr(inputV: number, outputV: number): AvrState {
 /* Does the sog_config bitmask indicate this SOG is present? */
 function hasSog(sogConfig: number, index: 0 | 1): boolean {
   return !!(sogConfig & (1 << (index + 1)))
-}
-
-/* ── Formatting helpers ── */
-
-const fmtRuntime = (sec: number) => {
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
-}
-
-const fmtWatts = (loadPct: number, nominalW: number) => {
-  const w = (loadPct / 100) * nominalW
-  return w >= 1000 ? `${(w / 1000).toFixed(2)} kW` : `${Math.round(w)} W`
-}
-
-const fmtVA = (loadPct: number, nominalVA: number) => {
-  const va = (loadPct / 100) * nominalVA
-  return va >= 1000 ? `${(va / 1000).toFixed(2)} kVA` : `${Math.round(va)} VA`
 }
 
 function outletState(raw: number): { label: string; color: string } {
@@ -355,7 +281,7 @@ export default function Dashboard() {
           </div>
         )}
         {s.he_mode?.inhibited && (
-          <span className="ml-auto px-2.5 py-1 rounded bg-yellow-900/50 border border-yellow-700 text-xs text-yellow-300">
+          <span className="ml-auto px-2.5 py-1 rounded bg-status-yellow border border-yellow-600/30 text-xs text-yellow-600">
             HE inhibited: {s.he_mode.source}
           </span>
         )}
@@ -566,33 +492,6 @@ function StatusDot({ raw, canBypass }: { raw: number; canBypass: boolean }) {
       <span className="text-xl font-semibold text-primary">{label}</span>
     </div>
   )
-}
-
-function humanizeTransfer(reason?: string): string {
-  if (!reason) return '--'
-  const map: Record<string, string> = {
-    SystemInitialization: 'System Init',
-    HighInputVoltage: 'High Voltage',
-    LowInputVoltage: 'Low Voltage',
-    DistortedInput: 'Distorted Input',
-    RapidChangeOfInputVoltage: 'Rapid Voltage Change',
-    HighInputFrequency: 'High Frequency',
-    LowInputFrequency: 'Low Frequency',
-    FreqAndOrPhaseDifference: 'Freq/Phase Delta',
-    AcceptableInput: 'Input Acceptable',
-    AutomaticTest: 'Auto Test',
-    TestEnded: 'Test Ended',
-    LocalUICommand: 'Front Panel',
-    ProtocolCommand: 'Protocol Command',
-    LowBatteryVoltage: 'Low Battery',
-    GeneralError: 'General Error',
-    PowerSystemError: 'Power Error',
-    BatterySystemError: 'Battery Error',
-    ErrorCleared: 'Error Cleared',
-    AutomaticRestart: 'Auto Restart',
-    ConfigurationChange: 'Config Change',
-  }
-  return map[reason] ?? reason
 }
 
 function LoadingPulse() {

@@ -1,12 +1,7 @@
 import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
-
-interface StatusBrief {
-  driver: string
-  connected: boolean
-  name?: string
-}
+import type { UpsStatus } from '../types/ups'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
@@ -41,7 +36,7 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
-  const { data: status } = useApi<StatusBrief>('/api/status', 5000)
+  const { data: status } = useApi<UpsStatus>('/api/status', 5000)
 
   useEffect(() => {
     document.title = status?.name

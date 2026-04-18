@@ -1,26 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useApi } from '../hooks/useApi'
-
-interface TelemetryPoint {
-  timestamp: string
-  charge_pct: number
-  load_pct: number
-  input_voltage: number
-  output_voltage: number
-  battery_voltage: number
-  output_frequency: number
-  output_current: number
-  runtime_sec: number
-  efficiency: number
-}
-
-interface MetricDef {
-  key: keyof TelemetryPoint
-  label: string
-  unit: string
-  color: string
-  format?: (v: number) => string
-}
+import { WideModal } from '../components/Modal'
+import type { TelemetryPoint, MetricDef } from '../types/telemetry'
 
 const metrics: MetricDef[] = [
   { key: 'charge_pct', label: 'Battery Charge', unit: '%', color: '#22c55e' },
@@ -163,27 +144,19 @@ export default function Telemetry() {
       )}
 
       {/* Expanded modal */}
-      {expanded && points.length > 0 && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6"
-          onClick={() => setExpanded(null)}>
-          <div className="bg-panel border border-edge-strong rounded-xl w-full max-w-4xl p-6"
-            onClick={(e) => e.stopPropagation()}>
-            {(() => {
-              const m = metrics.find(m => m.key === expanded)!
-              return (
-                <>
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold">{m.label}</h3>
-                    <button onClick={() => setExpanded(null)}
-                      className="text-muted hover:text-secondary text-xl">&times;</button>
-                  </div>
-                  <Chart metric={m} points={points} windowStartMs={windowStartMs} windowMs={windowMs} expanded />
-                </>
-              )
-            })()}
-          </div>
-        </div>
-      )}
+      {expanded && points.length > 0 && (() => {
+        const m = metrics.find(m => m.key === expanded)!
+        return (
+          <WideModal onClose={() => setExpanded(null)}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">{m.label}</h3>
+              <button onClick={() => setExpanded(null)}
+                className="text-muted hover:text-secondary text-xl">&times;</button>
+            </div>
+            <Chart metric={m} points={points} windowStartMs={windowStartMs} windowMs={windowMs} expanded />
+          </WideModal>
+        )
+      })()}
     </div>
   )
 }

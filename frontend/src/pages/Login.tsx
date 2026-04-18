@@ -1,11 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPostPublic } from '../hooks/useApi'
-
-interface LoginResult {
-  token?: string
-  error?: string
-}
+import type { LoginResult } from '../types/auth'
 
 export default function Login() {
   const [password, setPassword] = useState('')

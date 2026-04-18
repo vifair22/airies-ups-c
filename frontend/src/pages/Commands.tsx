@@ -1,95 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
-
-/* ── Types ── */
-
-interface UpsStatus {
-  connected: boolean
-  status?: { raw: number }
-}
-
-interface CmdDesc {
-  name: string
-  display_name: string
-  description: string
-  group: string
-  confirm_title: string
-  confirm_body: string
-  type: 'simple' | 'toggle'
-  variant: 'default' | 'warn' | 'danger'
-  is_shutdown?: boolean
-  is_mute?: boolean
-  status_bit?: number
-}
-
-interface CmdResult {
-  result?: string
-  error?: string
-}
-
-/* ── Toast system ── */
-
-interface Toast { id: number; message: string; type: 'success' | 'error' }
-let toastId = 0
-
-function useToast() {
-  const [toasts, setToasts] = useState<Toast[]>([])
-  const push = useCallback((message: string, type: 'success' | 'error') => {
-    const id = ++toastId
-    setToasts(prev => [...prev, { id, message, type }])
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
-  }, [])
-  return { toasts, push }
-}
-
-function ToastContainer({ toasts }: { toasts: Toast[] }) {
-  if (toasts.length === 0) return null
-  return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2">
-      {toasts.map(t => (
-        <div key={t.id} className={`px-4 py-2.5 rounded-lg border text-sm shadow-lg ${
-          t.type === 'error'
-            ? 'bg-red-600 border-red-700 text-white'
-            : 'bg-green-600 border-green-700 text-white'
-        }`}>
-          {t.message}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/* ── Shared UI ── */
-
-function ConfirmModal({ title, body, confirmLabel, confirmVariant = 'default', onConfirm, onCancel, loading }: {
-  title: string; body: string; confirmLabel: string
-  confirmVariant?: 'default' | 'warn' | 'danger'
-  onConfirm: () => void; onCancel: () => void; loading?: boolean
-}) {
-  const confirmBg = confirmVariant === 'danger'
-    ? 'bg-red-700 hover:bg-red-600 text-white border-red-800'
-    : confirmVariant === 'warn'
-      ? 'bg-yellow-600 hover:bg-yellow-700 text-white border-yellow-700'
-      : 'bg-field hover:bg-field-hover border-edge-strong'
-  const borderColor = confirmVariant === 'danger' ? 'border-red-800' : 'border-edge-strong'
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onCancel}>
-      <div className={`bg-panel border ${borderColor} rounded-lg p-6 max-w-md mx-4 shadow-xl`} onClick={e => e.stopPropagation()}>
-        <h3 className={`text-lg font-semibold mb-2 ${confirmVariant === 'danger' ? 'text-red-400' : 'text-primary'}`}>{title}</h3>
-        <p className="text-sm text-muted mb-4">{body}</p>
-        <div className="flex justify-end gap-3">
-          <button onClick={onCancel}
-            className="px-4 py-2 rounded text-sm border border-edge-strong bg-field hover:bg-field-hover transition-colors">Cancel</button>
-          <button onClick={onConfirm} disabled={loading}
-            className={`px-4 py-2 rounded text-sm border transition-colors disabled:opacity-50 ${confirmBg}`}>
-            {loading ? '...' : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
+import { ConfirmModal } from '../components/Modal'
+import { useToast, ToastContainer } from '../components/Toast'
+import type { UpsStatus } from '../types/ups'
+import type { CmdDesc, CmdResult } from '../types/commands'
 
 /* ── Simple command button ── */
 

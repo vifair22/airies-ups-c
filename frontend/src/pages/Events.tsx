@@ -1,13 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useApi } from '../hooks/useApi'
-
-interface Event {
-  timestamp: string
-  severity: string
-  category: string
-  title: string
-  message: string
-}
+import type { Event } from '../types/events'
 
 const severityStyle: Record<string, { dot: string; bg: string }> = {
   info:     { dot: 'bg-blue-400',   bg: 'bg-blue-500/15 text-blue-700' },

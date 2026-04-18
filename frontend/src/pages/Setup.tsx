@@ -1,27 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPostPublic } from '../hooks/useApi'
-
-interface TestResult {
-  result?: string
-  error?: string
-  driver?: string
-  topology?: string
-  inventory?: {
-    model: string
-    serial: string
-    firmware: string
-    nominal_va: number
-    nominal_watts: number
-  }
-}
-
-interface SetupStatus {
-  needs_setup: boolean
-  password_set: boolean
-  ups_configured: boolean
-  ups_connected: boolean
-}
+import type { TestResult, SetupStatus } from '../types/auth'
 
 type Step = 'password' | 'login' | 'connection' | 'notifications' | 'done'
 

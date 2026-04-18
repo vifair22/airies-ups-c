@@ -2,14 +2,7 @@ import { useState } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
 import { useTheme } from '../hooks/useTheme'
 import type { ThemeMode } from '../hooks/useTheme'
-
-interface ConfigEntry {
-  key: string
-  value: string
-  type: string
-  default_value: string
-  description: string
-}
+import type { ConfigEntry } from '../types/config'
 
 export default function AppConfig() {
   const { data: config, error, loading, refetch } = useApi<ConfigEntry[]>('/api/config/app')

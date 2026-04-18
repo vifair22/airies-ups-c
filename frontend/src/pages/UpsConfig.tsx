@@ -1,22 +1,6 @@
 import { useState } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
-
-interface ConfigReg {
-  name: string
-  display_name: string
-  unit?: string
-  group?: string
-  type: string
-  raw_value: number
-  value: number
-  writable: boolean
-  setting?: string
-  setting_label?: string
-  date?: string
-  min?: number
-  max?: number
-  options?: { value: number; name: string; label: string }[]
-}
+import type { ConfigReg } from '../types/config'
 
 export default function UpsConfig() {
   const { data: regs, error, loading, refetch } = useApi<ConfigReg[]>('/api/config/ups')

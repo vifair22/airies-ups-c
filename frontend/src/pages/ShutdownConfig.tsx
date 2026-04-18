@@ -1,50 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApi, apiPost, apiPut, apiDelete } from '../hooks/useApi'
-
-interface ShutdownGroup {
-  id: number
-  name: string
-  execution_order: number
-  parallel: boolean
-  max_timeout_sec: number
-  post_group_delay: number
-}
-
-interface ShutdownTarget {
-  id: number
-  name: string
-  method: string
-  host: string
-  username: string
-  credential?: string
-  command: string
-  timeout_sec: number
-  order_in_group: number
-  group: string
-  group_id: number
-  confirm_method: string
-  confirm_port: number
-  confirm_command: string
-  post_confirm_delay: number
-}
-
-interface ShutdownTrigger {
-  mode: string       /* software, ups, manual */
-  source: string     /* runtime, field (only for software mode) */
-  runtime_sec: number
-  battery_pct: number
-  on_battery: boolean
-  delay_sec: number
-  field: string
-  field_op: string
-  field_value: number
-}
-
-interface ShutdownSettings {
-  trigger: ShutdownTrigger
-  ups_action: { mode: string; register: string; value: number; delay: number }
-  controller: { enabled: boolean }
-}
+import { Field } from '../components/Field'
+import type { ShutdownGroup, ShutdownTarget, ShutdownTrigger, ShutdownSettings } from '../types/shutdown'
 
 const EMPTY_TARGET = {
   group_id: 0, name: '', method: 'ssh_key', host: '', username: 'root',
@@ -358,21 +315,6 @@ export default function ShutdownConfig() {
           Save Settings
         </button>
       )}
-    </div>
-  )
-}
-
-/* --- Reusable field component --- */
-
-function Field({ label, value, onChange, type = 'text', width = 'w-40' }: {
-  label: string; value: string; onChange: (v: string) => void
-  type?: string; width?: string
-}) {
-  return (
-    <div>
-      <label className="text-xs text-muted">{label}</label>
-      <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
-        className={`block bg-field border border-edge-strong rounded px-2 py-1 text-sm mt-0.5 ${width}`} />
     </div>
   )
 }

@@ -17,16 +17,8 @@
  *       └────────────── Static Bypass ──────────────────────────────►┘
  */
 
-const ST = {
-  ONLINE:       1 << 1,
-  ON_BATTERY:   1 << 2,
-  BYPASS:       1 << 3,
-  OUTPUT_OFF:   1 << 4,
-  FAULT:        1 << 5,
-  COMMANDED:    1 << 10,
-  HE_MODE:      1 << 13,
-  FAULT_STATE:  1 << 15,
-} as const
+import { ST } from '../types/ups'
+import type { PowerFlowProps } from '../types/ups'
 
 /* ── Color palette ── */
 
@@ -163,18 +155,6 @@ function ArrowDefs() {
 }
 
 /* ── SRT Double Conversion Diagram ── */
-
-interface PowerFlowProps {
-  statusRaw: number
-  inputVoltage: number
-  outputVoltage: number
-  batteryCharge: number
-  batteryVoltage: number
-  batteryError: number
-  loadPct: number
-  efficiency: number
-  outputFrequency: number
-}
 
 export function PowerFlowSRT({
   statusRaw: raw, inputVoltage, outputVoltage,
