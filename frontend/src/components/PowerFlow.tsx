@@ -159,7 +159,7 @@ function ArrowDefs() {
 export function PowerFlowSRT({
   statusRaw: raw, inputVoltage, outputVoltage,
   batteryCharge, batteryVoltage, batteryError,
-  loadPct, efficiency, outputFrequency,
+  loadPct, outputFrequency,
 }: PowerFlowProps) {
   const C = useThemeColors()
 
@@ -178,7 +178,7 @@ export function PowerFlowSRT({
   const dcBusActive = rectifierActive || isOnBattery
   const inverterActive = dcBusActive && !isOff
   const inverterTracking = isHE && !isOff
-  const bypassActive = isBypass || isHE
+  const bypassActive = (isBypass || isHE) && !isOff
   const batteryCharging = inputActive && !isOnBattery && !batFault && batteryCharge < 100
   const batteryDischarging = isOnBattery && !batFault
 
@@ -266,12 +266,13 @@ export function PowerFlowSRT({
 
         {/* Bypass label */}
         <text
-          x={W / 2} y={bypassY - 3}
+          x={(iC.cx + oC.cx) / 2} y={bypassY - 3}
           textAnchor="middle"
           fill={bypassActive ? bypassColor : C.textDim}
           fontSize="8"
           fontWeight="500"
           opacity={0.8}
+          dx="-20"
         >
           STATIC BYPASS
         </text>
@@ -299,15 +300,31 @@ export function PowerFlowSRT({
           color={inverterTracking ? C.heStandby : undefined}
         />
 
-        {/* HE mode: dotted line from inverter to output — tracking but not delivering */}
+        {/* HE mode: dotted lines across the conversion chain — tracking but not delivering.
+         * Skip segments that have active charging flow lines to avoid visual overlap. */}
         {inverterTracking && (
-          <line
-            x1={nC.r} y1={nC.cy} x2={oC.l} y2={oC.cy}
-            stroke={C.heStandby}
-            strokeWidth="1.5"
-            strokeDasharray="3 4"
-            opacity="0.6"
-          />
+          <>
+            {!batteryCharging && (
+              <>
+                <line
+                  x1={iC.r} y1={iC.cy} x2={rC.l} y2={rC.cy}
+                  stroke={C.heStandby} strokeWidth="1.5" strokeDasharray="3 4" opacity="0.6"
+                />
+                <line
+                  x1={rC.r} y1={rC.cy} x2={dC.l} y2={dC.cy}
+                  stroke={C.heStandby} strokeWidth="1.5" strokeDasharray="3 4" opacity="0.6"
+                />
+              </>
+            )}
+            <line
+              x1={dC.r} y1={dC.cy} x2={nC.l} y2={nC.cy}
+              stroke={C.heStandby} strokeWidth="1.5" strokeDasharray="3 4" opacity="0.6"
+            />
+            <line
+              x1={nC.r} y1={nC.cy} x2={oC.l} y2={oC.cy}
+              stroke={C.heStandby} strokeWidth="1.5" strokeDasharray="3 4" opacity="0.6"
+            />
+          </>
         )}
 
         <StageBlock {...output} w={bw} h={bh} label="OUTPUT"
@@ -320,23 +337,252 @@ export function PowerFlowSRT({
           value={batFault ? 'Missing' : `${fmtPct(batteryCharge)}%`}
           borderColor={batBorder}
           color={batFault ? C.fault :
-                 batteryDischarging ? C.battery :
                  batteryCharge < 30 ? C.fault :
+                 batteryDischarging ? C.battery :
                  batteryCharge < 60 ? C.bypass :
                  C.active}
         />
 
-        {/* Efficiency badge (when available) */}
-        {efficiency >= 0 && (
+        {/* Load badge below output */}
+        <text
+          x={oC.cx} y={output.y + bh + 14}
+          textAnchor="middle"
+          fill={loadPct > 80 ? C.fault : loadPct > 60 ? C.bypass : C.textDim}
+          fontSize="8"
+        >
+          {fmtPct(loadPct)}% load
+        </text>
+
+        {/* Battery voltage below battery block */}
+        {!batFault && (
           <text
-            x={(dC.r + nC.l) / 2} y={dC.t - 6}
+            x={bC.cx} y={battery.y + bh + 14}
             textAnchor="middle"
             fill={C.textDim}
             fontSize="8"
           >
-            {(efficiency * 100 / 128).toFixed(0)}% eff
+            {fmtV(batteryVoltage)} VDC
           </text>
         )}
+
+      </svg>
+    </div>
+  )
+}
+
+/* ── Line-Interactive Diagram ──
+ *
+ *            ── HE Bypass ──
+ *           │               │
+ *   ┌───────┐    ┌─────┐    ┌──────────┐    ┌────────┐
+ *   │ Input │───►│ AVR │───►│ Transfer │───►│ Output │
+ *   └───────┘    └─────┘    └────┬─────┘    └────────┘
+ *                                │
+ *                           ┌────▼────┐
+ *                           │Inverter │
+ *                           └────┬────┘
+ *                                │
+ *                           ┌────▼────┐
+ *                           │ Battery │
+ *                           └─────────┘
+ *
+ * Normal: input → AVR → transfer switch → output.
+ *         Inverter charges battery from AC line.
+ * On battery: transfer switch flips, inverter feeds load from battery.
+ * HE mode: bypass arc skips AVR, input → transfer switch directly.
+ * AVR states: Normal (passthrough), Boost (step up), Trim (step down).
+ */
+
+export function PowerFlowLineInteractive({
+  statusRaw: raw, inputVoltage, outputVoltage,
+  batteryCharge, batteryVoltage, batteryError,
+  loadPct, outputFrequency,
+}: PowerFlowProps) {
+  const C = useThemeColors()
+
+  const isOnline = !!(raw & ST.ONLINE)
+  const isOnBattery = !!(raw & ST.ON_BATTERY)
+  const isHE = !!(raw & ST.HE_MODE)
+  const isFault = !!(raw & (ST.FAULT | ST.FAULT_STATE))
+  const isOff = !!(raw & ST.OUTPUT_OFF)
+  const isBoost = !!(raw & ST.AVR_BOOST)
+  const isTrim = !!(raw & ST.AVR_TRIM)
+
+  const batFault = batteryError !== 0
+
+  /* Path states */
+  const utilityPath = isOnline && !isOnBattery && !isOff
+  const batteryPath = isOnBattery && !isOff
+  const avrActive = utilityPath && !isHE
+  const avrCorrecting = avrActive && (isBoost || isTrim)
+  const avrTracking = isHE && isOnline
+  const heBypass = isHE && !isOnBattery
+  const batteryCharging = isOnline && !isOnBattery && !batFault && batteryCharge < 100
+  const batteryDischarging = isOnBattery && !batFault
+  const inverterCharging = batteryCharging
+  const inverterInverting = batteryPath
+
+  /* Colors */
+  const mainColor = isFault ? C.fault : C.active
+  const avrColor = isFault ? C.fault : avrCorrecting ? C.battery : C.active
+  const heColor = isFault ? C.fault : C.he
+  const batColor = isOnBattery ? C.battery : C.active
+
+  /* Block borders */
+  const inputBorder = isOnline ? mainColor : isFault ? C.fault : C.inactive
+  const avrBorder = avrActive ? avrColor : avrTracking ? C.heStandby : C.inactive
+  const switchBorder = (utilityPath || batteryPath) ? mainColor : C.inactive
+  const outBorder = (utilityPath || batteryPath) && !isOff ? mainColor : isOff ? C.dead : C.inactive
+  const invBorder = (inverterCharging || inverterInverting) ? batColor : C.inactive
+  const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
+
+  /* Layout */
+  const W = 560, H = 260
+  const bw = 80, bh = 44
+  const heBypassY = 14
+
+  /* Block positions */
+  const input    = { x: 10,  y: 60 }
+  const avr      = { x: 140, y: 60 }
+  const xswitch  = { x: 270, y: 60 }
+  const output   = { x: 470, y: 60 }
+  const inverter = { x: 270, y: 140 }
+  const battery  = { x: 270, y: 210 }
+
+  const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
+  const iC = cx(input), aC = cx(avr), sC = cx(xswitch), oC = cx(output), nC = cx(inverter), bC = cx(battery)
+
+  const fmtV = (v: number) => v > 0 ? v.toFixed(1) : '--'
+  const fmtPct = (v: number) => v >= 0 ? v.toFixed(0) : '--'
+
+  /* AVR display value */
+  const avrValue = avrTracking ? 'Tracking' : isBoost ? 'Boost' : isTrim ? 'Trim' : avrActive ? 'Normal' : undefined
+
+  return (
+    <div className="rounded-lg bg-panel border border-edge p-4">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '270px' }}>
+        <ArrowDefs />
+
+        {/* ── Flow lines ── */}
+
+        {/* Input → AVR */}
+        <FlowLine
+          points={`${iC.r},${iC.cy} ${aC.l},${aC.cy}`}
+          color={avrColor} active={avrActive}
+        />
+
+        {/* AVR → Transfer Switch */}
+        <FlowLine
+          points={`${aC.r},${aC.cy} ${sC.l},${sC.cy}`}
+          color={mainColor} active={avrActive}
+        />
+
+        {/* HE bypass: Input → Transfer Switch (arc over AVR) */}
+        <FlowLine
+          points={`${iC.cx},${iC.t} ${iC.cx},${heBypassY} ${sC.cx},${heBypassY} ${sC.cx},${sC.t}`}
+          color={heColor}
+          active={heBypass}
+        />
+
+        {/* HE bypass label */}
+        <text
+          x={(iC.cx + sC.cx) / 2} y={heBypassY - 3}
+          textAnchor="middle"
+          fill={heBypass ? heColor : C.textDim}
+          fontSize="8"
+          fontWeight="500"
+          opacity={0.8}
+          dx="-10"
+        >
+          HE BYPASS
+        </text>
+
+        {/* AVR tracking dotted line (HE mode) */}
+        {avrTracking && (
+          <>
+            <line
+              x1={iC.r} y1={iC.cy} x2={aC.l} y2={aC.cy}
+              stroke={C.heStandby}
+              strokeWidth="1.5"
+              strokeDasharray="3 4"
+              opacity="0.6"
+            />
+            <line
+              x1={aC.r} y1={aC.cy} x2={sC.l} y2={sC.cy}
+              stroke={C.heStandby}
+              strokeWidth="1.5"
+              strokeDasharray="3 4"
+              opacity="0.6"
+            />
+          </>
+        )}
+
+        {/* Transfer Switch → Output */}
+        <FlowLine
+          points={`${sC.r},${sC.cy} ${oC.l},${oC.cy}`}
+          color={batteryPath ? batColor : mainColor}
+          active={utilityPath || batteryPath}
+        />
+
+        {/* Transfer Switch ↔ Inverter */}
+        <FlowLine
+          points={`${sC.cx},${sC.b} ${nC.cx},${nC.t}`}
+          color={batColor}
+          active={inverterCharging || inverterInverting}
+          reverse={inverterInverting}
+          slow={inverterCharging}
+        />
+
+        {/* Inverter ↔ Battery */}
+        <FlowLine
+          points={`${nC.cx},${nC.b} ${bC.cx},${bC.t}`}
+          color={batColor}
+          active={batteryCharging || batteryDischarging}
+          reverse={batteryDischarging}
+          slow={batteryCharging}
+        />
+
+        {/* ── Stage blocks ── */}
+
+        <StageBlock {...input} w={bw} h={bh} label="INPUT"
+          value={fmtV(inputVoltage)} unit="VAC"
+          borderColor={inputBorder}
+          color={isOnline ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...avr} w={bw} h={bh} label="AVR"
+          value={avrValue}
+          borderColor={avrBorder}
+          color={avrTracking ? C.heStandby : avrCorrecting ? C.battery : undefined}
+        />
+
+        <StageBlock {...xswitch} w={bw} h={bh} label="TRANSFER"
+          value={isOnBattery ? 'Battery' : 'Utility'}
+          borderColor={switchBorder}
+          color={isOnBattery ? C.battery : utilityPath ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...output} w={bw} h={bh} label="OUTPUT"
+          value={fmtV(outputVoltage)} unit="VAC"
+          borderColor={outBorder}
+          color={(utilityPath || batteryPath) && !isOff ? C.textBright : C.textDim}
+        />
+
+        <StageBlock {...inverter} w={bw} h={bh} label="INVERTER"
+          value={inverterInverting ? 'On' : inverterCharging ? 'Charging' : undefined}
+          borderColor={invBorder}
+          color={inverterInverting ? C.battery : undefined}
+        />
+
+        <StageBlock {...battery} w={bw} h={bh} label="BATTERY"
+          value={batFault ? 'Missing' : `${fmtPct(batteryCharge)}%`}
+          borderColor={batBorder}
+          color={batFault ? C.fault :
+                 batteryCharge < 30 ? C.fault :
+                 batteryDischarging ? C.battery :
+                 batteryCharge < 60 ? C.bypass :
+                 C.active}
+        />
 
         {/* Load badge below output */}
         <text
@@ -367,14 +613,20 @@ export function PowerFlowSRT({
 
 /* ── Standby / Offline Diagram ──
  *
- *   ┌───────┐                          ┌────────┐
- *   │ Input │─── Transfer Switch ─────►│ Output │
- *   └───────┘         │                └────────┘
+ *   ┌───────┐    ┌──────────┐    ┌────────┐
+ *   │ Input │───►│ Transfer │───►│ Output │
+ *   └───────┘    └────┬─────┘    └────────┘
+ *                     │
+ *                ┌────▼────┐
+ *                │Inverter │
+ *                └────┬────┘
+ *                     │
  *                ┌────▼────┐
  *                │ Battery │
  *                └─────────┘
  *
  * On utility: input passes straight through to output.
+ *             Inverter charges battery from AC line.
  * On battery: transfer switch flips, battery → inverter → output.
  */
 
@@ -395,6 +647,9 @@ export function PowerFlowStandby({
   const utilityPath = isOnline && !isOnBattery && !isOff
   const batteryPath = isOnBattery && !isOff
   const batteryCharging = isOnline && !isOnBattery && !batFault && batteryCharge < 100
+  const batteryDischarging = isOnBattery && !batFault
+  const inverterCharging = batteryCharging
+  const inverterInverting = batteryPath
 
   /* Colors */
   const mainColor = isFault ? C.fault : C.active
@@ -404,26 +659,28 @@ export function PowerFlowStandby({
   const inputBorder = isOnline ? mainColor : isFault ? C.fault : C.inactive
   const outBorder = (utilityPath || batteryPath) ? mainColor : isOff ? C.dead : C.inactive
   const switchBorder = (utilityPath || batteryPath) ? mainColor : C.inactive
-  const batBorder = batFault ? C.fault : (batteryPath || batteryCharging) ? batColor : C.inactive
+  const invBorder = (inverterCharging || inverterInverting) ? batColor : C.inactive
+  const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
 
   /* Layout */
-  const W = 460, H = 170
+  const W = 460, H = 220
   const bw = 80, bh = 44
 
   const input    = { x: 10,  y: 20 }
   const xswitch  = { x: 190, y: 20 }
   const output   = { x: 370, y: 20 }
-  const battery  = { x: 190, y: 110 }
+  const inverter = { x: 190, y: 100 }
+  const battery  = { x: 190, y: 170 }
 
   const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
-  const iC = cx(input), sC = cx(xswitch), oC = cx(output), bC = cx(battery)
+  const iC = cx(input), sC = cx(xswitch), oC = cx(output), nC = cx(inverter), bC = cx(battery)
 
   const fmtV = (v: number) => v > 0 ? v.toFixed(1) : '--'
   const fmtPct = (v: number) => v >= 0 ? v.toFixed(0) : '--'
 
   return (
     <div className="rounded-lg bg-panel border border-edge p-4">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '190px' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '230px' }}>
 
         {/* Input → Transfer Switch */}
         <FlowLine
@@ -438,12 +695,21 @@ export function PowerFlowStandby({
           active={utilityPath || batteryPath}
         />
 
-        {/* Transfer Switch ↔ Battery */}
+        {/* Transfer Switch ↔ Inverter */}
         <FlowLine
-          points={`${sC.cx},${sC.b} ${bC.cx},${bC.t}`}
+          points={`${sC.cx},${sC.b} ${nC.cx},${nC.t}`}
           color={batColor}
-          active={batteryPath || batteryCharging}
-          reverse={batteryPath}
+          active={inverterCharging || inverterInverting}
+          reverse={inverterInverting}
+          slow={inverterCharging}
+        />
+
+        {/* Inverter ↔ Battery */}
+        <FlowLine
+          points={`${nC.cx},${nC.b} ${bC.cx},${bC.t}`}
+          color={batColor}
+          active={batteryCharging || batteryDischarging}
+          reverse={batteryDischarging}
           slow={batteryCharging}
         />
 
@@ -466,12 +732,18 @@ export function PowerFlowStandby({
           color={(utilityPath || batteryPath) ? C.textBright : C.textDim}
         />
 
+        <StageBlock {...inverter} w={bw} h={bh} label="INVERTER"
+          value={inverterInverting ? 'On' : inverterCharging ? 'Charging' : undefined}
+          borderColor={invBorder}
+          color={inverterInverting ? C.battery : undefined}
+        />
+
         <StageBlock {...battery} w={bw} h={bh} label="BATTERY"
           value={batFault ? 'Missing' : `${fmtPct(batteryCharge)}%`}
           borderColor={batBorder}
           color={batFault ? C.fault :
-                 batteryPath ? C.battery :
                  batteryCharge < 30 ? C.fault :
+                 batteryDischarging ? C.battery :
                  batteryCharge < 60 ? C.bypass :
                  C.active}
         />

@@ -3,7 +3,7 @@
  * Only accessible in dev mode at /dev/powerflow. */
 
 import { useState } from 'react'
-import { PowerFlowSRT, PowerFlowStandby } from '../components/PowerFlow'
+import { PowerFlowSRT, PowerFlowLineInteractive, PowerFlowStandby } from '../components/PowerFlow'
 import { ST } from '../types/ups'
 import type { PowerFlowProps } from '../types/ups'
 
@@ -20,7 +20,9 @@ const STATUS_BITS = [
   { key: 'PENDING_ON',     bit: ST.PENDING_ON,      label: 'Pending On' },
   { key: 'SHUT_PENDING',   bit: ST.SHUT_PENDING,    label: 'Shut Pending' },
   { key: 'COMMANDED',      bit: ST.COMMANDED,       label: 'Commanded' },
-  { key: 'HE_MODE',        bit: ST.HE_MODE,         label: 'HE Mode' },
+  { key: 'HE_MODE',        bit: ST.HE_MODE,         label: 'HE' },
+  { key: 'AVR_BOOST',      bit: ST.AVR_BOOST,       label: 'AVR Boost' },
+  { key: 'AVR_TRIM',       bit: ST.AVR_TRIM,        label: 'AVR Trim' },
   { key: 'FAULT_STATE',    bit: ST.FAULT_STATE,     label: 'Fault State' },
   { key: 'MAINS_BAD',      bit: ST.MAINS_BAD,       label: 'Mains Bad' },
   { key: 'FAULT_RECOVERY', bit: ST.FAULT_RECOVERY,  label: 'Fault Recovery' },
@@ -42,7 +44,9 @@ const PRESETS: Preset[] = [
   { label: 'On Battery (low)', statusRaw: ST.ON_BATTERY, overrides: { inputVoltage: 0, batteryCharge: 18 } },
   { label: 'Bypass (commanded)', statusRaw: ST.ONLINE | ST.BYPASS | ST.COMMANDED },
   { label: 'Bypass (forced)', statusRaw: ST.ONLINE | ST.BYPASS },
-  { label: 'HE Mode', statusRaw: ST.HE_MODE },
+  { label: 'HE Mode', statusRaw: ST.ONLINE | ST.HE_MODE },
+  { label: 'AVR Boost', statusRaw: ST.ONLINE | ST.AVR_BOOST, overrides: { inputVoltage: 104.2 } },
+  { label: 'AVR Trim', statusRaw: ST.ONLINE | ST.AVR_TRIM, overrides: { inputVoltage: 128.5 } },
   { label: 'Fault', statusRaw: ST.ONLINE | ST.FAULT },
   { label: 'Fault + On Battery', statusRaw: ST.ON_BATTERY | ST.FAULT, overrides: { inputVoltage: 0 } },
   { label: 'Output Off', statusRaw: ST.ONLINE | ST.OUTPUT_OFF },
@@ -82,12 +86,14 @@ export default function DevPowerFlow() {
   const [loadPct, setLoadPct] = useState(23)
   const [efficiency, setEfficiency] = useState(120)
   const [outputFrequency, setOutputFrequency] = useState(60.0)
-  const [topology, setTopology] = useState<'srt' | 'standby'>('srt')
+  const [sensitivity, setSensitivity] = useState<'normal' | 'reduced' | 'low'>('normal')
+  const [topology, setTopology] = useState<'srt' | 'line_interactive' | 'standby'>('srt')
 
   const flowProps: PowerFlowProps = {
     statusRaw, inputVoltage, outputVoltage,
     batteryCharge, batteryVoltage, batteryError,
     loadPct, efficiency, outputFrequency,
+    sensitivity,
   }
 
   const toggleBit = (bit: number) => {
@@ -104,6 +110,7 @@ export default function DevPowerFlow() {
     setLoadPct(preset.overrides?.loadPct ?? 23)
     setEfficiency(preset.overrides?.efficiency ?? 120)
     setOutputFrequency(preset.overrides?.outputFrequency ?? 60.0)
+    setSensitivity(preset.overrides?.sensitivity as 'normal' | 'reduced' | 'low' ?? 'normal')
   }
 
   return (
@@ -121,14 +128,16 @@ export default function DevPowerFlow() {
         <div className="rounded-lg border border-edge-strong bg-panel p-2">
           <div className="flex items-center gap-3 px-3 py-2 border-b border-edge mb-2">
             <span className="text-xs text-muted uppercase tracking-wider">Topology</span>
-            {(['srt', 'standby'] as const).map(t => (
+            {(['srt', 'line_interactive', 'standby'] as const).map(t => (
               <button key={t} onClick={() => setTopology(t)}
                 className={`px-3 py-1 text-xs rounded border transition-colors ${
                   topology === t
                     ? 'bg-accent border-accent text-white'
                     : 'bg-field hover:bg-field-hover border-edge-strong'
                 }`}>
-                {t === 'srt' ? 'Double Conversion (SRT)' : 'Standby'}
+                {t === 'srt' ? 'Double Conversion'
+                  : t === 'line_interactive' ? 'Line Interactive'
+                  : 'Standby'}
               </button>
             ))}
             <span className="ml-auto text-[10px] font-mono text-faint">
@@ -136,10 +145,9 @@ export default function DevPowerFlow() {
             </span>
           </div>
 
-          {topology === 'srt'
-            ? <PowerFlowSRT {...flowProps} />
-            : <PowerFlowStandby {...flowProps} />
-          }
+          {topology === 'srt' && <PowerFlowSRT {...flowProps} />}
+          {topology === 'line_interactive' && <PowerFlowLineInteractive {...flowProps} />}
+          {topology === 'standby' && <PowerFlowStandby {...flowProps} />}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -199,6 +207,15 @@ export default function DevPowerFlow() {
                 <option value={1}>Missing (1)</option>
                 <option value={2}>Replace (2)</option>
                 <option value={4}>Calibrating (4)</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-muted w-32 shrink-0">AVR Sensitivity</label>
+              <select value={sensitivity} onChange={e => setSensitivity(e.target.value as 'normal' | 'reduced' | 'low')}
+                className="bg-field border border-edge-strong rounded px-2 py-1 text-xs">
+                <option value="normal">Normal</option>
+                <option value="reduced">Reduced</option>
+                <option value="low">Low</option>
               </select>
             </div>
           </div>
