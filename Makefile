@@ -43,8 +43,12 @@ endif
 
 # ---- Source files ---------------------------------------------------------
 
-UPS_SRCS   = src/ups/ups.c src/ups/ups_srt.c src/ups/ups_smt.c src/ups/ups_backups_hid.c src/ups/hid_parser.c
-API_SRCS   = src/api/server.c src/api/routes.c src/api/auth.c
+UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_srt.c src/ups/ups_smt.c \
+             src/ups/ups_backups_hid.c src/ups/hid_parser.c
+API_SRCS   = src/api/server.c src/api/auth.c \
+             src/api/routes/routes.c src/api/routes/auth.c \
+             src/api/routes/shutdown.c src/api/routes/config.c \
+             src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
              src/monitor/retention.c \
              src/alerts/alerts.c \
@@ -52,12 +56,23 @@ MON_SRCS   = src/monitor/monitor.c \
              src/weather/weather.c
 
 DAEMON_SRCS = src/daemon/main.c $(UPS_SRCS) $(API_SRCS) $(MON_SRCS)
-CLI_SRCS    = src/cli/main.c src/cli/cli.c
+CLI_SRCS    = src/cli/main.c src/cli/cli.c src/cli/commands.c
 ALL_SRCS    = $(DAEMON_SRCS) $(CLI_SRCS)
+
+# ---- Object files ---------------------------------------------------------
+
+OBJ_DIR     = $(BUILD_DIR)/obj
+DAEMON_OBJS = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(DAEMON_SRCS))
+CLI_OBJS    = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
+
+# Pattern rule: src/**/*.c → build/obj/**/*.o (mirrors directory structure)
+$(OBJ_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # ---- Build targets --------------------------------------------------------
 
-.PHONY: all debug asan clean clean-all check analyze lint frontend
+.PHONY: all debug asan clean clean-all check analyze lint frontend test coverage
 
 all:
 	$(MAKE) BUILD_TYPE=release _build
@@ -74,11 +89,11 @@ _build: $(BUILD_DIR)/airies-upsd $(BUILD_DIR)/airies-ups
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/airies-upsd: $(DAEMON_SRCS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $(DAEMON_SRCS) $(LDFLAGS)
+$(BUILD_DIR)/airies-upsd: $(DAEMON_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILD_DIR)/airies-ups: $(CLI_SRCS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $(CLI_SRCS) $(LDFLAGS)
+$(BUILD_DIR)/airies-ups: $(CLI_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 # ---- Static analysis ------------------------------------------------------
 
@@ -122,6 +137,123 @@ lint:
 	@echo "=== clang-tidy ==="
 	@clang-tidy $(ALL_SRCS) -- -std=c11 $(INCLUDES) 2>&1 | \
 	    grep -E "warning:|error:" || echo "clang-tidy: OK"
+
+# ---- Testing --------------------------------------------------------------
+#
+# Test binaries are defined once via the build_test macro.
+# 'make test' compiles with debug flags; 'make coverage' adds --coverage.
+# Each test declares its source files and link libraries.
+
+TEST_CFLAGS := $(COMMON_CFLAGS) -Og -g
+
+# Link library groups
+TEST_COMMON_LIBS := -lcmocka -lpthread
+TEST_FULL_LIBS   := $(TEST_COMMON_LIBS) -L$(CUTILS_DIR) -lc-utils -lsqlite3 -lcurl -lcrypto
+TEST_MATH_LIBS   := $(TEST_COMMON_LIBS) -lm
+
+# Test definitions: name, sources, libraries
+#   $(1) = test name (e.g., test_ups_strings)
+#   $(2) = source files
+#   $(3) = link libraries
+#   $(4) = output directory
+#   $(5) = extra CFLAGS
+define build_test
+$(4)/$(1): $(2) | $(4)
+	$$(CC) $(TEST_CFLAGS) $(5) -o $$@ $$^ $(3)
+endef
+
+TEST_DIR = $(BUILD_DIR)/tests
+COV_DIR  = $(BUILD_DIR)/coverage
+COV_TEST = $(COV_DIR)/tests
+
+$(TEST_DIR) $(COV_TEST):
+	mkdir -p $@
+
+# --- Test definitions (single source of truth) ---
+
+$(eval $(call build_test,test_ups_strings,\
+  tests/test_ups_strings.c src/ups/ups_format.c,\
+  $(TEST_COMMON_LIBS),$(TEST_DIR),))
+
+$(eval $(call build_test,test_hid_parser,\
+  tests/test_hid_parser.c src/ups/hid_parser.c,\
+  $(TEST_MATH_LIBS),$(TEST_DIR),))
+
+$(eval $(call build_test,test_alerts,\
+  tests/test_alerts.c src/alerts/alerts.c src/ups/ups_format.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
+$(eval $(call build_test,test_cli,\
+  tests/test_cli.c src/cli/cli.c,\
+  $(TEST_COMMON_LIBS),$(TEST_DIR),))
+
+$(eval $(call build_test,test_auth,\
+  tests/test_auth.c src/api/auth.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
+$(eval $(call build_test,test_shutdown,\
+  tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
+
+# --- Coverage builds (same definitions, --coverage flag) ---
+
+$(eval $(call build_test,test_ups_strings,\
+  tests/test_ups_strings.c src/ups/ups_format.c,\
+  $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_hid_parser,\
+  tests/test_hid_parser.c src/ups/hid_parser.c,\
+  $(TEST_MATH_LIBS),$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_alerts,\
+  tests/test_alerts.c src/alerts/alerts.c src/ups/ups_format.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_cli,\
+  tests/test_cli.c src/cli/cli.c,\
+  $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_auth,\
+  tests/test_auth.c src/api/auth.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_shutdown,\
+  tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
+
+# --- Test names (used by both targets) ---
+
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown
+
+# --- Run targets ---
+
+define run_tests
+@pass=0; fail=0; \
+for name in $(TEST_NAMES); do \
+    echo "=== $$name ==="; \
+    if $(1)/$$name; then pass=$$((pass + 1)); \
+    else fail=$$((fail + 1)); fi; \
+done; \
+echo ""; \
+echo "$$pass passed, $$fail failed"; \
+[ $$fail -eq 0 ]
+endef
+
+test: $(addprefix $(TEST_DIR)/,$(TEST_NAMES))
+	$(call run_tests,$(TEST_DIR))
+
+coverage: $(addprefix $(COV_TEST)/,$(TEST_NAMES))
+	@for name in $(TEST_NAMES); do \
+	    echo "=== $$name ==="; \
+	    $(COV_TEST)/$$name || exit 1; \
+	done
+	gcovr --root . \
+	    --filter 'src/' \
+	    --exclude 'src/daemon/' \
+	    --html-details $(COV_DIR)/index.html \
+	    --print-summary
+	@echo ""
+	@echo "Coverage report: $(COV_DIR)/index.html"
 
 # ---- Frontend -------------------------------------------------------------
 

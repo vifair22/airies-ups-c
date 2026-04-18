@@ -31,4 +31,13 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx);
  * Call after writing transfer config registers. */
 void api_refresh_thresholds(route_ctx_t *ctx);
 
+/* JSON response helper */
+api_response_t api_ok_msg(const char *msg);
+
+/* --- Sub-module route registration (called from api_register_routes) --- */
+void api_register_auth_routes(api_server_t *srv, route_ctx_t *ctx);
+void api_register_shutdown_routes(api_server_t *srv, route_ctx_t *ctx);
+void api_register_config_routes(api_server_t *srv, route_ctx_t *ctx);
+void api_register_weather_routes(api_server_t *srv, route_ctx_t *ctx);
+
 #endif

@@ -2,6 +2,7 @@
 #define API_AUTH_H
 
 #include <cutils/db.h>
+#include "api/server.h"
 
 /* --- Auth system ---
  *
@@ -30,5 +31,14 @@ int auth_validate_token(cutils_db_t *db, const char *token);
 
 /* Clean up expired sessions. */
 void auth_cleanup_sessions(cutils_db_t *db);
+
+/* Auth middleware for the API server.
+ * Decides whether a request is authorized based on:
+ *   - Unix socket (CLI) → always allowed
+ *   - Public endpoints (auth/setup, auth/login, setup/...) → allowed
+ *   - Setup not complete → allow everything (first-run mode)
+ *   - Otherwise → validate session token
+ * Suitable for use with api_server_set_auth(). userdata = cutils_db_t*. */
+int auth_check(const api_request_t *req, const char *url, void *userdata);
 
 #endif

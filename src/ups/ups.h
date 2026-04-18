@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include "ups_driver.h"
+#include "ups_format.h"
 
 /* UPSStatus_BF (reg 0-1, uint32) — shared across APC Modbus models (990-9840) */
 #define UPS_ST_ONLINE          (1 << 1)
@@ -185,16 +186,5 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
  * Reads back after write for verification.
  * Returns 0 on success, UPS_ERR_NOT_SUPPORTED if not writable. */
 int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value);
-
-/* Human-readable strings (shared across all APC Modbus models) */
-const char *ups_transfer_reason_str(uint16_t reason);
-const char *ups_status_str(uint32_t status, char *buf, size_t len);
-const char *ups_efficiency_str(int16_t raw, char *buf, size_t len);
-
-/* Error bitfield decoders — return number of active errors, write string
- * pointers into the provided array. Caller must not free the strings. */
-int ups_decode_general_errors(uint16_t raw, const char **out, int max);
-int ups_decode_power_errors(uint32_t raw, const char **out, int max);
-int ups_decode_battery_errors(uint16_t raw, const char **out, int max);
 
 #endif

@@ -1,4 +1,4 @@
-#include "app_config.h"
+#include "config/app_config.h"
 
 #include <cutils/log.h>
 #include <cutils/push.h>
@@ -8,7 +8,7 @@
 
 #include "ups/ups.h"
 #include "api/server.h"
-#include "api/routes.h"
+#include "api/routes/routes.h"
 #include "api/auth.h"
 #include "monitor/monitor.h"
 #include "alerts/alerts.h"
@@ -37,30 +37,6 @@ void app_request_restart(void)
 {
     restart_requested = 1;
     running = 0;
-}
-
-/* --- Auth middleware --- */
-
-static int auth_check(const api_request_t *req, const char *url, void *userdata)
-{
-    cutils_db_t *db = userdata;
-
-    /* Unix socket (CLI) — trusted, no auth required */
-    if (req->is_local)
-        return 1;
-
-    /* Public endpoints — no auth required */
-    if (strcmp(url, "/api/auth/setup") == 0 ||
-        strcmp(url, "/api/auth/login") == 0 ||
-        strncmp(url, "/api/setup/", 11) == 0)
-        return 1;
-
-    /* If auth not set up yet, allow everything (setup mode) */
-    if (!auth_is_setup(db))
-        return 1;
-
-    /* Validate token */
-    return auth_validate_token(db, req->auth_token);
 }
 
 /* --- Event callback: push alerts to Pushover --- */

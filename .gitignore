@@ -2,6 +2,12 @@
 build/
 *.o
 *.d
+compile_commands.json
+
+# Coverage
+*.gcda
+*.gcno
+*.gcov
 
 # Binaries
 airies-ups
@@ -16,6 +22,7 @@ config.yaml
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/coverage/
 
 # Editor
 *.swp

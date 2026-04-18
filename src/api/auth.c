@@ -1,5 +1,6 @@
 #include "api/auth.h"
 #include <cutils/log.h>
+#include <cutils/error.h>
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -141,8 +142,14 @@ int auth_is_setup(cutils_db_t *db)
     return setup;
 }
 
+#define AUTH_MIN_PASSWORD_LEN 4
+
 int auth_set_password(cutils_db_t *db, const char *password)
 {
+    if (!password || strlen(password) < AUTH_MIN_PASSWORD_LEN)
+        return set_error(CUTILS_ERR_INVALID,
+            "password must be at least %d characters", AUTH_MIN_PASSWORD_LEN);
+
     char *hashed = hash_password(password);
     if (!hashed) return -1;
 
@@ -240,4 +247,28 @@ void auth_cleanup_sessions(cutils_db_t *db)
         NULL, &deleted);
     if (deleted > 0)
         log_info("auth: cleaned up %d expired sessions", deleted);
+}
+
+/* --- Auth middleware --- */
+
+int auth_check(const api_request_t *req, const char *url, void *userdata)
+{
+    cutils_db_t *db = userdata;
+
+    /* Unix socket (CLI) — trusted, no auth required */
+    if (req->is_local)
+        return 1;
+
+    /* Public endpoints — no auth required */
+    if (strcmp(url, "/api/auth/setup") == 0 ||
+        strcmp(url, "/api/auth/login") == 0 ||
+        strncmp(url, "/api/setup/", 11) == 0)
+        return 1;
+
+    /* If auth not set up yet, allow everything (setup mode) */
+    if (!auth_is_setup(db))
+        return 1;
+
+    /* Validate token */
+    return auth_validate_token(db, req->auth_token);
 }
