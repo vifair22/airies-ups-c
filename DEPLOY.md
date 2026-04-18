@@ -225,6 +225,102 @@ Replace `upspi` with `upspi2` for the second target.
    ```
 7. Open the web UI — the setup wizard will guide you through setting the admin password, detecting and configuring the UPS connection, and optional Pushover setup.
 
+## Local development
+
+Run the daemon and frontend locally for development and testing without a Pi.
+
+### Prerequisites
+
+Native versions of the same libraries the Pi uses:
+
+```
+libmodbus-dev libsqlite3-dev libcurl4-openssl-dev libmicrohttpd-dev libssl-dev
+bun
+```
+
+c-utils must be built natively (not cross-compiled):
+
+```bash
+make -C ../c-utils clean && make -C ../c-utils
+```
+
+### Fresh install directory
+
+Create an isolated directory so the dev DB doesn't interfere with the repo:
+
+```bash
+mkdir -p /tmp/airies-ups-test
+
+# Native debug build
+make clean && make BUILD_TYPE=debug _build
+
+# Copy binaries
+cp build/airies-upsd build/airies-ups /tmp/airies-ups-test/
+```
+
+Create a minimal `config.yaml` — set `conn_type` to match your UPS:
+
+```bash
+cat > /tmp/airies-ups-test/config.yaml << 'EOF'
+db:
+  path: app.db
+ups:
+  conn_type: usb
+  usb_vid: "051d"
+  usb_pid: "0002"
+http:
+  port: 8080
+  socket: /tmp/airies-ups-test.sock
+pushover:
+  token:
+  user:
+EOF
+```
+
+For serial (Modbus RTU), use `conn_type: serial` with `device`, `baud`, and `slave_id` instead.
+
+### Start the daemon
+
+```bash
+cd /tmp/airies-ups-test && ./airies-upsd
+```
+
+On first run it creates `app.db`, runs all migrations, and starts the API on `:8080`. The UPS connection is deferred until the setup wizard completes (`setup.ups_done` flag in the DB).
+
+### Start the Vite dev server
+
+In a separate terminal:
+
+```bash
+cd frontend && bun run dev
+```
+
+Vite serves on `localhost:5173` and proxies `/api` requests to `localhost:8080` (configured in `vite.config.ts`). Use this URL for development — it gives you hot-reload on frontend changes.
+
+### Identifying HID devices
+
+If using a USB HID UPS, find the correct hidraw device:
+
+```bash
+# Confirm the UPS is on the bus
+lsusb | grep 051d
+
+# Find which hidraw it maps to
+for d in /dev/hidraw*; do
+  udevadm info --query=all "$d" 2>/dev/null | grep -q "051d" && echo "$d"
+done
+```
+
+Permissions: the hidraw device needs to be readable by your user. On dev machines this is usually fine (`666`). On the Pi, the udev rule in the Prerequisites section handles this.
+
+### Cleanup
+
+```bash
+rm -rf /tmp/airies-ups-test
+# Kill the daemon if still running
+pkill -f airies-upsd
+```
+
 ## Troubleshooting
 
 **Port 8080 already in use**: A stale process from a previous crash may hold the port. Check with `ss -tlnp | grep 8080` and kill it.
