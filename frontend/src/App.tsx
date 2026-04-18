@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { useTheme } from './hooks/useTheme'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
@@ -12,6 +12,10 @@ import ShutdownConfig from './pages/ShutdownConfig'
 import WeatherConfig from './pages/WeatherConfig'
 import Login from './pages/Login'
 import Setup from './pages/Setup'
+
+const DevPowerFlow = import.meta.env.DEV
+  ? lazy(() => import('./pages/DevPowerFlow'))
+  : null
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const location = useLocation()
@@ -51,6 +55,17 @@ export default function App() {
       {/* Public routes */}
       <Route path="/login" element={<Login />} />
       <Route path="/setup" element={<Setup />} />
+
+      {/* Dev-only routes — eliminated from prod builds via import.meta.env.DEV */}
+      {DevPowerFlow && (
+        <Route path="/dev/powerflow" element={
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-page">
+            <div className="h-8 w-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          </div>}>
+            <DevPowerFlow />
+          </Suspense>
+        } />
+      )}
 
       {/* Protected routes */}
       <Route element={
