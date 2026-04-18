@@ -1,6 +1,6 @@
 # Deployment
 
-airies-ups deploys to a Raspberry Pi via source sync + remote build. There is no cross-compilation — builds happen natively on the Pi.
+airies-ups is cross-compiled locally for aarch64 and deployed to the Raspberry Pi as a pre-built binary. The Pi needs no build tools — just the runtime libraries.
 
 The frontend (React/Vite) and SQL migrations are embedded into the daemon binary at build time. A single binary serves the API, web UI, and manages its own schema with no external files needed beyond `config.yaml` and the SQLite database.
 
@@ -11,28 +11,37 @@ The frontend (React/Vite) and SQL migrations are embedded into the daemon binary
 | upspi | `sysadmin@upspi.internal.airies.net` | APC SRT (Modbus RTU) | `http://upspi.internal.airies.net:8080` |
 | upspi2 | `sysadmin@upspi2.internal.airies.net` | APC Back-UPS ES 600M1 (USB HID) | `http://upspi2.internal.airies.net:8080` |
 
-Both use the same directory layout:
-
-| | |
-|---|---|
-| Source dir | `/home/sysadmin/airies-ups` |
-| c-utils dir | `/home/sysadmin/c-utils` |
-| Service | `airies-ups.service` (systemd) |
-
 ## Prerequisites
 
-**Pi** — build tools and libraries:
+**Dev machine** — cross-compilation toolchain and frontend build:
 
 ```
-gcc make libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
-libmicrohttpd-dev libssl-dev
-```
-
-**Dev machine** — frontend build chain:
-
-```
+aarch64-unknown-linux-gnu-gcc    # Gentoo crossdev: sudo crossdev -t aarch64-unknown-linux-gnu
 bun brotli gzip xxd
 ```
+
+**Pi** — runtime libraries only (no build tools):
+
+```
+libmodbus5 libsqlite3-0 libcurl4 libmicrohttpd12 libssl3
+```
+
+**Sysroot** — library headers and `.so` files synced from the Pi to `~/.sysroot/aarch64/`:
+
+```bash
+# Headers
+rsync -az pi:/usr/include/modbus/ ~/.sysroot/aarch64/usr/include/modbus/
+rsync -az pi:/usr/include/sqlite3.h pi:/usr/include/sqlite3ext.h ~/.sysroot/aarch64/usr/include/
+rsync -az pi:/usr/include/microhttpd.h ~/.sysroot/aarch64/usr/include/
+rsync -az pi:/usr/include/openssl/ ~/.sysroot/aarch64/usr/include/openssl/
+rsync -az pi:/usr/include/aarch64-linux-gnu/curl/ ~/.sysroot/aarch64/usr/include/curl/
+rsync -az pi:/usr/include/aarch64-linux-gnu/openssl/ ~/.sysroot/aarch64/usr/include/openssl/
+
+# Libraries (follow symlinks to get real .so files)
+rsync -azL pi:/usr/lib/aarch64-linux-gnu/lib{modbus,sqlite3,curl,microhttpd,crypto}.so ~/.sysroot/aarch64/usr/lib/
+```
+
+The sysroot only needs refreshing on a Debian major version upgrade (e.g. bookworm → trixie). Patch updates within a release don't change the ABI.
 
 **USB HID (Back-UPS)**: The `sysadmin` user needs access to `/dev/hidrawN`. Add a udev rule:
 
@@ -44,7 +53,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ## Build pipeline
 
-`make all` runs the full pipeline locally:
+### `make all` — native release build
 
 ```
 frontend          → bun install && bun run build (Vite bundle)
@@ -55,11 +64,26 @@ test              → C unit tests (cmocka)
 _build            → gcc release binary with embedded frontend + migrations
 ```
 
+### `make cross` — cross-compile for aarch64 (used by deploy)
+
+Same pipeline as `make all` for frontend + tests + embedding, then:
+
+```
+c-utils           → cross-compile with aarch64-unknown-linux-gnu-gcc
+airies-ups        → cross-compile and link against sysroot libraries
+```
+
+Tests run natively before the cross-compile step — if tests fail, the cross build never starts.
+
+### `make debug` — development build
+
+Skips frontend embedding. Serves files from `frontend/dist/` on disk for Vite dev server hot-reload.
+
+### Shared details
+
 The frontend embed step generates `build/embedded_assets.c` containing raw, gzip, and brotli variants of each frontend file. The HTTP server does content negotiation at serve time — clients that accept brotli or gzip get pre-compressed responses with zero runtime compression cost.
 
 The migration embed step generates `build/migrations_compiled.c` from the `migrations/` directory using c-utils' `embed_sql.sh`. The SQL files remain the source of truth — the generated C file is a build artifact.
-
-`make debug` skips the frontend entirely and serves files from `frontend/dist/` on disk (for Vite dev server hot-reload).
 
 ## Quick deploy
 
@@ -73,22 +97,23 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 
 | Command | What it does |
 |---------|-------------|
-| `./deploy.sh [full] [target]` | Build + test locally, rsync source + embedded assets, build on Pi, restart |
-| `./deploy.sh build [target]` | Build + test + sync + remote build, but don't restart the service |
+| `./deploy.sh [full] [target]` | Cross-compile locally, rsync binaries to Pi, restart service |
+| `./deploy.sh build [target]` | Cross-compile + rsync binaries (no restart) |
 | `./deploy.sh restart [target]` | Restart the service only (no build) |
 | `./deploy.sh install-service [target]` | Copy the service file to systemd and reload (one-time setup) |
 
 Target is `all` (default), `upspi`, or `upspi2`.
 
-## What gets synced
+## What gets deployed
 
-The script rsyncs the full source tree for both `c-utils` and `airies-ups`, excluding:
-- `.git`, `build/`, `node_modules/`, `.venv/`, `frontend/dist/`, `migrations/`
-- `*.db`, `*.db-shm`, `*.db-wal` (database files are persistent on the Pi)
-- `config.yaml` (never overwritten — Pi has its own config)
-- `he_inhibit` (runtime state file)
+Only the two binaries are rsynced to the Pi:
 
-After syncing source, the pre-generated `build/embedded_assets.c` and `build/migrations_compiled.c` are synced separately — the Pi doesn't need bun, brotli, or the frontend toolchain.
+```
+build/airies-upsd    # daemon (868KB, frontend + migrations embedded)
+build/airies-ups     # CLI
+```
+
+No source code, no build artifacts, no frontend toolchain.
 
 ## Pre-deploy verification
 
@@ -106,8 +131,6 @@ make lint
 ```
 
 ## Runtime layout
-
-The daemon runs from the source directory (`/home/sysadmin/airies-ups`) with all paths relative to the working directory:
 
 ```
 /home/sysadmin/airies-ups/
@@ -173,10 +196,10 @@ Replace `upspi` with `upspi2` for the second target.
 
 ## First-time setup
 
-1. Ensure Pi has build dependencies installed (and udev rule for USB HID)
-2. Create the source directories on the Pi:
+1. Ensure Pi has runtime libraries installed (and udev rule for USB HID)
+2. Create the app directory on the Pi:
    ```bash
-   ssh sysadmin@<host> "mkdir -p /home/sysadmin/airies-ups /home/sysadmin/c-utils"
+   ssh sysadmin@<host> "mkdir -p /home/sysadmin/airies-ups/build"
    ```
 3. Deploy:
    ```bash

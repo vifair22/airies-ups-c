@@ -163,8 +163,10 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
                                         const char *static_dir)
 {
 #ifdef EMBED_FRONTEND
-    enum MHD_Result ret = serve_embedded(conn, url);
-    if (ret == MHD_YES) return ret;
+    {
+        enum MHD_Result res = serve_embedded(conn, url);
+        if (res == MHD_YES) return res;
+    }
 #endif
 
     /* Disk fallback (dev mode or files not in embedded set) */

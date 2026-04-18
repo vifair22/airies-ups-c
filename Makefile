@@ -14,6 +14,17 @@ CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
 LIBS     := -L$(CUTILS_DIR)/build -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
 
+# ---- Cross-compilation (aarch64 Pi target) --------------------------------
+
+CROSS_PREFIX  := aarch64-unknown-linux-gnu-
+SYSROOT       := $(HOME)/.sysroot/aarch64
+CROSS_CC      := $(CROSS_PREFIX)gcc
+CROSS_AR      := $(CROSS_PREFIX)ar
+CROSS_INCLUDES = $(INCLUDES) -I$(SYSROOT)/usr/include
+CROSS_LIBS     = -L$(CUTILS_DIR)/build -lc-utils -L$(SYSROOT)/usr/lib \
+                 -Wl,--allow-shlib-undefined -Wl,-rpath-link,$(SYSROOT)/usr/lib \
+                 -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
+
 # ---- Flags ---------------------------------------------------------------
 WARN_FLAGS := -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
               -Wunused-variable -Wunused-parameter -Wunused-result \
@@ -72,10 +83,28 @@ $(OBJ_DIR)/%.o: src/%.c
 
 # ---- Build targets --------------------------------------------------------
 
-.PHONY: all debug asan clean clean-all check analyze lint frontend frontend-test embed-frontend embed-migrations test coverage
+.PHONY: all debug asan cross clean clean-all check analyze lint frontend frontend-test embed-frontend embed-migrations test coverage
 
 all: frontend frontend-test embed-frontend embed-migrations test
 	$(MAKE) BUILD_TYPE=release EMBED=1 _build
+
+cross: frontend frontend-test embed-frontend embed-migrations
+	@echo "=== Building c-utils natively for tests ==="
+	$(MAKE) -C $(CUTILS_DIR) clean
+	$(MAKE) -C $(CUTILS_DIR)
+	$(MAKE) test
+	@echo "=== Cross-compiling c-utils for aarch64 ==="
+	$(MAKE) -C $(CUTILS_DIR) clean
+	$(MAKE) -C $(CUTILS_DIR) \
+		CC="$(CROSS_CC)" \
+		AR="$(CROSS_AR)" \
+		"COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON -I$(SYSROOT)/usr/include"
+	@echo "=== Cross-compiling airies-ups for aarch64 ==="
+	rm -rf $(BUILD_DIR)/obj
+	$(MAKE) EMBED=1 CC="$(CROSS_CC)" \
+		CFLAGS='-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection $(CROSS_INCLUDES) -DVERSION_STRING="\"$(VERSION)\"" -O2 -DEMBED_FRONTEND' \
+		"LDFLAGS=$(CROSS_LIBS)" \
+		_build
 
 debug: embed-migrations
 	$(MAKE) BUILD_TYPE=debug _build
@@ -100,8 +129,8 @@ $(EMBED_SRC): $(wildcard frontend/dist/**) | $(BUILD_DIR)
 	scripts/embed_frontend.sh frontend/dist > $@
 
 ifeq ($(EMBED),1)
-  COMMON_CFLAGS += -DEMBED_FRONTEND
-  DAEMON_OBJS   += $(EMBED_OBJ)
+  CFLAGS  += -DEMBED_FRONTEND
+  DAEMON_OBJS += $(EMBED_OBJ)
 
 $(EMBED_OBJ): $(EMBED_SRC)
 	@mkdir -p $(dir $@)
