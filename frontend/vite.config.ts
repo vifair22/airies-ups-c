@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -7,6 +7,19 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
+    },
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.ts',
+    css: false,
+    coverage: {
+      exclude: [
+        'src/pages/Telemetry.tsx',
+        'src/pages/DevPowerFlow.tsx',
+        'src/test/**',
+      ],
     },
   },
 })
