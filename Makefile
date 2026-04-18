@@ -12,7 +12,7 @@ VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 
 CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
-LIBS     := -L$(CUTILS_DIR) -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
+LIBS     := -L$(CUTILS_DIR)/build -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
 
 # ---- Flags ---------------------------------------------------------------
 WARN_FLAGS := -Wall -Wextra -Wpedantic -Wshadow -Wunused -Wunused-function \
@@ -72,15 +72,15 @@ $(OBJ_DIR)/%.o: src/%.c
 
 # ---- Build targets --------------------------------------------------------
 
-.PHONY: all debug asan clean clean-all check analyze lint frontend test coverage
+.PHONY: all debug asan clean clean-all check analyze lint frontend frontend-test embed-frontend embed-migrations test coverage
 
-all:
-	$(MAKE) BUILD_TYPE=release _build
+all: frontend frontend-test embed-frontend embed-migrations test
+	$(MAKE) BUILD_TYPE=release EMBED=1 _build
 
-debug:
+debug: embed-migrations
 	$(MAKE) BUILD_TYPE=debug _build
 
-asan:
+asan: embed-migrations
 	$(MAKE) BUILD_TYPE=asan _build
 
 .PHONY: _build
@@ -88,6 +88,43 @@ _build: $(BUILD_DIR)/airies-upsd $(BUILD_DIR)/airies-ups
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+# ---- Embedded frontend assets ---------------------------------------------
+
+EMBED_SRC = $(BUILD_DIR)/embedded_assets.c
+EMBED_OBJ = $(OBJ_DIR)/embedded_assets.o
+
+embed-frontend: $(EMBED_SRC)
+
+$(EMBED_SRC): $(wildcard frontend/dist/**) | $(BUILD_DIR)
+	scripts/embed_frontend.sh frontend/dist > $@
+
+ifeq ($(EMBED),1)
+  COMMON_CFLAGS += -DEMBED_FRONTEND
+  DAEMON_OBJS   += $(EMBED_OBJ)
+
+$(EMBED_OBJ): $(EMBED_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Wno-unused-const-variable -c $< -o $@
+endif
+
+# ---- Embedded SQL migrations ----------------------------------------------
+
+MIGRATE_SRC = $(BUILD_DIR)/migrations_compiled.c
+MIGRATE_OBJ = $(OBJ_DIR)/migrations_compiled.o
+
+embed-migrations: $(MIGRATE_SRC)
+
+$(MIGRATE_SRC): $(wildcard migrations/*.sql) | $(BUILD_DIR)
+	$(CUTILS_DIR)/tools/embed_sql.sh migrations/ app_migrations > $@
+
+$(MIGRATE_OBJ): $(MIGRATE_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+DAEMON_OBJS += $(MIGRATE_OBJ)
+
+# ---- Link targets ---------------------------------------------------------
 
 $(BUILD_DIR)/airies-upsd: $(DAEMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -148,7 +185,7 @@ TEST_CFLAGS := $(COMMON_CFLAGS) -Og -g
 
 # Link library groups
 TEST_COMMON_LIBS := -lcmocka -lpthread
-TEST_FULL_LIBS   := $(TEST_COMMON_LIBS) -L$(CUTILS_DIR) -lc-utils -lsqlite3 -lcurl -lcrypto
+TEST_FULL_LIBS   := $(TEST_COMMON_LIBS) -L$(CUTILS_DIR)/build -lc-utils -lsqlite3 -lcurl -lcrypto
 TEST_MATH_LIBS   := $(TEST_COMMON_LIBS) -lm
 
 # Test definitions: name, sources, libraries
@@ -259,6 +296,9 @@ coverage: $(addprefix $(COV_TEST)/,$(TEST_NAMES))
 
 frontend:
 	cd frontend && bun install && bun run build
+
+frontend-test:
+	cd frontend && bun run test
 
 # ---- Clean ----------------------------------------------------------------
 

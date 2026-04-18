@@ -1,4 +1,7 @@
 #include "api/server.h"
+#ifdef EMBED_FRONTEND
+#include "api/embedded_assets.h"
+#endif
 #include <cutils/log.h>
 #include <cutils/error.h>
 #include <cJSON.h>
@@ -113,10 +116,58 @@ static enum MHD_Result send_response(struct MHD_Connection *conn,
 
 /* --- Static file serving --- */
 
+#ifdef EMBED_FRONTEND
+static enum MHD_Result serve_embedded(struct MHD_Connection *conn,
+                                      const char *url)
+{
+    const char *lookup = (strcmp(url, "/") == 0) ? "/index.html" : url;
+    const embedded_asset_t *asset = embedded_assets_find(lookup);
+    if (!asset) return MHD_NO;
+
+    /* Pick the best encoding the client accepts */
+    const unsigned char *data = asset->data;
+    size_t size = asset->size;
+    const char *encoding = NULL;
+
+    const char *accept_enc = get_header(conn, "Accept-Encoding");
+    if (accept_enc) {
+        if (asset->data_br && strstr(accept_enc, "br")) {
+            data = asset->data_br;
+            size = asset->size_br;
+            encoding = "br";
+        } else if (asset->data_gz && strstr(accept_enc, "gzip")) {
+            data = asset->data_gz;
+            size = asset->size_gz;
+            encoding = "gzip";
+        }
+    }
+
+    /* Data lives in .rodata — MHD can reference it directly */
+    struct MHD_Response *resp = MHD_create_response_from_buffer(
+        size, (void *)(uintptr_t)data, MHD_RESPMEM_PERSISTENT);
+    if (!resp) return MHD_NO;
+
+    MHD_add_response_header(resp, "Content-Type", asset->content_type);
+    MHD_add_response_header(resp, "Vary", "Accept-Encoding");
+    if (encoding)
+        MHD_add_response_header(resp, "Content-Encoding", encoding);
+
+    enum MHD_Result ret = MHD_queue_response(conn, 200, resp);
+    MHD_destroy_response(resp);
+    return ret;
+}
+#endif
+
 static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
                                         const char *url,
                                         const char *static_dir)
 {
+#ifdef EMBED_FRONTEND
+    enum MHD_Result ret = serve_embedded(conn, url);
+    if (ret == MHD_YES) return ret;
+#endif
+
+    /* Disk fallback (dev mode or files not in embedded set) */
     if (!static_dir) return MHD_NO;
 
     /* Security: reject paths with ".." */

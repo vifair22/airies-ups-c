@@ -426,9 +426,10 @@ describe('ShutdownConfig — CRUD', () => {
     /* Verify POST was called */
     await waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-      const postCall = calls.find(([, opts]: [string, RequestInit?]) =>
-        opts?.method === 'POST' && JSON.parse(opts.body as string).name === 'Storage'
-      )
+      const postCall = calls.find((call: unknown[]) => {
+        const opts = call[1] as RequestInit | undefined
+        return opts?.method === 'POST' && JSON.parse(opts.body as string).name === 'Storage'
+      })
       expect(postCall).toBeDefined()
     })
   })
@@ -449,9 +450,10 @@ describe('ShutdownConfig — CRUD', () => {
 
     await waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-      const settingsPost = calls.find(([url, opts]: [string, RequestInit?]) =>
-        url.includes('/api/shutdown/settings') && opts?.method === 'POST'
-      )
+      const settingsPost = calls.find((call: unknown[]) => {
+        const [url, opts] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/settings') && opts?.method === 'POST'
+      })
       expect(settingsPost).toBeDefined()
     })
   })
@@ -475,9 +477,10 @@ describe('ShutdownConfig — CRUD', () => {
 
     await waitFor(() => {
       const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-      const targetPost = calls.find(([url, opts]: [string, RequestInit?]) =>
-        url.includes('/api/shutdown/targets') && opts?.method === 'POST'
-      )
+      const targetPost = calls.find((call: unknown[]) => {
+        const [url, opts] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/targets') && opts?.method === 'POST'
+      })
       expect(targetPost).toBeDefined()
     })
   })

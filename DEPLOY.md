@@ -2,6 +2,8 @@
 
 airies-ups deploys to a Raspberry Pi via source sync + remote build. There is no cross-compilation — builds happen natively on the Pi.
 
+The frontend (React/Vite) and SQL migrations are embedded into the daemon binary at build time. A single binary serves the API, web UI, and manages its own schema with no external files needed beyond `config.yaml` and the SQLite database.
+
 ## Targets
 
 | Name | Host | UPS | Web UI |
@@ -17,16 +19,20 @@ Both use the same directory layout:
 | c-utils dir | `/home/sysadmin/c-utils` |
 | Service | `airies-ups.service` (systemd) |
 
-## Prerequisites (Pi)
+## Prerequisites
 
-Build tools and libraries must be installed on the Pi:
+**Pi** — build tools and libraries:
 
 ```
 gcc make libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
 libmicrohttpd-dev libssl-dev
 ```
 
-The dev machine needs `bun` for frontend builds (not installed on the Pi).
+**Dev machine** — frontend build chain:
+
+```
+bun brotli gzip xxd
+```
 
 **USB HID (Back-UPS)**: The `sysadmin` user needs access to `/dev/hidrawN`. Add a udev rule:
 
@@ -35,6 +41,25 @@ echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="051d", MODE="0660", GROUP="plugdev"
   | sudo tee /etc/udev/rules.d/99-apc-ups.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
+
+## Build pipeline
+
+`make all` runs the full pipeline locally:
+
+```
+frontend          → bun install && bun run build (Vite bundle)
+frontend-test     → vitest run (221 tests)
+embed-frontend    → gzip + brotli compress, xxd into C byte arrays
+embed-migrations  → embed_sql.sh converts migrations/*.sql into C arrays
+test              → C unit tests (cmocka)
+_build            → gcc release binary with embedded frontend + migrations
+```
+
+The frontend embed step generates `build/embedded_assets.c` containing raw, gzip, and brotli variants of each frontend file. The HTTP server does content negotiation at serve time — clients that accept brotli or gzip get pre-compressed responses with zero runtime compression cost.
+
+The migration embed step generates `build/migrations_compiled.c` from the `migrations/` directory using c-utils' `embed_sql.sh`. The SQL files remain the source of truth — the generated C file is a build artifact.
+
+`make debug` skips the frontend entirely and serves files from `frontend/dist/` on disk (for Vite dev server hot-reload).
 
 ## Quick deploy
 
@@ -48,40 +73,37 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 | Command | What it does |
 |---------|-------------|
-| `./deploy.sh [full] [target]` | Build frontend locally, rsync both repos, build on Pi(s), restart service |
-| `./deploy.sh build [target]` | Build frontend + sync + build, but don't restart the service |
+| `./deploy.sh [full] [target]` | Build + test locally, rsync source + embedded assets, build on Pi, restart |
+| `./deploy.sh build [target]` | Build + test + sync + remote build, but don't restart the service |
 | `./deploy.sh restart [target]` | Restart the service only (no build) |
-| `./deploy.sh frontend [target]` | Rebuild frontend locally, sync, restart (skip C rebuild) |
 | `./deploy.sh install-service [target]` | Copy the service file to systemd and reload (one-time setup) |
 
 Target is `all` (default), `upspi`, or `upspi2`.
+
+## What gets synced
+
+The script rsyncs the full source tree for both `c-utils` and `airies-ups`, excluding:
+- `.git`, `build/`, `node_modules/`, `.venv/`, `frontend/dist/`, `migrations/`
+- `*.db`, `*.db-shm`, `*.db-wal` (database files are persistent on the Pi)
+- `config.yaml` (never overwritten — Pi has its own config)
+- `he_inhibit` (runtime state file)
+
+After syncing source, the pre-generated `build/embedded_assets.c` and `build/migrations_compiled.c` are synced separately — the Pi doesn't need bun, brotli, or the frontend toolchain.
 
 ## Pre-deploy verification
 
 Run the full analysis and lint suite before deploying:
 
 ```bash
+# Full build pipeline (frontend + tests + embed + C tests + release binary)
+make all
+
 # C: compile check, stack usage, gcc-fanalyzer, cppcheck
 make analyze
 
 # C: clang-tidy
 make lint
-
-# Frontend: TypeScript type check + build
-cd frontend && npx tsc --noEmit && npm run build
 ```
-
-All three must pass clean before deploying.
-
-## What gets synced
-
-The script rsyncs the full source tree for both `c-utils` and `airies-ups`, excluding:
-- `.git`, `build/`, `node_modules/`, `.venv/`
-- `*.db`, `*.db-shm`, `*.db-wal` (database files are persistent on the Pi)
-- `config.yaml` (never overwritten — Pi has its own config)
-- `he_inhibit` (runtime state file)
-
-The pre-built `frontend/dist/` IS synced since bun is not on the Pi.
 
 ## Runtime layout
 
@@ -89,12 +111,10 @@ The daemon runs from the source directory (`/home/sysadmin/airies-ups`) with all
 
 ```
 /home/sysadmin/airies-ups/
-  build/airies-upsd       # daemon binary (systemd ExecStart)
+  build/airies-upsd       # daemon binary (frontend + migrations embedded)
   build/airies-ups        # CLI binary
   config.yaml             # bootstrap config
   app.db                  # SQLite database (created on first run)
-  migrations/             # SQL migration files (run on startup)
-  frontend/dist/          # static frontend bundle (served by daemon)
 ```
 
 ## Configuration
