@@ -182,6 +182,21 @@ static cJSON *build_status_json(route_ctx_t *ctx)
 
 /* --- Core route handlers --- */
 
+static api_response_t handle_version(const api_request_t *req, void *ud)
+{
+    (void)req;
+    (void)ud;
+    cJSON *obj = cJSON_CreateObject();
+#ifdef VERSION_STRING
+    cJSON_AddStringToObject(obj, "daemon", VERSION_STRING);
+#else
+    cJSON_AddStringToObject(obj, "daemon", "unknown");
+#endif
+    char *json = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    return api_ok(json);
+}
+
 static api_response_t handle_status(const api_request_t *req, void *ud)
 {
     (void)req;
@@ -426,6 +441,7 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_refresh_thresholds(ctx);
 
     /* Core */
+    api_server_route(srv, "/api/version",      API_GET,  handle_version,   ctx);
     api_server_route(srv, "/api/status",       API_GET,  handle_status,    ctx);
     api_server_route(srv, "/api/commands",     API_GET,  handle_commands,  ctx);
     api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,       ctx);

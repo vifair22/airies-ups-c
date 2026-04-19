@@ -158,7 +158,7 @@ export default function Events() {
                     </div>
                     <p className="text-sm text-muted break-words">{ev.message}</p>
                   </div>
-                  <span className="text-[11px] text-faint whitespace-nowrap shrink-0" title={ev.timestamp + ' UTC'}>
+                  <span className="text-[11px] text-faint whitespace-nowrap shrink-0" title={new Date(ev.timestamp + 'Z').toLocaleString()}>
                     {relativeTime(ev.timestamp)}
                   </span>
                 </div>

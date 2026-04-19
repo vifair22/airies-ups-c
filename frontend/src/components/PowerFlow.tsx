@@ -396,7 +396,7 @@ export function PowerFlowSRT({
 export function PowerFlowLineInteractive({
   statusRaw: raw, inputVoltage, outputVoltage,
   batteryCharge, batteryVoltage, batteryError,
-  loadPct, outputFrequency, canHE,
+  loadPct, outputFrequency: _outputFrequency, canHE,
 }: PowerFlowProps) {
   const C = useThemeColors()
 

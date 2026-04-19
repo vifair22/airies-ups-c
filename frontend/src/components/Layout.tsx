@@ -37,6 +37,7 @@ function SideLink({ to, label }: { to: string; label: string }) {
 
 export default function Layout() {
   const { data: status } = useApi<UpsStatus>('/api/status', 5000)
+  const { data: version } = useApi<{ daemon: string }>('/api/version')
 
   useEffect(() => {
     document.title = status?.name
@@ -81,7 +82,9 @@ export default function Layout() {
             className="block w-full text-left text-xs text-faint hover:text-muted transition-colors">
             Logout
           </button>
-          <span className="text-[10px] text-faint font-mono">v0.1.0</span>
+          <span className="text-[10px] text-faint font-mono">
+            UI {__APP_VERSION__}{version?.daemon ? ` · Daemon ${version.daemon}` : ''}
+          </span>
         </div>
       </aside>
 
