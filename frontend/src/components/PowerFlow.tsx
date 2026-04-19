@@ -154,6 +154,12 @@ function ArrowDefs() {
   )
 }
 
+/* TODO:
+ * - Center bypass label horizontally in Double Conversion topology
+ * - Center bypass label between input and transfer boxes on Line Interactive
+ * - Fix scaling to make it more readable for tall flows like Line Interactive and Standby
+ */
+
 /* ── SRT Double Conversion Diagram ── */
 
 export function PowerFlowSRT({
@@ -196,17 +202,17 @@ export function PowerFlowSRT({
   const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batteryColor : C.inactive
 
   /* Layout constants */
-  const W = 620, H = 210
+  const W = 650, H = 200
   const bw = 80, bh = 44  /* block width/height */
   const bypassY = 14      /* bypass path Y position (above main) */
 
   /* Block positions — main path centered, bypass above, battery below */
   const input   = { x: 10,  y: 60 }
-  const rect    = { x: 130, y: 60 }
-  const dcbus   = { x: 250, y: 60 }
-  const inv     = { x: 370, y: 60 }
+  const rect    = { x: 140, y: 60 }
+  const dcbus   = { x: 270, y: 60 }
+  const inv     = { x: 400, y: 60 }
   const output  = { x: 530, y: 60 }
-  const battery = { x: 250, y: 150 }
+  const battery = { x: 270, y: 138 }
 
   /* Connection points (center edges) */
   const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
@@ -217,7 +223,7 @@ export function PowerFlowSRT({
 
   return (
     <div className="rounded-lg bg-panel border border-edge p-4">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '220px' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '210px' }}>
         <ArrowDefs />
 
         {/* ── Flow lines ── */}
@@ -438,7 +444,7 @@ export function PowerFlowLineInteractive({
   const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
 
   /* Layout */
-  const W = 560, H = 260
+  const W = 530, H = 280
   const bw = 80, bh = 44
   const heBypassY = 14
 
@@ -446,9 +452,9 @@ export function PowerFlowLineInteractive({
   const input    = { x: 10,  y: 60 }
   const avr      = { x: 140, y: 60 }
   const xswitch  = { x: 270, y: 60 }
-  const output   = { x: 470, y: 60 }
-  const inverter = { x: 270, y: 140 }
-  const battery  = { x: 270, y: 210 }
+  const output   = { x: 400, y: 60 }
+  const inverter = { x: 270, y: 138 }
+  const battery  = { x: 270, y: 216 }
 
   const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
   const iC = cx(input), aC = cx(avr), sC = cx(xswitch), oC = cx(output), nC = cx(inverter), bC = cx(battery)
@@ -669,14 +675,14 @@ export function PowerFlowStandby({
   const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
 
   /* Layout */
-  const W = 460, H = 220
+  const W = 400, H = 280
   const bw = 80, bh = 44
 
-  const input    = { x: 10,  y: 20 }
-  const xswitch  = { x: 190, y: 20 }
-  const output   = { x: 370, y: 20 }
-  const inverter = { x: 190, y: 100 }
-  const battery  = { x: 190, y: 170 }
+  const input    = { x: 10,  y: 60 }
+  const xswitch  = { x: 140, y: 60 }
+  const output   = { x: 270, y: 60 }
+  const inverter = { x: 140, y: 138 }
+  const battery  = { x: 140, y: 216 }
 
   const cx = (b: {x: number; y: number}) => ({ l: b.x, r: b.x + bw, cx: b.x + bw/2, t: b.y, b: b.y + bh, cy: b.y + bh/2 })
   const iC = cx(input), sC = cx(xswitch), oC = cx(output), nC = cx(inverter), bC = cx(battery)
@@ -686,7 +692,7 @@ export function PowerFlowStandby({
 
   return (
     <div className="rounded-lg bg-panel border border-edge p-4">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '230px' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: '270px' }}>
 
         {/* Input → Transfer Switch */}
         <FlowLine
