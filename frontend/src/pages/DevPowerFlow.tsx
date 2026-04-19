@@ -88,12 +88,13 @@ export default function DevPowerFlow() {
   const [outputFrequency, setOutputFrequency] = useState(60.0)
   const [sensitivity, setSensitivity] = useState<'normal' | 'reduced' | 'low'>('normal')
   const [topology, setTopology] = useState<'srt' | 'line_interactive' | 'standby'>('srt')
+  const [canHE, setCanHE] = useState(true)
 
   const flowProps: PowerFlowProps = {
     statusRaw, inputVoltage, outputVoltage,
     batteryCharge, batteryVoltage, batteryError,
     loadPct, efficiency, outputFrequency,
-    sensitivity,
+    sensitivity, canHE,
   }
 
   const toggleBit = (bit: number) => {
@@ -140,6 +141,11 @@ export default function DevPowerFlow() {
                   : 'Standby'}
               </button>
             ))}
+            <label className="flex items-center gap-2 text-xs cursor-pointer ml-4">
+              <input type="checkbox" checked={canHE} onChange={() => setCanHE(p => !p)}
+                className="accent-accent" />
+              <span className={canHE ? 'text-primary' : 'text-faint'}>HE Capable</span>
+            </label>
             <span className="ml-auto text-[10px] font-mono text-faint">
               raw: 0x{statusRaw.toString(16).padStart(6, '0')} ({statusRaw})
             </span>

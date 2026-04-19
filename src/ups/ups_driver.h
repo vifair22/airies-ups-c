@@ -143,6 +143,10 @@ typedef struct ups_driver {
      * Called after connect() succeeds. Transport is live. */
     int (*detect)(void *transport);
 
+    /* Optional: override the static topology field per-connection.
+     * If NULL, the static topology field is used. Called after connect(). */
+    ups_topology_t (*get_topology)(void *transport);
+
     /* Capability bitfield */
     uint32_t caps;
 

@@ -108,6 +108,7 @@ static enum MHD_Result send_response(struct MHD_Connection *conn,
     if (content_type)
         MHD_add_response_header(resp, "Content-Type", content_type);
     MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
+    MHD_add_response_header(resp, "Access-Control-Allow-Headers", "Authorization, Content-Type");
 
     enum MHD_Result ret = MHD_queue_response(conn, (unsigned int)status, resp);
     MHD_destroy_response(resp);
@@ -276,6 +277,22 @@ static enum MHD_Result request_handler(void *cls,
     }
 
     /* Body complete — dispatch */
+
+    /* CORS preflight: respond to OPTIONS immediately without auth */
+    if (strcmp(method, "OPTIONS") == 0) {
+        free(pb->data);
+        free(pb);
+        *req_cls = NULL;
+        struct MHD_Response *resp = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
+        MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
+        MHD_add_response_header(resp, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        MHD_add_response_header(resp, "Access-Control-Allow-Headers", "Authorization, Content-Type");
+        MHD_add_response_header(resp, "Access-Control-Max-Age", "86400");
+        enum MHD_Result ret = MHD_queue_response(conn, 204, resp);
+        MHD_destroy_response(resp);
+        return ret;
+    }
+
     api_method_t api_method = method_from_string(method);
 
     /* Try API routes first */

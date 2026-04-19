@@ -53,7 +53,9 @@ export default function UpsConfig() {
   if (!regs || regs.length === 0) return (
     <div>
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
-      <p className="text-muted">No config registers available (UPS not connected or driver has none).</p>
+      <div className="rounded-lg bg-panel border border-edge text-center py-12">
+        <p className="text-muted">UPS not connected. Registers unavailable.</p>
+      </div>
     </div>
   )
 

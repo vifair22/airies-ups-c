@@ -71,7 +71,7 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
 static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
-    if (!ctx->ups) return api_error(503, "no UPS connected");
+    if (!ctx->ups) return api_ok(strdup("[]"));
 
     const char *name = NULL;
     if (strlen(req->url) > 16)

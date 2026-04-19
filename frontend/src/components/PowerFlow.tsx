@@ -274,7 +274,7 @@ export function PowerFlowSRT({
           opacity={0.8}
           dx="-20"
         >
-          STATIC BYPASS
+          {bypassActive ? (isHE ? 'HE BYPASS' : isCommanded ? 'MAINTENANCE BYPASS' : 'FAULT BYPASS') : 'BYPASS'}
         </text>
 
         {/* ── Stage blocks ── */}
@@ -396,7 +396,7 @@ export function PowerFlowSRT({
 export function PowerFlowLineInteractive({
   statusRaw: raw, inputVoltage, outputVoltage,
   batteryCharge, batteryVoltage, batteryError,
-  loadPct, outputFrequency,
+  loadPct, outputFrequency, canHE,
 }: PowerFlowProps) {
   const C = useThemeColors()
 
@@ -413,10 +413,11 @@ export function PowerFlowLineInteractive({
   /* Path states */
   const utilityPath = isOnline && !isOnBattery && !isOff
   const batteryPath = isOnBattery && !isOff
+  const chargingOnly = isOnline && !isOnBattery && isOff && !batFault && batteryCharge < 100
   const avrActive = utilityPath && !isHE
   const avrCorrecting = avrActive && (isBoost || isTrim)
   const avrTracking = isHE && isOnline
-  const heBypass = isHE && !isOnBattery
+  const heBypass = (canHE && isHE && !isOnBattery) || chargingOnly
   const batteryCharging = isOnline && !isOnBattery && !batFault && batteryCharge < 100
   const batteryDischarging = isOnBattery && !batFault
   const inverterCharging = batteryCharging
@@ -429,9 +430,9 @@ export function PowerFlowLineInteractive({
   const batColor = isOnBattery ? C.battery : C.active
 
   /* Block borders */
-  const inputBorder = isOnline ? mainColor : isFault ? C.fault : C.inactive
+  const inputBorder = (isOnline || chargingOnly) ? mainColor : isFault ? C.fault : C.inactive
   const avrBorder = avrActive ? avrColor : avrTracking ? C.heStandby : C.inactive
-  const switchBorder = (utilityPath || batteryPath) ? mainColor : C.inactive
+  const switchBorder = (utilityPath || batteryPath || chargingOnly) ? mainColor : C.inactive
   const outBorder = (utilityPath || batteryPath) && !isOff ? mainColor : isOff ? C.dead : C.inactive
   const invBorder = (inverterCharging || inverterInverting) ? batColor : C.inactive
   const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
@@ -477,25 +478,29 @@ export function PowerFlowLineInteractive({
           color={mainColor} active={avrActive}
         />
 
-        {/* HE bypass: Input → Transfer Switch (arc over AVR) */}
-        <FlowLine
-          points={`${iC.cx},${iC.t} ${iC.cx},${heBypassY} ${sC.cx},${heBypassY} ${sC.cx},${sC.t}`}
-          color={heColor}
-          active={heBypass}
-        />
-
-        {/* HE bypass label */}
-        <text
-          x={(iC.cx + sC.cx) / 2} y={heBypassY - 3}
-          textAnchor="middle"
-          fill={heBypass ? heColor : C.textDim}
-          fontSize="8"
-          fontWeight="500"
-          opacity={0.8}
-          dx="-10"
-        >
-          HE BYPASS
-        </text>
+        {/* HE bypass: Input → Transfer Switch (arc over AVR) — only shown
+           * when the UPS supports HE mode, or during charging-only state */}
+        {(canHE || chargingOnly) && (
+          <>
+            <FlowLine
+              points={`${iC.cx},${iC.t} ${iC.cx},${heBypassY} ${sC.cx},${heBypassY} ${sC.cx},${sC.t}`}
+              color={heColor}
+              active={heBypass}
+              slow={chargingOnly}
+            />
+            <text
+              x={(iC.cx + sC.cx) / 2} y={heBypassY - 3}
+              textAnchor="middle"
+              fill={heBypass ? heColor : C.textDim}
+              fontSize="8"
+              fontWeight="500"
+              opacity={0.8}
+              dx="-10"
+            >
+              {heBypass ? (chargingOnly ? 'BYPASS' : 'HE BYPASS') : 'BYPASS'}
+            </text>
+          </>
+        )}
 
         {/* AVR tracking dotted line (HE mode) */}
         {avrTracking && (
@@ -646,7 +651,8 @@ export function PowerFlowStandby({
   /* Path states */
   const utilityPath = isOnline && !isOnBattery && !isOff
   const batteryPath = isOnBattery && !isOff
-  const batteryCharging = isOnline && !isOnBattery && !batFault && batteryCharge < 100
+  const chargingOnly = isOnline && !isOnBattery && isOff && !batFault && batteryCharge < 100
+  const batteryCharging = (isOnline && !isOnBattery && !batFault && batteryCharge < 100)
   const batteryDischarging = isOnBattery && !batFault
   const inverterCharging = batteryCharging
   const inverterInverting = batteryPath
@@ -656,9 +662,9 @@ export function PowerFlowStandby({
   const batColor = isOnBattery ? C.battery : C.active
 
   /* Block borders */
-  const inputBorder = isOnline ? mainColor : isFault ? C.fault : C.inactive
+  const inputBorder = (isOnline || chargingOnly) ? mainColor : isFault ? C.fault : C.inactive
   const outBorder = (utilityPath || batteryPath) ? mainColor : isOff ? C.dead : C.inactive
-  const switchBorder = (utilityPath || batteryPath) ? mainColor : C.inactive
+  const switchBorder = (utilityPath || batteryPath || chargingOnly) ? mainColor : C.inactive
   const invBorder = (inverterCharging || inverterInverting) ? batColor : C.inactive
   const batBorder = batFault ? C.fault : (batteryCharging || batteryDischarging) ? batColor : C.inactive
 
@@ -686,6 +692,7 @@ export function PowerFlowStandby({
         <FlowLine
           points={`${iC.r},${iC.cy} ${sC.l},${sC.cy}`}
           color={mainColor} active={utilityPath || batteryCharging}
+          slow={chargingOnly}
         />
 
         {/* Transfer Switch → Output */}

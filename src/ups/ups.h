@@ -21,6 +21,8 @@
 #define UPS_ST_HE_MODE         (1 << 13)
 #define UPS_ST_INFO_ALERT      (1 << 14)  /* SRT: informational alert */
 #define UPS_ST_FAULT_STATE     (1 << 15)
+#define UPS_ST_AVR_BOOST       (1 << 16)  /* line-interactive: AVR boosting */
+#define UPS_ST_AVR_TRIM        (1 << 17)  /* line-interactive: AVR bucking */
 #define UPS_ST_MAINS_BAD       (1 << 19)  /* SRT only */
 #define UPS_ST_FAULT_RECOVERY  (1 << 20)  /* SRT only */
 #define UPS_ST_OVERLOAD        (1 << 21)

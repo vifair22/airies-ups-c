@@ -54,6 +54,8 @@ export const ST = {
   FAULT_STATE:    1 << 15,
   MAINS_BAD:      1 << 19,
   FAULT_RECOVERY: 1 << 20,
+  AVR_BOOST:      1 << 16,
+  AVR_TRIM:       1 << 17,
   OVERLOAD:       1 << 21,
 } as const
 
@@ -67,4 +69,6 @@ export interface PowerFlowProps {
   loadPct: number
   efficiency: number
   outputFrequency: number
+  sensitivity?: 'normal' | 'reduced' | 'low'
+  canHE?: boolean
 }

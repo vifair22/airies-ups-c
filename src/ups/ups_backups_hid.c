@@ -21,19 +21,36 @@
 /* --- APC Back-UPS HID driver ---
  *
  * Communicates via USB HID feature reports over /dev/hidrawN.
- * Uses the standard HID Power Device usage page (0x84) and
- * Battery System page (0x85) with APC vendor extensions (0xFF86).
+ * Implements the USB HID Power Device Class spec (pages 0x84, 0x85)
+ * with APC vendor extensions (page 0xFF86).
  *
  * All report IDs and unit scaling are derived from parsing the HID
  * report descriptor at connect time — no hardcoded report IDs.
  *
- * Tested on: BE600M1 (Back-UPS ES 600M1) */
+ * Covers the APC Back-UPS product family (BE, BR, BX, BN series).
+ * Topology is detected from the descriptor: standby (no PowerConverter)
+ * or line-interactive (PowerConverter collection present). */
 
 #define APC_VID  0x051D
 #define APC_PID  0x0002
 
-/* Usage paths for field lookup.
- * These are collection-qualified: [collection..., usage] matched as a suffix
+/* --- APC vendor page (0xFF86) ---
+ * Usages from AN178 and descriptor analysis. These are APC-specific
+ * and do NOT belong in the generic hid_parser.h header. */
+#define APC_PAGE                    0xFF86
+#define APC_USAGE_STATUS_CODE       0x0001
+#define APC_USAGE_SENSITIVITY       0x0061
+#define APC_USAGE_PANELTEST         0x0018
+#define APC_USAGE_STATUS_BYTE       0x0023
+#define APC_USAGE_BATT_REPL_DATE    0x0024
+#define APC_USAGE_MANUF_DATE        0x0025
+#define APC_USAGE_BATT_CAP_STARTUP  0x0026
+#define APC_USAGE_FW_REVISION       0x0042
+#define APC_USAGE_SHUTDOWN_AFTER    0x0060
+#define APC_USAGE_LIGHTS_TEST       0x0072
+
+/* --- Usage paths for field lookup ---
+ * Collection-qualified: [collection..., usage] matched as a suffix
  * against the full path in the parsed descriptor. */
 
 /* Power.Input collection */
@@ -53,10 +70,6 @@ static const uint32_t UP_TRANSFER_HIGH[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_INPUT),
     HID_UP(HID_PAGE_POWER, HID_USAGE_HIGH_VOLTAGE_TRANSFER) };
 
-static const uint32_t UP_SENSITIVITY[] = {
-    HID_UP(HID_PAGE_POWER, HID_USAGE_INPUT),
-    HID_UP(HID_PAGE_APC, HID_USAGE_APC_SENSITIVITY) };
-
 /* Power.Battery collection */
 static const uint32_t UP_BATTERY_VOLTAGE[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_BATTERY),
@@ -70,7 +83,7 @@ static const uint32_t UP_RUNTIME_TO_EMPTY[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_BATTERY),
     HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_RUNTIME_TO_EMPTY) };
 
-/* Power.Output / Output collection — PercentLoad lives in a sub-collection */
+/* Power.PowerConverter collection */
 static const uint32_t UP_PERCENT_LOAD[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_PERCENT_LOAD) };
 
@@ -81,27 +94,116 @@ static const uint32_t UP_TEST[] = {
 static const uint32_t UP_ALARM_CONTROL[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_AUDIBLE_ALARM_CTRL) };
 
-/* Power.Output.Frequency — standard HID usage 0x0032 (Hertz, no scaling).
- * Note: BE600M1 does not expose this field; output_frequency will be 0. */
+static const uint32_t UP_DELAY_SHUTDOWN[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_DELAY_BEFORE_SHUTDOWN) };
+
+static const uint32_t UP_DELAY_STARTUP[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_DELAY_BEFORE_STARTUP) };
+
+static const uint32_t UP_DELAY_REBOOT[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_DELAY_BEFORE_REBOOT) };
+
+static const uint32_t UP_MODULE_RESET[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_MODULE_RESET) };
+
+/* Power.Output.Frequency */
 static const uint32_t UP_OUTPUT_FREQUENCY[] = {
     HID_UP(HID_PAGE_POWER, HID_USAGE_OUTPUT),
     HID_UP(HID_PAGE_POWER, HID_USAGE_FREQUENCY) };
 
+/* Power rating — ConfigApparentPower (VA) and ConfigActivePower (W) */
+static const uint32_t UP_CONFIG_APPARENT_POWER[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_CONFIG_APPARENT_POWER) };
+
+static const uint32_t UP_CONFIG_ACTIVE_POWER[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_CONFIG_ACTIVE_POWER) };
+
+/* Battery settings and info */
+static const uint32_t UP_REMAINING_TIME_LIMIT[] = {
+    HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_REMAINING_TIME_LIM) };
+
+static const uint32_t UP_REMAINING_CAP_LIMIT[] = {
+    HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_REMAINING_CAP_LIM) };
+
+static const uint32_t UP_WARNING_CAP_LIMIT[] = {
+    HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_WARNING_CAP_LIMIT) };
+
+static const uint32_t UP_DESIGN_CAPACITY[] = {
+    HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_DESIGN_CAPACITY) };
+
+static const uint32_t UP_MANUFACTURE_DATE[] = {
+    HID_UP(HID_PAGE_BATTERY, HID_USAGE_BAT_MANUFACTURE_DATE) };
+
+/* APC vendor paths */
+static const uint32_t UP_APC_SENSITIVITY[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_INPUT),
+    HID_UP(APC_PAGE, APC_USAGE_SENSITIVITY) };
+
+static const uint32_t UP_APC_LIGHTS_TEST[] = {
+    HID_UP(APC_PAGE, APC_USAGE_LIGHTS_TEST) };
+
+static const uint32_t UP_APC_BATT_REPL_DATE[] = {
+    HID_UP(HID_PAGE_POWER, HID_USAGE_BATTERY),
+    HID_UP(APC_PAGE, APC_USAGE_BATT_REPL_DATE) };
+
+static const uint32_t UP_APC_MANUF_DATE[] = {
+    HID_UP(APC_PAGE, APC_USAGE_MANUF_DATE) };
+
+static const uint32_t UP_APC_BATT_CAP_STARTUP[] = {
+    HID_UP(APC_PAGE, APC_USAGE_BATT_CAP_STARTUP) };
+
+/* --- Known model lookup table (fallback when descriptor lacks power fields) --- */
+
+typedef struct {
+    const char *model;
+    uint16_t    va;
+    uint16_t    watts;
+} backups_model_spec_t;
+
+static const backups_model_spec_t known_models[] = {
+    { "BE600M1",     600,  330 },
+    { "RS 1500MS2", 1500,  900 },
+};
+
 /* --- Resolved field cache (populated on connect) --- */
 
 typedef struct {
+    /* Measures */
     const hid_field_t *input_voltage;
-    const hid_field_t *output_voltage;     /* Input.ConfigVoltage (nominal, used as output) */
+    const hid_field_t *output_voltage;        /* Input.ConfigVoltage (nominal) */
     const hid_field_t *battery_voltage;
     const hid_field_t *remaining_capacity;
     const hid_field_t *runtime_to_empty;
     const hid_field_t *percent_load;
     const hid_field_t *output_frequency;
+
+    /* Config / thresholds */
     const hid_field_t *transfer_low;
     const hid_field_t *transfer_high;
-    const hid_field_t *sensitivity;
+    const hid_field_t *config_apparent_power;
+    const hid_field_t *config_active_power;
+
+    /* Controls */
     const hid_field_t *test;
     const hid_field_t *alarm_control;
+    const hid_field_t *delay_before_shutdown;
+    const hid_field_t *delay_before_startup;
+    const hid_field_t *delay_before_reboot;
+    const hid_field_t *module_reset;
+
+    /* APC vendor */
+    const hid_field_t *apc_sensitivity;
+    const hid_field_t *apc_lights_test;
+    const hid_field_t *apc_batt_repl_date;
+    const hid_field_t *apc_manuf_date;
+    const hid_field_t *apc_batt_cap_startup;
+
+    /* Battery settings */
+    const hid_field_t *remaining_time_limit;
+    const hid_field_t *remaining_cap_limit;
+    const hid_field_t *warning_cap_limit;
+    const hid_field_t *design_capacity;
+    const hid_field_t *manufacture_date;
 } hid_fields_t;
 
 /* --- Transport --- */
@@ -109,13 +211,14 @@ typedef struct {
 typedef struct {
     int              fd;
     char             sysfs_base[PATH_MAX];
-    char             hidraw_name[NAME_MAX]; /* "hidrawN" for descriptor path */
+    char             hidraw_name[NAME_MAX];
     hid_report_map_t map;
     hid_fields_t     f;
     uint16_t         nominal_watts;
+    ups_topology_t   topology;
 } hid_transport_t;
 
-/* --- hidraw helpers (for commands that still need direct writes) --- */
+/* --- hidraw helpers --- */
 
 static int hid_set_feature(int fd, uint8_t report_id, const void *buf, size_t len)
 {
@@ -159,7 +262,6 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
             snprintf(path, path_sz, "/dev/%s", ent->d_name);
             memcpy(hidraw_name, ent->d_name, strlen(ent->d_name) + 1);
 
-            /* Resolve sysfs USB device path for string descriptors */
             if (sysfs_base && sysfs_sz > 0) {
                 char devlink[PATH_MAX];
                 snprintf(devlink, sizeof(devlink),
@@ -235,12 +337,13 @@ static int parse_hid_descriptor(hid_transport_t *t)
     return 0;
 }
 
-/* Resolve all the usage paths we need into cached field pointers */
+/* Resolve all usage paths into cached field pointers */
 static void resolve_fields(hid_transport_t *t)
 {
     hid_fields_t *f = &t->f;
     const hid_report_map_t *m = &t->map;
 
+    /* Measures */
     f->input_voltage     = hid_find_field(m, UP_INPUT_VOLTAGE, 2, HID_FIELD_FEATURE);
     f->output_voltage    = hid_find_field(m, UP_INPUT_CONFIG_VOLTAGE, 2, HID_FIELD_FEATURE);
     f->battery_voltage   = hid_find_field(m, UP_BATTERY_VOLTAGE, 2, HID_FIELD_FEATURE);
@@ -248,23 +351,72 @@ static void resolve_fields(hid_transport_t *t)
     f->runtime_to_empty  = hid_find_field(m, UP_RUNTIME_TO_EMPTY, 2, HID_FIELD_FEATURE);
     f->percent_load      = hid_find_field(m, UP_PERCENT_LOAD, 1, HID_FIELD_FEATURE);
     f->output_frequency  = hid_find_field(m, UP_OUTPUT_FREQUENCY, 2, HID_FIELD_FEATURE);
+
+    /* Config / thresholds */
     f->transfer_low      = hid_find_field(m, UP_TRANSFER_LOW, 2, HID_FIELD_FEATURE);
     f->transfer_high     = hid_find_field(m, UP_TRANSFER_HIGH, 2, HID_FIELD_FEATURE);
-    f->sensitivity       = hid_find_field(m, UP_SENSITIVITY, 2, HID_FIELD_FEATURE);
+    f->config_apparent_power = hid_find_field(m, UP_CONFIG_APPARENT_POWER, 1, HID_FIELD_FEATURE);
+    f->config_active_power   = hid_find_field(m, UP_CONFIG_ACTIVE_POWER, 1, HID_FIELD_FEATURE);
+
+    /* Controls */
     f->test              = hid_find_field(m, UP_TEST, 1, HID_FIELD_FEATURE);
     f->alarm_control     = hid_find_field(m, UP_ALARM_CONTROL, 1, HID_FIELD_FEATURE);
+    f->delay_before_shutdown = hid_find_field(m, UP_DELAY_SHUTDOWN, 1, HID_FIELD_FEATURE);
+    f->delay_before_startup  = hid_find_field(m, UP_DELAY_STARTUP, 1, HID_FIELD_FEATURE);
+    f->delay_before_reboot   = hid_find_field(m, UP_DELAY_REBOOT, 1, HID_FIELD_FEATURE);
+    f->module_reset      = hid_find_field(m, UP_MODULE_RESET, 1, HID_FIELD_FEATURE);
 
-    /* Log what we found (and what's missing) */
-    if (f->input_voltage)     log_info("backups_hid: input_voltage → RID 0x%02x", f->input_voltage->report_id);
-    else                      log_warn("backups_hid: input_voltage not found in descriptor");
-    if (f->battery_voltage)   log_info("backups_hid: battery_voltage → RID 0x%02x", f->battery_voltage->report_id);
-    if (f->percent_load)      log_info("backups_hid: percent_load → RID 0x%02x", f->percent_load->report_id);
-    else                      log_warn("backups_hid: percent_load not found in descriptor");
-    if (f->sensitivity)       log_info("backups_hid: sensitivity → RID 0x%02x", f->sensitivity->report_id);
-    if (f->output_frequency)  log_info("backups_hid: output_freq → RID 0x%02x", f->output_frequency->report_id);
+    /* APC vendor */
+    f->apc_sensitivity   = hid_find_field(m, UP_APC_SENSITIVITY, 2, HID_FIELD_FEATURE);
+    f->apc_lights_test   = hid_find_field(m, UP_APC_LIGHTS_TEST, 1, HID_FIELD_FEATURE);
+    f->apc_batt_repl_date = hid_find_field(m, UP_APC_BATT_REPL_DATE, 2, HID_FIELD_FEATURE);
+    f->apc_manuf_date    = hid_find_field(m, UP_APC_MANUF_DATE, 1, HID_FIELD_FEATURE);
+    f->apc_batt_cap_startup = hid_find_field(m, UP_APC_BATT_CAP_STARTUP, 1, HID_FIELD_FEATURE);
+
+    /* Battery settings / info */
+    f->remaining_time_limit = hid_find_field(m, UP_REMAINING_TIME_LIMIT, 1, HID_FIELD_FEATURE);
+    f->remaining_cap_limit  = hid_find_field(m, UP_REMAINING_CAP_LIMIT, 1, HID_FIELD_FEATURE);
+    f->warning_cap_limit    = hid_find_field(m, UP_WARNING_CAP_LIMIT, 1, HID_FIELD_FEATURE);
+    f->design_capacity      = hid_find_field(m, UP_DESIGN_CAPACITY, 1, HID_FIELD_FEATURE);
+    f->manufacture_date     = hid_find_field(m, UP_MANUFACTURE_DATE, 1, HID_FIELD_FEATURE);
+
+    /* Log resolution results */
+    struct { const char *name; const hid_field_t *field; } fields[] = {
+        { "input_voltage",      f->input_voltage },
+        { "output_voltage",     f->output_voltage },
+        { "battery_voltage",    f->battery_voltage },
+        { "remaining_capacity", f->remaining_capacity },
+        { "runtime_to_empty",   f->runtime_to_empty },
+        { "percent_load",       f->percent_load },
+        { "output_frequency",   f->output_frequency },
+        { "transfer_low",       f->transfer_low },
+        { "transfer_high",      f->transfer_high },
+        { "config_apparent_power", f->config_apparent_power },
+        { "config_active_power",   f->config_active_power },
+        { "test",               f->test },
+        { "alarm_control",      f->alarm_control },
+        { "delay_before_shutdown", f->delay_before_shutdown },
+        { "delay_before_startup",  f->delay_before_startup },
+        { "delay_before_reboot",   f->delay_before_reboot },
+        { "module_reset",       f->module_reset },
+        { "apc_sensitivity",    f->apc_sensitivity },
+        { "apc_lights_test",    f->apc_lights_test },
+        { "apc_batt_repl_date", f->apc_batt_repl_date },
+        { "apc_manuf_date",     f->apc_manuf_date },
+        { "apc_batt_cap_startup", f->apc_batt_cap_startup },
+        { "remaining_time_limit", f->remaining_time_limit },
+        { "remaining_cap_limit",  f->remaining_cap_limit },
+        { "warning_cap_limit",    f->warning_cap_limit },
+        { "design_capacity",    f->design_capacity },
+        { "manufacture_date",   f->manufacture_date },
+    };
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        if (fields[i].field)
+            log_info("backups_hid: %s -> RID 0x%02x", fields[i].name, fields[i].field->report_id);
+    }
 }
 
-/* Forward declarations */
+/* Forward declaration */
 static void fixup_config_regs(hid_transport_t *t);
 
 /* --- Connection lifecycle --- */
@@ -300,7 +452,6 @@ static void *backups_connect(const ups_conn_params_t *params)
 
     log_info("backups_hid: opened %s", devpath);
 
-    /* Parse the HID report descriptor and resolve field pointers */
     if (parse_hid_descriptor(t) != 0) {
         log_warn("backups_hid: continuing without descriptor (reads may be wrong)");
     } else {
@@ -308,7 +459,28 @@ static void *backups_connect(const ups_conn_params_t *params)
         fixup_config_regs(t);
     }
 
+    /* Detect topology: PowerConverter (0x84:0x16) present = line-interactive */
+    t->topology = UPS_TOPO_STANDBY;
+    for (size_t i = 0; i < t->map.count; i++) {
+        const hid_field_t *fld = &t->map.fields[i];
+        for (int j = 0; j < fld->path_depth; j++) {
+            if (fld->usage_path[j] == HID_UP(HID_PAGE_POWER, HID_USAGE_POWER_CONVERTER)) {
+                t->topology = UPS_TOPO_LINE_INTERACTIVE;
+                log_info("backups_hid: PowerConverter collection found — line-interactive");
+                goto topo_done;
+            }
+        }
+    }
+    log_info("backups_hid: no PowerConverter — standby topology");
+topo_done:
+
     return t;
+}
+
+static ups_topology_t backups_get_topology(void *transport)
+{
+    hid_transport_t *t = transport;
+    return t->topology;
 }
 
 static void backups_disconnect(void *transport)
@@ -325,46 +497,38 @@ static int backups_detect(void *transport)
 {
     hid_transport_t *t = transport;
 
-    /* Verify we can read battery capacity */
     if (t->f.remaining_capacity) {
         int32_t cap = hid_field_read_raw(t->fd, t->f.remaining_capacity);
-        if (cap == 0) /* retry once */
+        if (cap == 0)
             cap = hid_field_read_raw(t->fd, t->f.remaining_capacity);
         (void)cap;
     }
 
-    /* Check sysfs product string contains "Back-UPS" */
     char product[128];
     read_sysfs_string(t->sysfs_base, "product", product, sizeof(product));
     if (strstr(product, "Back-UPS") != NULL)
         return 1;
 
-    /* Also accept any APC UPS on this USB interface */
     char mfg[128];
     read_sysfs_string(t->sysfs_base, "manufacturer", mfg, sizeof(mfg));
     return strstr(mfg, "American Power Conversion") != NULL;
 }
 
-/* --- Status bitfield ---
+/* --- Status reading ---
  *
- * The PresentStatus report (0x16 on BE600M1) contains individual 1-bit
- * fields packed into a multi-byte report. We read the whole report and
- * extract named bits by their usage. The bit positions come from the
- * parsed descriptor, not hardcoded offsets. */
+ * The PresentStatus collection contains 1-bit fields packed into a
+ * multi-byte report. We read the entire report and extract bits by
+ * their usage from the parsed descriptor. */
 
-/* Find a 1-bit status field by its usage within the PresentStatus collection */
 static int read_status_bit(hid_transport_t *t, uint16_t page, uint16_t usage,
                            const uint8_t *report, int report_len)
 {
-    /* Search for a 1-bit Feature field matching this usage in any
-     * PresentStatus-like collection (Power.0x0002 = PresentStatus) */
     for (size_t i = 0; i < t->map.count; i++) {
         const hid_field_t *f = &t->map.fields[i];
         if (f->type != HID_FIELD_FEATURE) continue;
         if (f->bit_size != 1) continue;
         if (f->usage_page != page || f->usage_id != usage) continue;
 
-        /* Extract the bit from the report buffer */
         uint16_t byte_idx = (uint16_t)(1 + f->bit_offset / 8);
         uint16_t bit_idx  = (uint16_t)(f->bit_offset % 8);
         if (byte_idx < (uint16_t)report_len)
@@ -377,8 +541,7 @@ static int backups_read_status(void *transport, ups_data_t *data)
 {
     hid_transport_t *t = transport;
 
-    /* Read the full status report. We need the report ID — find any 1-bit
-     * status field to get it. ACPresent (85:D0) is always present. */
+    /* Find status report ID from any 1-bit ACPresent field */
     uint8_t status_rid = 0;
     for (size_t i = 0; i < t->map.count; i++) {
         const hid_field_t *f = &t->map.fields[i];
@@ -395,33 +558,88 @@ static int backups_read_status(void *transport, ups_data_t *data)
     int rc = ioctl(t->fd, HIDIOCGFEATURE(sizeof(buf)), buf);
     if (rc < 0) return UPS_ERR_IO;
 
-    /* Map HID status bits to our semantic status flags.
-     * Page:usage mappings per APC AN178 §2.3 and USB HID PDC spec. */
+    /* Clear fields we'll populate */
     data->status = 0;
+    data->sig_status = 0;
+    data->general_error = 0;
+    data->bat_system_error = 0;
 
-    /* ACPresent — Battery page 85:D0 (APC AN178 §2.3.3) */
+    /* --- Standard HID PDC PresentStatus bits --- */
+
+    /* ACPresent (85:D0) → ONLINE */
     if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_AC_PRESENT, buf, rc))
         data->status |= UPS_ST_ONLINE;
-    /* Discharging — Battery page 85:45 */
+
+    /* Discharging (85:45) → ON_BATTERY */
     if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_DISCHARGING, buf, rc))
         data->status |= UPS_ST_ON_BATTERY;
-    /* Overload — Power Device page 84:65 (APC AN178 §2.3.11) */
+
+    /* Overload (84:65) → OVERLOAD */
     if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_OVERLOAD, buf, rc))
         data->status |= UPS_ST_OVERLOAD;
-    /* ShutdownRequested — Power Device page 84:68 (APC AN178 §2.3.6) */
+
+    /* ShutdownRequested (84:68) → SHUT_PENDING */
     if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_SHUTDOWN_REQUESTED, buf, rc))
         data->status |= UPS_ST_SHUT_PENDING;
-    /* NeedReplacement — Battery page 85:4B (APC AN178 §2.3.10) */
+
+    /* ShutdownImminent (84:69) */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_SHUTDOWN_IMMINENT, buf, rc))
+        data->sig_status |= UPS_SIG_SHUTDOWN_IMMINENT;
+
+    /* BelowRemainingCapacityLimit (85:42) → INPUT_BAD (signals low battery) */
+    if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_BELOW_CAP_LIMIT, buf, rc))
+        data->status |= UPS_ST_INPUT_BAD;
+
+    /* RemainingTimeLimitExpired (85:43) */
+    if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_REMAINING_TIME_EXP, buf, rc))
+        data->sig_status |= UPS_SIG_SHUTDOWN_IMMINENT;
+
+    /* CommunicationLost (84:73) */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_COMMUNICATIONS_LOST, buf, rc))
+        data->general_error |= UPS_GENERR_INTERNAL_COMM;
+
+    /* NeedReplacement (85:4B) */
     if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_NEED_REPLACEMENT, buf, rc))
         data->bat_system_error |= UPS_BATERR_REPLACE;
 
-    /* Synthesize outlet state — Back-UPS has a single unswitched outlet group */
-    data->outlet_mog = (data->status & UPS_ST_ONLINE) ? (1u << 0) : (1u << 1);
+    /* BatteryPresent (85:D1) → if NOT present, set DISCONNECTED */
+    if (!read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_BATTERY_PRESENT, buf, rc))
+        data->bat_system_error |= UPS_BATERR_DISCONNECTED;
+
+    /* VoltageNotRegulated (85:DB) — informational for line-interactive */
+    if (read_status_bit(t, HID_PAGE_BATTERY, HID_USAGE_BAT_VOLTAGE_NOT_REG, buf, rc))
+        data->status |= UPS_ST_FAULT;
+
+    /* Boost (84:6E) → AVR_BOOST */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_BOOST, buf, rc))
+        data->status |= UPS_ST_AVR_BOOST;
+
+    /* Buck (84:6F) → AVR_TRIM */
+    if (read_status_bit(t, HID_PAGE_POWER, HID_USAGE_BUCK, buf, rc))
+        data->status |= UPS_ST_AVR_TRIM;
+
+    /* --- Test status (84:58) --- */
+    if (t->f.test) {
+        int32_t test_val = hid_field_read_raw(t->fd, t->f.test);
+        /* Write values: 0=none, 1=quick, 2=deep, 3=abort
+         * Read values: 1=pass, 2=warning, 3=error, 4=aborted, 5=in progress, 6=none */
+        if (test_val == 5)
+            data->status |= UPS_ST_TEST;
+        data->bat_test_status = (uint16_t)test_val;
+    }
+
+    /* Synthesize outlet state */
+    if (data->status & UPS_ST_ONLINE)
+        data->outlet_mog = (1u << 0); /* on */
+    else if (data->status & UPS_ST_ON_BATTERY)
+        data->outlet_mog = (1u << 0); /* still on, running from battery */
+    else
+        data->outlet_mog = (1u << 1); /* off */
 
     return 0;
 }
 
-/* --- Dynamic reads (all descriptor-driven) --- */
+/* --- Dynamic reads --- */
 
 static int backups_read_dynamic(void *transport, ups_data_t *data)
 {
@@ -432,20 +650,17 @@ static int backups_read_dynamic(void *transport, ups_data_t *data)
     data->runtime_sec      = (uint32_t)hid_field_read_scaled(t->fd, t->f.runtime_to_empty);
     data->input_voltage    = hid_field_read_scaled(t->fd, t->f.input_voltage);
 
-    /* Standby topology: output IS the input (passthrough) when online.
-     * On battery the inverter targets the nominal config voltage. */
+    /* Output voltage: no dedicated sensor on Back-UPS HID.
+     * On battery → nominal config voltage; online → passthrough from input. */
     if (data->status & UPS_ST_ON_BATTERY)
         data->output_voltage = hid_field_read_scaled(t->fd, t->f.output_voltage);
     else
         data->output_voltage = data->input_voltage;
-    data->load_pct         = hid_field_read_scaled(t->fd, t->f.percent_load);
 
-    /* Output frequency: standard HID Frequency usage, value in Hz */
+    data->load_pct         = hid_field_read_scaled(t->fd, t->f.percent_load);
     data->output_frequency = hid_field_read_scaled(t->fd, t->f.output_frequency);
 
-    /* Derive output current from load % and nominal watts.
-     * No current sensor on standby units, but we can estimate:
-     * I = (load_pct / 100) * nominal_watts / output_voltage */
+    /* Derive output current: I = (load% / 100) * nominal_watts / output_voltage */
     if (data->output_voltage > 0 && t->nominal_watts > 0)
         data->output_current = (data->load_pct / 100.0)
                              * (double)t->nominal_watts
@@ -453,7 +668,21 @@ static int backups_read_dynamic(void *transport, ups_data_t *data)
     else
         data->output_current = 0;
 
-    /* Standby units don't have bypass or efficiency */
+    /* Timer fields from delay controls */
+    if (t->f.delay_before_shutdown) {
+        int32_t v = hid_field_read_raw(t->fd, t->f.delay_before_shutdown);
+        data->timer_shutdown = (int16_t)v;
+    }
+    if (t->f.delay_before_startup) {
+        int32_t v = hid_field_read_raw(t->fd, t->f.delay_before_startup);
+        data->timer_start = (int16_t)v;
+    }
+    if (t->f.delay_before_reboot) {
+        int32_t v = hid_field_read_raw(t->fd, t->f.delay_before_reboot);
+        data->timer_reboot = (int32_t)v;
+    }
+
+    /* No bypass or efficiency on Back-UPS */
     data->bypass_voltage   = 0;
     data->bypass_frequency = 0;
     data->efficiency       = -1;
@@ -473,11 +702,50 @@ static int backups_read_inventory(void *transport, ups_inventory_t *inv)
     if (fw)
         snprintf(inv->firmware, sizeof(inv->firmware), "%s", fw);
 
-    /* TODO: parse VA/W from model string or use a lookup table */
-    inv->nominal_va = 600;
-    inv->nominal_watts = 330;
-    inv->sog_config = 0;
+    /* Try descriptor first, then fall back to known model table */
+    inv->nominal_va = 0;
+    inv->nominal_watts = 0;
 
+    if (t->f.config_apparent_power) {
+        int32_t va = hid_field_read_raw(t->fd, t->f.config_apparent_power);
+        if (va > 0)
+            inv->nominal_va = (uint16_t)va;
+    }
+    if (t->f.config_active_power) {
+        int32_t w = hid_field_read_raw(t->fd, t->f.config_active_power);
+        if (w > 0)
+            inv->nominal_watts = (uint16_t)w;
+    }
+
+    if (inv->nominal_va > 0)
+        log_info("backups_hid: VA from descriptor — %u VA", inv->nominal_va);
+    if (inv->nominal_watts > 0)
+        log_info("backups_hid: watts from descriptor — %u W", inv->nominal_watts);
+
+    if (inv->nominal_va == 0 || inv->nominal_watts == 0) {
+        for (size_t i = 0; i < sizeof(known_models) / sizeof(known_models[0]); i++) {
+            if (strstr(inv->model, known_models[i].model)) {
+                if (inv->nominal_va == 0) {
+                    inv->nominal_va = known_models[i].va;
+                    log_info("backups_hid: VA from model lookup '%s' — %u VA",
+                             known_models[i].model, inv->nominal_va);
+                }
+                if (inv->nominal_watts == 0) {
+                    inv->nominal_watts = known_models[i].watts;
+                    log_info("backups_hid: watts from model lookup '%s' — %u W",
+                             known_models[i].model, inv->nominal_watts);
+                }
+                break;
+            }
+        }
+    }
+
+    if (inv->nominal_va == 0)
+        log_warn("backups_hid: could not determine VA rating");
+    if (inv->nominal_watts == 0)
+        log_warn("backups_hid: could not determine watt rating");
+
+    inv->sog_config = 0;
     t->nominal_watts = inv->nominal_watts;
 
     return 0;
@@ -499,13 +767,56 @@ static int backups_read_thresholds(void *transport,
 static int backups_cmd_shutdown(void *transport)
 {
     hid_transport_t *t = transport;
+    if (!t->f.delay_before_shutdown) return -1;
 
-    /* DelayBeforeShutdown (report 0x15): kills output after N seconds.
-     * Note: BE600M1 does not auto-restart after commanded shutdown —
-     * requires physical button press to restore output. This is a hardware
-     * limitation; APC.APCShutdownAfterDelay (0x60) is silently ignored. */
-    uint8_t buf[3] = { 0x15, 60, 0 };
-    return hid_set_feature(t->fd, 0x15, buf, sizeof(buf)) >= 0 ? 0 : -1;
+    /* Per APC AN178: write DelayBeforeStartup first so the UPS
+     * automatically restores output when AC returns, then write
+     * DelayBeforeShutdown to begin the shutdown countdown.
+     * Without the startup write, the UPS stays off permanently. */
+    if (t->f.delay_before_startup) {
+        /* 0 = start immediately when AC is restored */
+        uint8_t sbuf[3] = { t->f.delay_before_startup->report_id, 0, 0 };
+        hid_set_feature(t->fd, sbuf[0], sbuf, sizeof(sbuf));
+    }
+
+    uint8_t buf[3] = { t->f.delay_before_shutdown->report_id, 60, 0 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
+}
+
+static int backups_cmd_abort_shutdown(void *transport)
+{
+    hid_transport_t *t = transport;
+    if (!t->f.delay_before_shutdown) return -1;
+    /* Write -1 (0xFFFF) to abort any pending shutdown */
+    uint8_t buf[3] = { t->f.delay_before_shutdown->report_id, 0xFF, 0xFF };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
+}
+
+static int backups_cmd_battery_test(void *transport)
+{
+    hid_transport_t *t = transport;
+    if (!t->f.test) return -1;
+    /* Test: 1 = Quick test (§4.1.4) */
+    uint8_t buf[2] = { t->f.test->report_id, 0x01 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
+}
+
+static int backups_cmd_deep_test(void *transport)
+{
+    hid_transport_t *t = transport;
+    if (!t->f.test) return -1;
+    /* Test: 2 = Deep test / runtime calibration (§4.1.4) */
+    uint8_t buf[2] = { t->f.test->report_id, 0x02 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
+}
+
+static int backups_cmd_abort_test(void *transport)
+{
+    hid_transport_t *t = transport;
+    if (!t->f.test) return -1;
+    /* Test: 3 = Abort test (§4.1.4) */
+    uint8_t buf[2] = { t->f.test->report_id, 0x03 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
 static int backups_cmd_mute_alarm(void *transport)
@@ -526,51 +837,164 @@ static int backups_cmd_cancel_mute(void *transport)
     return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
-static int backups_cmd_battery_test(void *transport)
+static int backups_cmd_beep_test(void *transport)
 {
     hid_transport_t *t = transport;
-    if (!t->f.test) return -1;
-    /* Test: 1 = Quick test (§4.1.4) */
-    uint8_t buf[2] = { t->f.test->report_id, 0x01 };
+    if (!t->f.apc_lights_test) return -1;
+    /* APCLightsAndBeeperTest (FF86:72): write 1 to execute */
+    uint8_t buf[2] = { t->f.apc_lights_test->report_id, 0x01 };
+    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
+}
+
+static int backups_cmd_clear_faults(void *transport)
+{
+    hid_transport_t *t = transport;
+    if (!t->f.module_reset) return -1;
+    /* ModuleReset: 2 = Reset Module's Alarms (§4.1.4) */
+    uint8_t buf[2] = { t->f.module_reset->report_id, 0x02 };
     return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
 /* --- Config registers ---
  *
- * The config register "reg_addr" field stores the HID report ID resolved
- * at connect time. config_read and config_write use the cached field pointer
- * for reads and direct HID set_feature for writes. */
+ * The reg_addr field stores the HID report ID resolved at connect time.
+ * config_read and config_write use the cached field pointer for reads
+ * and direct HID set_feature for writes. */
 
 static const ups_bitfield_opt_t sensitivity_opts[] = {
-    { 1, "high",   "High" },
-    { 2, "medium", "Medium" },
-    { 3, "low",    "Low" },
+    { 0, "low",    "Low" },
+    { 1, "medium", "Medium" },
+    { 2, "high",   "High" },
 };
 
-/* These are populated with resolved report IDs at connect time via
- * backups_fixup_config_regs(). The initial reg_addr values are placeholders. */
+static const ups_bitfield_opt_t alarm_opts[] = {
+    { 1, "disabled", "Disabled" },
+    { 2, "enabled",  "Enabled" },
+    { 3, "muted",    "Muted" },
+};
+
+/* Config registers — populated with resolved report IDs at connect time.
+ * Initial reg_addr values are placeholders (0). */
 static ups_config_reg_t backups_config_regs[] = {
+    /* --- Group: transfer --- */
+    { "transfer_low", "Low Transfer Voltage", "V", "transfer",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "transfer_high", "High Transfer Voltage", "V", "transfer",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+
+    /* --- Group: power_quality --- */
     { "sensitivity", "Input Sensitivity", NULL, "power_quality",
       0, 1, UPS_CFG_BITFIELD, 1, 1,
       .meta.bitfield = { sensitivity_opts,
                          sizeof(sensitivity_opts) / sizeof(sensitivity_opts[0]) } },
-    { "transfer_low", "Low Transfer Voltage", "V", "transfer",
+
+    /* --- Group: alarm --- */
+    { "alarm_setting", "Audible Alarm", NULL, "alarm",
+      0, 1, UPS_CFG_BITFIELD, 1, 1,
+      .meta.bitfield = { alarm_opts,
+                         sizeof(alarm_opts) / sizeof(alarm_opts[0]) } },
+
+    /* --- Group: battery --- */
+    { "low_battery_warning", "Low Runtime Warning", "s", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "low_battery_threshold", "Low Battery Shutdown", "%", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "warning_capacity", "Warning Capacity Level", "%", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
       .meta.scalar = { 0, 0 } },
-    { "transfer_high", "High Transfer Voltage", "V", "transfer",
+
+    /* --- Group: info --- */
+    { "nominal_voltage", "Nominal Input Voltage", "V", "info",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 } },
+    { "nominal_va", "Nominal Apparent Power", "VA", "info",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 } },
+    { "design_capacity", "Design Capacity", "%", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
       .meta.scalar = { 0, 0 } },
 };
 
-/* Patch config_regs with resolved report IDs from the descriptor */
+#define BACKUPS_CFG_COUNT (sizeof(backups_config_regs) / sizeof(backups_config_regs[0]))
+
+/* Config register index constants (must match array order above) */
+enum {
+    CFG_TRANSFER_LOW = 0,
+    CFG_TRANSFER_HIGH,
+    CFG_SENSITIVITY,
+    CFG_ALARM_SETTING,
+    CFG_LOW_BATTERY_WARNING,
+    CFG_LOW_BATTERY_THRESHOLD,
+    CFG_WARNING_CAPACITY,
+    CFG_MANUFACTURE_DATE,
+    CFG_NOMINAL_VOLTAGE,
+    CFG_NOMINAL_VA,
+    CFG_DESIGN_CAPACITY,
+};
+
+/* Populate config register metadata from resolved HID fields */
+static void fixup_one_reg(ups_config_reg_t *reg, const hid_field_t *field)
+{
+    if (!field) return;
+    reg->reg_addr = field->report_id;
+    if (reg->type == UPS_CFG_SCALAR) {
+        reg->meta.scalar.min = field->logical_min;
+        reg->meta.scalar.max = field->logical_max;
+    }
+}
+
 static void fixup_config_regs(hid_transport_t *t)
 {
-    if (t->f.sensitivity)
-        backups_config_regs[0].reg_addr = t->f.sensitivity->report_id;
-    if (t->f.transfer_low)
-        backups_config_regs[1].reg_addr = t->f.transfer_low->report_id;
-    if (t->f.transfer_high)
-        backups_config_regs[2].reg_addr = t->f.transfer_high->report_id;
+    fixup_one_reg(&backups_config_regs[CFG_TRANSFER_LOW],       t->f.transfer_low);
+    fixup_one_reg(&backups_config_regs[CFG_TRANSFER_HIGH],      t->f.transfer_high);
+    fixup_one_reg(&backups_config_regs[CFG_SENSITIVITY],        t->f.apc_sensitivity);
+    fixup_one_reg(&backups_config_regs[CFG_ALARM_SETTING],      t->f.alarm_control);
+    fixup_one_reg(&backups_config_regs[CFG_LOW_BATTERY_WARNING], t->f.remaining_time_limit);
+    fixup_one_reg(&backups_config_regs[CFG_LOW_BATTERY_THRESHOLD], t->f.remaining_cap_limit);
+    fixup_one_reg(&backups_config_regs[CFG_WARNING_CAPACITY],   t->f.warning_cap_limit);
+    fixup_one_reg(&backups_config_regs[CFG_MANUFACTURE_DATE],   t->f.manufacture_date);
+    fixup_one_reg(&backups_config_regs[CFG_NOMINAL_VOLTAGE],    t->f.output_voltage);
+    fixup_one_reg(&backups_config_regs[CFG_NOMINAL_VA],         t->f.config_apparent_power);
+    fixup_one_reg(&backups_config_regs[CFG_DESIGN_CAPACITY],    t->f.design_capacity);
+}
+
+/* Convert USB battery ManufactureDate (85:85) to days since 2000-01-01.
+ * USB encoding: [(year-1980)*512 + month*32 + day]
+ * The API's date formatter uses "days since 2000-01-01" to render ISO dates,
+ * so we convert here to match the SRT driver's convention. */
+static uint16_t usb_date_to_days_since_2000(uint16_t raw)
+{
+    if (raw == 0) return 0;
+    int day   = raw & 0x1F;
+    int month = (raw >> 5) & 0x0F;
+    int year  = ((raw >> 9) & 0x7F) + 1980;
+
+    /* Convert to epoch, then to days since 2000-01-01 */
+    struct tm tm = { .tm_year = year - 1900, .tm_mon = month - 1,
+                     .tm_mday = day, .tm_isdst = -1 };
+    time_t t = mktime(&tm);
+    time_t epoch_2000 = 946684800; /* 2000-01-01 00:00:00 UTC */
+    if (t < epoch_2000) return 0;
+    return (uint16_t)((t - epoch_2000) / 86400);
+}
+
+/* Find the resolved HID field for a config register */
+static const hid_field_t *find_config_field(const hid_transport_t *t,
+                                             const ups_config_reg_t *reg)
+{
+    for (size_t i = 0; i < t->map.count; i++) {
+        if (t->map.fields[i].report_id == reg->reg_addr &&
+            t->map.fields[i].type == HID_FIELD_FEATURE)
+            return &t->map.fields[i];
+    }
+    return NULL;
 }
 
 static int backups_config_read(void *transport, const ups_config_reg_t *reg,
@@ -579,20 +1003,24 @@ static int backups_config_read(void *transport, const ups_config_reg_t *reg,
     (void)str_buf; (void)str_bufsz;
     hid_transport_t *t = transport;
 
-    /* Find the field by report ID (which was resolved from the descriptor) */
-    const hid_field_t *field = NULL;
-    for (size_t i = 0; i < t->map.count; i++) {
-        if (t->map.fields[i].report_id == reg->reg_addr &&
-            t->map.fields[i].type == HID_FIELD_FEATURE) {
-            field = &t->map.fields[i];
-            break;
-        }
-    }
-
+    const hid_field_t *field = find_config_field(t, reg);
     if (!field) return UPS_ERR_NOT_SUPPORTED;
 
     int32_t val = hid_field_read_raw(t->fd, field);
+
+    /* For bitfield registers with multi-byte HID fields (e.g., APC
+     * sensitivity is 24-bit but only the low byte is the enum value),
+     * mask to the byte that contains the setting. */
+    if (reg->type == UPS_CFG_BITFIELD && field->bit_size > 8)
+        val &= 0xFF;
+
+    /* Convert USB battery date encoding to days-since-2000 so the
+     * API's standard date formatter handles it identically to SRT. */
+    if (strcmp(reg->name, "manufacture_date") == 0)
+        val = (int32_t)usb_date_to_days_since_2000((uint16_t)val);
+
     if (raw_value) *raw_value = (uint16_t)val;
+
     return UPS_OK;
 }
 
@@ -603,18 +1031,34 @@ static int backups_config_write(void *transport, const ups_config_reg_t *reg, ui
     if (!reg->writable)
         return UPS_ERR_NOT_SUPPORTED;
 
-    /* Write via direct HID set_feature with the resolved report ID */
-    if (reg->type == UPS_CFG_BITFIELD) {
-        uint8_t buf[2] = { (uint8_t)reg->reg_addr, (uint8_t)value };
-        if (hid_set_feature(t->fd, (uint8_t)reg->reg_addr, buf, sizeof(buf)) < 0)
+    const hid_field_t *field = find_config_field(t, reg);
+    if (!field) return UPS_ERR_NOT_SUPPORTED;
+
+    /* Build write buffer: [report_id, data bytes...]
+     * Size = 1 (report ID) + ceil(bit_size / 8) */
+    uint16_t data_bytes = (uint16_t)((field->bit_size + 7u) / 8u);
+    uint8_t buf[8] = { 0 };
+    buf[0] = field->report_id;
+
+    if (reg->type == UPS_CFG_BITFIELD && data_bytes > 1) {
+        /* Multi-byte bitfield: read current report, modify only
+         * the value byte, preserve the rest */
+        uint8_t cur[8] = { 0 };
+        cur[0] = field->report_id;
+        uint16_t rlen = (uint16_t)(1u + data_bytes);
+        if (ioctl(t->fd, HIDIOCGFEATURE(rlen), cur) < 0)
             return UPS_ERR_IO;
+        memcpy(buf, cur, rlen);
+        buf[1] = (uint8_t)value;  /* enum value goes in low byte */
     } else {
-        uint8_t buf[3] = { (uint8_t)reg->reg_addr,
-                           (uint8_t)(value & 0xFF),
-                           (uint8_t)((value >> 8) & 0xFF) };
-        if (hid_set_feature(t->fd, (uint8_t)reg->reg_addr, buf, sizeof(buf)) < 0)
-            return UPS_ERR_IO;
+        buf[1] = (uint8_t)(value & 0xFF);
+        if (data_bytes > 1)
+            buf[2] = (uint8_t)((value >> 8) & 0xFF);
     }
+
+    uint16_t wlen = (uint16_t)(1u + data_bytes);
+    if (hid_set_feature(t->fd, buf[0], buf, wlen) < 0)
+        return UPS_ERR_IO;
 
     /* Read back and verify */
     uint16_t readback;
@@ -633,11 +1077,42 @@ static const ups_cmd_desc_t backups_commands[] = {
       UPS_CMD_SIMPLE, UPS_CMD_DANGER, UPS_CMD_IS_SHUTDOWN, 0,
       backups_cmd_shutdown, NULL },
 
-    { "battery_test", "Battery Test", "Run a battery self-test",
+    { "abort_shutdown", "Abort Shutdown", "Cancel a pending shutdown countdown",
+      "power", "Abort Shutdown?",
+      "This will cancel any pending shutdown countdown.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      backups_cmd_abort_shutdown, NULL },
+
+    { "battery_test", "Battery Test", "Run a quick battery self-test",
       "diagnostics", "Start Battery Test?",
       "This will run a brief self-test to verify battery health.",
       UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
       backups_cmd_battery_test, NULL },
+
+    { "runtime_cal", "Runtime Calibration", "Run a deep discharge calibration test",
+      "diagnostics", "Start Runtime Calibration?",
+      "This will discharge the battery to recalibrate runtime estimates. "
+      "The UPS will transfer to battery and run until low battery.",
+      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
+      backups_cmd_deep_test, NULL },
+
+    { "abort_runtime_cal", "Abort Test", "Cancel a running battery test or calibration",
+      "diagnostics", "Abort Test?",
+      "This will abort the current battery test or runtime calibration.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      backups_cmd_abort_test, NULL },
+
+    { "clear_faults", "Clear Faults", "Reset latched fault flags",
+      "diagnostics", "Clear Faults?",
+      "This will reset any latched alarm or fault indicators.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      backups_cmd_clear_faults, NULL },
+
+    { "beep_short", "Beep / LED Test", "Test the audible alarm and panel LEDs",
+      "alarm", "Run Beep Test?",
+      "This will briefly activate the audible alarm and panel LEDs.",
+      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
+      backups_cmd_beep_test, NULL },
 
     { "mute", "Mute Alarm", "Silence the UPS audible alarm",
       "alarm", "Mute Alarm?",
@@ -657,15 +1132,20 @@ static const ups_cmd_desc_t backups_commands[] = {
 const ups_driver_t ups_driver_backups_hid = {
     .name                = "backups_hid",
     .conn_type           = UPS_CONN_USB,
-    .topology            = UPS_TOPO_STANDBY,
+    .topology            = UPS_TOPO_STANDBY,  /* default; overridden by get_topology */
     .connect             = backups_connect,
     .disconnect          = backups_disconnect,
     .detect              = backups_detect,
-    .caps                = UPS_CAP_SHUTDOWN | UPS_CAP_BATTERY_TEST | UPS_CAP_MUTE,
+    .get_topology        = backups_get_topology,
+    /* Advertise all capabilities; individual handlers return -1 if
+     * the underlying HID field is not present on this device. */
+    .caps                = UPS_CAP_SHUTDOWN | UPS_CAP_BATTERY_TEST |
+                           UPS_CAP_RUNTIME_CAL | UPS_CAP_CLEAR_FAULTS |
+                           UPS_CAP_MUTE | UPS_CAP_BEEP,
     .freq_settings       = NULL,
     .freq_settings_count = 0,
     .config_regs         = backups_config_regs,
-    .config_regs_count   = sizeof(backups_config_regs) / sizeof(backups_config_regs[0]),
+    .config_regs_count   = BACKUPS_CFG_COUNT,
     .read_status         = backups_read_status,
     .read_dynamic        = backups_read_dynamic,
     .read_inventory      = backups_read_inventory,

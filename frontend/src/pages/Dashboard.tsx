@@ -1,5 +1,5 @@
 import { useApi } from '../hooks/useApi'
-import { PowerFlowSRT, PowerFlowStandby } from '../components/PowerFlow'
+import { PowerFlowSRT, PowerFlowLineInteractive, PowerFlowStandby } from '../components/PowerFlow'
 import type { UpsStatus } from '../types/ups'
 import { ST } from '../types/ups'
 import { fmtRuntime, fmtWatts, fmtVA, humanizeTransfer } from '../utils/format'
@@ -42,11 +42,11 @@ type PlaneStyle = { border: string; bg: string; accent: string }
 
 type UtilityHealth = 'he' | 'ok' | 'online' | 'degraded' | 'down'
 
-function classifyUtility(raw: number, isStandby: boolean): UtilityHealth {
+function classifyUtility(raw: number, canHE: boolean): UtilityHealth {
   if (raw & ST.ON_BATTERY)                        return 'down'
   if (raw & (ST.INPUT_BAD | ST.MAINS_BAD))        return 'degraded'
   if (raw & ST.HE_MODE)                           return 'he'
-  if (isStandby)                                  return 'ok'
+  if (!canHE)                                     return 'ok'
   return 'online'
 }
 
@@ -232,7 +232,7 @@ export default function Dashboard() {
   if (!s.connected) return (
     <div className="rounded-lg bg-yellow-900/30 border border-yellow-800 p-6 text-center">
       <p className="text-yellow-200 text-lg mb-1">No UPS Connected</p>
-      <p className="text-yellow-400/70 text-sm">{s.message}</p>
+      <p className="text-yellow-400/70 text-sm">Error: {s.message}</p>
     </div>
   )
 
@@ -249,13 +249,14 @@ export default function Dashboard() {
   /* Topology from driver */
   const topo = s.topology ?? 'online_double'
   const isDoubleConversion = topo === 'online_double'
+  const isLineInteractive = topo === 'line_interactive'
   const isStandby = topo === 'standby'
   const canBypass = isDoubleConversion
   const canHE = hasCap(caps, 'he_mode')
   const avr = detectAvr(inp?.voltage ?? 0, out?.voltage ?? 0)
 
   /* Classify planes */
-  const utilHealth = classifyUtility(raw, isStandby)
+  const utilHealth = classifyUtility(raw, canHE)
   const uStyle = utilityStyles[utilHealth]
   const { style: upStyle } = classifyUpsPlane(raw, canBypass)
   const { style: outStyle, badge: outBadge } = classifyOutput(raw, out?.load_pct ?? 0)
@@ -366,6 +367,20 @@ export default function Dashboard() {
           loadPct={out?.load_pct ?? 0}
           efficiency={s.efficiency ?? -1}
           outputFrequency={out?.frequency ?? 0}
+        />
+      )}
+      {isLineInteractive && (
+        <PowerFlowLineInteractive
+          statusRaw={raw}
+          inputVoltage={inp?.voltage ?? 0}
+          outputVoltage={out?.voltage ?? 0}
+          batteryCharge={bat?.charge_pct ?? 0}
+          batteryVoltage={bat?.voltage ?? 0}
+          batteryError={s.errors?.battery_system ?? 0}
+          loadPct={out?.load_pct ?? 0}
+          efficiency={s.efficiency ?? -1}
+          outputFrequency={out?.frequency ?? 0}
+          canHE={canHE}
         />
       )}
       {isStandby && (

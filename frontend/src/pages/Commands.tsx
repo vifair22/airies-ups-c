@@ -176,6 +176,7 @@ export default function Commands() {
         <h2 className="text-xl font-semibold mb-4">Commands</h2>
         <div className="rounded-lg bg-panel border border-edge text-center py-12">
           <p className="text-muted">UPS not connected. Commands unavailable.</p>
+
         </div>
       </div>
     )

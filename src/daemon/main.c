@@ -199,11 +199,14 @@ int main(int argc, char *argv[])
         }
 
         ups = ups_connect(&conn_params);
-        if (!ups) {
-            log_error("failed to connect to UPS — running without UPS");
-        } else {
-            log_info("UPS connected — driver: %s", ups_driver_name(ups));
+        while (!ups && running) {
+            log_warn("UPS not found — retrying in 5s");
+            sleep(5);
+            if (!running) break;
+            ups = ups_connect(&conn_params);
         }
+        if (ups)
+            log_info("UPS connected — driver: %s", ups_driver_name(ups));
     }
 
     /* --- Phase 3: Subsystems --- */
