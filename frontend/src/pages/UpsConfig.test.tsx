@@ -93,7 +93,7 @@ describe('UpsConfig', () => {
     renderWithRouter(<UpsConfig />)
 
     await waitFor(() => {
-      expect(screen.getByText(/No config registers available/)).toBeInTheDocument()
+      expect(screen.getByText(/Registers unavailable/)).toBeInTheDocument()
     })
   })
 

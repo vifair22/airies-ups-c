@@ -65,7 +65,7 @@ describe('PowerFlowSRT', () => {
     expect(hasText(container, 'INVERTER')).toBe(true)
     expect(hasText(container, 'OUTPUT')).toBe(true)
     expect(hasText(container, 'BATTERY')).toBe(true)
-    expect(hasText(container, 'STATIC BYPASS')).toBe(true)
+    expect(hasText(container, 'BYPASS')).toBe(true)
   })
 
   /* ── Online / Normal Operation ── */
@@ -97,9 +97,9 @@ describe('PowerFlowSRT', () => {
       expect(hasText(container, '54.6 VDC')).toBe(true)
     })
 
-    it('shows efficiency badge', () => {
+    it('shows load percentage', () => {
       const { container } = render(<PowerFlowSRT {...props()} />)
-      expect(hasText(container, '94% eff')).toBe(true)
+      expect(hasText(container, '23')).toBe(true)
     })
 
     it('has active flow lines on main path', () => {
@@ -199,7 +199,7 @@ describe('PowerFlowSRT', () => {
     it('bypass label uses yellow color for commanded bypass', () => {
       const { container } = render(<PowerFlowSRT {...bypassProps} />)
       const bypassLabel = Array.from(container.querySelectorAll('text')).find(t =>
-        t.textContent === 'STATIC BYPASS'
+        t.textContent === 'MAINTENANCE BYPASS'
       )
       /* Commanded bypass color = #eab308 (yellow) */
       expect(bypassLabel?.getAttribute('fill')).toBe('#eab308')
@@ -216,7 +216,7 @@ describe('PowerFlowSRT', () => {
     it('bypass label uses orange color for forced bypass', () => {
       const { container } = render(<PowerFlowSRT {...forcedBypassProps} />)
       const bypassLabel = Array.from(container.querySelectorAll('text')).find(t =>
-        t.textContent === 'STATIC BYPASS'
+        t.textContent === 'FAULT BYPASS'
       )
       /* Forced bypass color = #f97316 (orange) */
       expect(bypassLabel?.getAttribute('fill')).toBe('#f97316')
@@ -249,7 +249,7 @@ describe('PowerFlowSRT', () => {
     it('bypass label uses green (HE) color', () => {
       const { container } = render(<PowerFlowSRT {...heProps} />)
       const bypassLabel = Array.from(container.querySelectorAll('text')).find(t =>
-        t.textContent === 'STATIC BYPASS'
+        t.textContent === 'HE BYPASS'
       )
       /* HE color = #22c55e (same as active green) */
       expect(bypassLabel?.getAttribute('fill')).toBe('#22c55e')
@@ -420,8 +420,8 @@ describe('PowerFlowStandby', () => {
   describe('utility path, battery charging', () => {
     it('has battery charging flow active', () => {
       const { container } = render(<PowerFlowStandby {...props({ batteryCharge: 60 })} />)
-      /* input→switch, switch→output, switch↔battery = 3 */
-      expect(getFlowLineCount(container)).toBe(3)
+      /* input→switch, switch→output, switch↔inverter, inverter↔battery = 4 */
+      expect(getFlowLineCount(container)).toBe(4)
     })
 
     it('battery charging is slow animated', () => {

@@ -60,7 +60,7 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('No UPS Connected')).toBeInTheDocument()
     })
-    expect(screen.getByText('No device found')).toBeInTheDocument()
+    expect(screen.getByText(/No device found/)).toBeInTheDocument()
   })
 
   it('renders connected UPS with model and battery info', async () => {
