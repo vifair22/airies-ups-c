@@ -88,6 +88,7 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 ## Quick deploy
 
 ```bash
+./deploy.sh local        # native debug build → ~/.local/share/airies-ups
 ./deploy.sh              # full deploy to all hosts
 ./deploy.sh full upspi   # deploy to upspi only
 ./deploy.sh full upspi2  # deploy to upspi2 only
@@ -97,6 +98,7 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 
 | Command | What it does |
 |---------|-------------|
+| `./deploy.sh local` | Native debug build, copy binaries to `~/.local/share/airies-ups` |
 | `./deploy.sh [full] [target]` | Cross-compile locally, rsync binaries to Pi, restart service |
 | `./deploy.sh build [target]` | Cross-compile + rsync binaries (no restart) |
 | `./deploy.sh restart [target]` | Restart the service only (no build) |
@@ -244,24 +246,20 @@ c-utils must be built natively (not cross-compiled):
 make -C ../c-utils clean && make -C ../c-utils
 ```
 
-### Fresh install directory
+### Local install directory
 
-Create an isolated directory so the dev DB doesn't interfere with the repo:
+The local dev environment lives at `~/.local/share/airies-ups`. Build and deploy with:
 
 ```bash
-mkdir -p /tmp/airies-ups-test
-
-# Native debug build
-make clean && make BUILD_TYPE=debug _build
-
-# Copy binaries
-cp build/airies-upsd build/airies-ups /tmp/airies-ups-test/
+./deploy.sh local
 ```
 
-Create a minimal `config.yaml` — set `conn_type` to match your UPS:
+This runs a native debug build and copies the binaries to the install directory.
+
+On first setup, create a minimal `config.yaml` — set `conn_type` to match your UPS:
 
 ```bash
-cat > /tmp/airies-ups-test/config.yaml << 'EOF'
+cat > ~/.local/share/airies-ups/config.yaml << 'EOF'
 db:
   path: app.db
 ups:
@@ -270,7 +268,7 @@ ups:
   usb_pid: "0002"
 http:
   port: 8080
-  socket: /tmp/airies-ups-test.sock
+  socket: /tmp/airies-ups.sock
 pushover:
   token:
   user:
@@ -282,7 +280,7 @@ For serial (Modbus RTU), use `conn_type: serial` with `device`, `baud`, and `sla
 ### Start the daemon
 
 ```bash
-cd /tmp/airies-ups-test && ./airies-upsd
+cd ~/.local/share/airies-ups && ./airies-upsd
 ```
 
 On first run it creates `app.db`, runs all migrations, and starts the API on `:8080`. The UPS connection is deferred until the setup wizard completes (`setup.ups_done` flag in the DB).
@@ -296,6 +294,10 @@ cd frontend && bun run dev
 ```
 
 Vite serves on `localhost:5173` and proxies `/api` requests to `localhost:8080` (configured in `vite.config.ts`). Use this URL for development — it gives you hot-reload on frontend changes.
+
+### VS Code tasks
+
+All build, deploy, test, and run operations are available as VS Code tasks (`.vscode/tasks.json`). Run via `Ctrl+Shift+P` → "Tasks: Run Task".
 
 ### Identifying HID devices
 
@@ -316,7 +318,6 @@ Permissions: the hidraw device needs to be readable by your user. On dev machine
 ### Cleanup
 
 ```bash
-rm -rf /tmp/airies-ups-test
 # Kill the daemon if still running
 pkill -f airies-upsd
 ```

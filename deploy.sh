@@ -8,6 +8,7 @@
 #
 # Usage:
 #   ./deploy.sh              # full deploy to all hosts: cross-compile, sync, restart
+#   ./deploy.sh local        # native debug build + copy to local dev dir
 #   ./deploy.sh build        # cross-compile + sync (no service restart)
 #   ./deploy.sh restart      # restart the service (no build)
 #   ./deploy.sh install-service  # install systemd service file
@@ -27,6 +28,7 @@ declare -A HOSTS=(
 )
 
 PI_APP_DIR="/home/sysadmin/airies-ups"
+LOCAL_DIR="$HOME/.local/share/airies-ups"
 SERVICE="airies-ups.service"
 
 info()  { echo -e "\033[1;34m==>\033[0m $*"; }
@@ -42,6 +44,19 @@ resolve_targets() {
     else
         err "unknown target: $target (available: ${!HOSTS[*]})"
     fi
+}
+
+build_local() {
+    info "Building c-utils natively..."
+    make -C "$(dirname "$0")/../c-utils" clean && make -C "$(dirname "$0")/../c-utils" \
+        || err "c-utils build failed"
+    info "Building native debug binary..."
+    make clean && make embed-migrations && make BUILD_TYPE=debug _build \
+        || err "Local build failed"
+    mkdir -p "$LOCAL_DIR"
+    cp build/airies-upsd build/airies-ups "$LOCAL_DIR/"
+    info "Local deploy complete → $LOCAL_DIR"
+    ls -lh "$LOCAL_DIR/airies-upsd" "$LOCAL_DIR/airies-ups"
 }
 
 build_cross() {
@@ -82,6 +97,9 @@ TARGET="${2:-all}"
 TARGETS=$(resolve_targets "$TARGET")
 
 case "$ACTION" in
+    local)
+        build_local
+        ;;
     full)
         build_cross
         for t in $TARGETS; do
@@ -106,7 +124,7 @@ case "$ACTION" in
         done
         ;;
     *)
-        echo "Usage: $0 [full|build|restart|install-service] [upspi|upspi2|all]"
+        echo "Usage: $0 [local|full|build|restart|install-service] [upspi|upspi2|all]"
         exit 1
         ;;
 esac

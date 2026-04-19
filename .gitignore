@@ -2,7 +2,6 @@
 build/
 *.o
 *.d
-compile_commands.json
 
 # Coverage
 *.gcda
@@ -28,7 +27,6 @@ frontend/coverage/
 *.swp
 *.swo
 *~
-.vscode/
 .idea/
 
 # OS
