@@ -801,23 +801,13 @@ static int backups_cmd_battery_test(void *transport)
     return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
 }
 
-static int backups_cmd_deep_test(void *transport)
-{
-    hid_transport_t *t = transport;
-    if (!t->f.test) return -1;
-    /* Test: 2 = Deep test / runtime calibration (§4.1.4) */
-    uint8_t buf[2] = { t->f.test->report_id, 0x02 };
-    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
-}
-
-static int backups_cmd_abort_test(void *transport)
-{
-    hid_transport_t *t = transport;
-    if (!t->f.test) return -1;
-    /* Test: 3 = Abort test (§4.1.4) */
-    uint8_t buf[2] = { t->f.test->report_id, 0x03 };
-    return hid_set_feature(t->fd, buf[0], buf, sizeof(buf)) >= 0 ? 0 : -1;
-}
+/* Note: Test=2 (deep test / runtime calibration) and Test=3 (abort) are
+ * intentionally not exposed. Consumer Back-UPS firmware (BR/BN/BX) advertises
+ * the field but rejects deep test — it transitions immediately to "aborted"
+ * (state 4) without entering "in progress" (state 5). Calibration on these
+ * units is a front-panel LCD operation only (Test & Diags → Battery
+ * Calibration). Confirmed against BR1500MS2 FW:969.e2 and corroborated by
+ * NUT/apcupsd community reports and Schneider's own PowerChute docs. */
 
 static int backups_cmd_mute_alarm(void *transport)
 {
@@ -1089,19 +1079,6 @@ static const ups_cmd_desc_t backups_commands[] = {
       UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
       backups_cmd_battery_test, NULL },
 
-    { "runtime_cal", "Runtime Calibration", "Run a deep discharge calibration test",
-      "diagnostics", "Start Runtime Calibration?",
-      "This will discharge the battery to recalibrate runtime estimates. "
-      "The UPS will transfer to battery and run until low battery.",
-      UPS_CMD_SIMPLE, UPS_CMD_WARN, 0, 0,
-      backups_cmd_deep_test, NULL },
-
-    { "abort_runtime_cal", "Abort Test", "Cancel a running battery test or calibration",
-      "diagnostics", "Abort Test?",
-      "This will abort the current battery test or runtime calibration.",
-      UPS_CMD_SIMPLE, UPS_CMD_DEFAULT, 0, 0,
-      backups_cmd_abort_test, NULL },
-
     { "clear_faults", "Clear Faults", "Reset latched fault flags",
       "diagnostics", "Clear Faults?",
       "This will reset any latched alarm or fault indicators.",
@@ -1140,7 +1117,7 @@ const ups_driver_t ups_driver_backups_hid = {
     /* Advertise all capabilities; individual handlers return -1 if
      * the underlying HID field is not present on this device. */
     .caps                = UPS_CAP_SHUTDOWN | UPS_CAP_BATTERY_TEST |
-                           UPS_CAP_RUNTIME_CAL | UPS_CAP_CLEAR_FAULTS |
+                           UPS_CAP_CLEAR_FAULTS |
                            UPS_CAP_MUTE | UPS_CAP_BEEP,
     .freq_settings       = NULL,
     .freq_settings_count = 0,
