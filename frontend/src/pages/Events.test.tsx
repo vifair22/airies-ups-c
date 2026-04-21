@@ -76,7 +76,7 @@ describe('Events', () => {
 
     await userEvent.click(screen.getByText('Clear filters'))
     expect(screen.getByText('UPS Online')).toBeInTheDocument()
-    expect(screen.getByText(/3/)).toBeInTheDocument()
+    expect(screen.getByText('3 entries')).toBeInTheDocument()
   })
 
   it('shows loading skeleton while fetching', () => {
