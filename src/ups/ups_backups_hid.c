@@ -162,6 +162,7 @@ typedef struct {
 
 static const backups_model_spec_t known_models[] = {
     { "BE600M1",     600,  330 },
+    { "ES 600M1",    600,  330 },
     { "RS 1500MS2", 1500,  900 },
 };
 
