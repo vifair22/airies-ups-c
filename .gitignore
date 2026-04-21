@@ -3,15 +3,32 @@ build/
 *.o
 *.d
 
-# Binary
+# Coverage
+*.gcda
+*.gcno
+*.gcov
+
+# Binaries
 airies-ups
+airies-upsd
+
+# Runtime
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
 
 # Editor
 *.swp
 *.swo
 *~
-.vscode/
 .idea/
 
 # OS
 .DS_Store
+.cache/

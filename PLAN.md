@@ -127,7 +127,7 @@ Drivers also describe which telemetry fields they produce, so the storage and AP
 
 - Polls UPS status + dynamic blocks every 2s (configurable)
 - Feeds telemetry to DB (downsampled — e.g., write every 30s unless a value changes significantly)
-- Feeds state changes to event journal
+- Feeds state changes to event journal with granular per-bit transition events
 - Triggers alert engine on state transitions
 - Triggers shutdown orchestrator on shutdown condition
 
@@ -137,7 +137,7 @@ Current hysteresis-based system, extended:
 - Alert definitions stored in DB (threshold, deadband, severity)
 - Default alert set created on first run
 - Configurable via web UI
-- Fires events to journal + Pushover
+- Fires events to journal + Pushover (filtered by configurable severity threshold)
 
 ### Weather Subsystem
 
@@ -170,12 +170,12 @@ React + Tailwind, built on dev machine, static bundle served by daemon.
 
 | Page | Content |
 |------|---------|
-| Dashboard | Live UPS status, key metrics (voltage, load, charge, runtime, frequency, temp), outlet states, weather status, HE mode state |
+| Dashboard | Topology-aware power flow: summary bar (model/serial/rating/status), 4 overview cards (battery, load, output, input with voltage bar), 3 cascading planes (Utility, UPS, Output) with color-coded health states |
 | Telemetry | Historical charts (selectable time range, selectable metrics). Voltage, load, charge, runtime, temperature over time. |
-| Events | Filterable event journal. Severity, category, timestamp, title, message. |
-| Commands | Command panel: shutdown workflow (with dry-run), battery test, runtime cal, bypass toggle, freq tolerance, mute/beep, clear faults. All gated by driver capabilities. |
+| Events | Filterable event journal. Toggle filter chips for severity (info/warning/error/critical) and category (power/mode/fault/test/alert/system/weather/shutdown). |
+| Commands | Grouped by operational use: Power Control (bypass with state-aware toggle + modal, shutdown with dry-run), Diagnostics (battery test, runtime cal, beep test with stop), Alarm & Fault Management (mute/unmute, clear faults). All with confirmation modals and toast notifications. |
 | Config: UPS | Read/write UPS config registers. Grouped by category (transfer voltages, outlet delays, load shed, battery test interval, sensitivity). Shows current vs last-known values. |
-| Config: App | App settings: serial port, poll intervals, Pushover config, admin password change. |
+| Config: App | App settings: serial port, poll intervals, Pushover config, push notification severity, bypass voltage thresholds, admin password change. |
 | Config: Shutdown | Shutdown target and group management. Add/edit/remove targets, organize into groups, set execution order. Test individual targets. |
 | Config: Weather | Weather subsystem config: location, NWS zones, alert types, wind threshold, forecast keywords, enable/disable. Current weather status. |
 | Setup | First-run wizard (also accessible for reconfiguration). |
@@ -208,98 +208,161 @@ airies-ups app config set <key> <value>    # app config
 
 ## Implementation Phases
 
-### Phase 0: c-utils Library
+### Phase 0: c-utils Library -- COMPLETE
 
 Build the shared C application framework (`~/git/home/c-utils`). Static library (`libc-utils.a`) with headers. This is a standalone project used by airies-ups and future C apps.
 
 **Subsystems:**
-- [ ] **DB** — SQLite wrapper, thread-safe access, WAL mode
-- [ ] **Migrations** — numbered SQL files, SHA256 checksum tracking, savepoint-per-migration rollback, two-tier (lib + app)
-- [ ] **Config** — two-tier: core bootstrap (DB path, HTTP port, log level) via CLI flags/defaults + app-level config in DB with registration API (name, type, default, description), mutable at runtime
-- [ ] **Logging** — colored console + async SQLite persistence, log levels (debug/info/warn/error), auto-cleanup (configurable retention)
-- [ ] **Pushover** — DB-persisted notification queue, retry with exponential backoff, message splitting
-- [ ] **AppGuard** — lifecycle manager: ordered init (config → DB → migrations → logging → push), signal handlers, graceful shutdown in reverse order
-- [ ] **Error loop detector** — consecutive error tracking with normalization, threshold + cooldown + callback
-- [ ] Makefile (builds `libc-utils.a`), tests (cmocka), static analysis
+- [x] **DB** — SQLite wrapper, thread-safe access, WAL mode
+- [x] **Migrations** — numbered SQL files, SHA256 checksum tracking, savepoint-per-migration rollback, two-tier (lib + app)
+- [x] **Config** — two-tier: core bootstrap (DB path, HTTP port, log level) via CLI flags/defaults + app-level config in DB with registration API (name, type, default, description), mutable at runtime
+- [x] **Logging** — colored console + async SQLite persistence, log levels (debug/info/warn/error), auto-cleanup (configurable retention)
+- [x] **Pushover** — DB-persisted notification queue, retry with exponential backoff, message splitting
+- [x] **AppGuard** — lifecycle manager: ordered init (config → DB → migrations → logging → push), signal handlers, graceful shutdown in reverse order, clean self-restart via `appguard_restart()`
+- [x] **Error loop detector** — consecutive error tracking with normalization, threshold + cooldown + callback
+- [x] Makefile (builds `libc-utils.a`), tests (cmocka), static analysis
 
-### Phase 1: Foundation
+### Phase 1: Foundation -- COMPLETE
 
 Restructure airies-ups for the new architecture. No new features — everything that works today keeps working.
 
-- [ ] Integrate c-utils (link `libc-utils.a`, replace `log.h` and `pushover.h` with c-utils subsystems)
-- [ ] Split into daemon (`airies-upsd`) + CLI (`airies-ups`) binaries
-- [ ] Migrate app config from INI file to c-utils DB config (register keys at init, import INI on first run)
-- [ ] Implement HTTP server in daemon (embedded, minimal — just enough to serve API + static files)
-- [ ] Implement REST API layer (JSON request/response via cJSON)
-- [ ] Serve API over both TCP (web UI) and unix socket (CLI)
-- [ ] Route CLI through API (CLI is pure API client, no direct Modbus)
-- [ ] Auth system (admin user/password, hashed in DB, token-based sessions)
-- [ ] Makefile restructure for two binaries + c-utils linkage + frontend build integration
+- [x] Integrate c-utils (link `libc-utils.a`, replace `log.h` and `pushover.h` with c-utils subsystems)
+- [x] Split into daemon (`airies-upsd`) + CLI (`airies-ups`) binaries
+- [x] Migrate app config from INI file to c-utils DB config (register keys at init, import INI on first run)
+- [x] Implement HTTP server in daemon (libmicrohttpd)
+- [x] Implement REST API layer (JSON request/response via cJSON)
+- [x] Serve API over both TCP (web UI) and unix socket (CLI)
+- [x] Route CLI through API (CLI is pure API client, no direct Modbus)
+- [x] Auth system (admin user/password, hashed in DB, token-based sessions)
+- [x] Makefile restructure for two binaries + c-utils linkage + frontend build integration
 
-### Phase 2: Data Layer
+### Phase 2: Data Layer -- COMPLETE
 
 Build the storage and retrieval infrastructure.
 
-- [ ] Telemetry recording (monitor loop writes to SQLite, configurable sample interval)
-- [ ] Telemetry downsampling/retention (keep full resolution for 24h, downsample older data, configurable retention)
-- [ ] Event journal (replace ad-hoc log_msg + Pushover with structured events)
-- [ ] Pushover becomes a subscriber to the event journal (fires on configurable severity levels)
-- [ ] Config register descriptors in SRT + SMT drivers
-- [ ] UPS config snapshot read/store
-- [ ] Config register read/write API endpoints
+- [x] Telemetry recording (monitor loop writes to SQLite, configurable sample interval)
+- [x] Telemetry downsampling/retention (keep full resolution for 24h, downsample older data, configurable retention)
+- [x] Event journal (replace ad-hoc log_msg + Pushover with structured events)
+- [x] Pushover becomes a subscriber to the event journal (fires on configurable severity levels via `push.min_severity`)
+- [x] Config register descriptors in SRT driver (SMT partial — needs hardware testing)
+- [x] UPS config snapshot read/store
+- [x] Config register read/write API endpoints
 
-### Phase 3: Shutdown Orchestration
+### Phase 3: Shutdown Orchestration -- COMPLETE
 
 Replace hardcoded shutdown logic with the configurable system.
 
-- [ ] DB schema for targets and groups
-- [ ] Target execution engine (SSH key, SSH password, custom command)
-- [ ] Group execution engine (sequential groups, parallel within group)
-- [ ] Final phase: UPS shutdown command + self-shutdown
-- [ ] Dry-run mode
-- [ ] Per-target status reporting via API
-- [ ] API endpoints for CRUD on targets and groups
-- [ ] Migration: import existing config.ini shutdown targets into DB on first run
+- [x] DB schema for targets and groups
+- [x] Target execution engine (SSH key, SSH password, custom command)
+- [x] Group execution engine (sequential groups, parallel within group)
+- [x] Final phase: UPS shutdown command + self-shutdown
+- [x] Dry-run mode
+- [x] Per-target status reporting via API
+- [x] API endpoints for CRUD on targets and groups
+- [x] Migration: import existing config.ini shutdown targets into DB on first run
 
-### Phase 4: Weather Integration
+### Phase 4: Weather Integration -- COMPLETE
 
 Port weather monitor from Python to C, integrated into daemon.
 
-- [ ] NWS API client (libcurl, JSON parsing — need a lightweight JSON parser, maybe cJSON)
-- [ ] Alert zone polling
-- [ ] Forecast/wind polling with gridpoint resolution
-- [ ] HE inhibit/restore logic (port existing state machine)
-- [ ] Weather config in DB
-- [ ] Weather status + history in event journal
-- [ ] API endpoints for weather status and config
+- [x] NWS API client (libcurl, JSON parsing via cJSON)
+- [x] Alert zone polling
+- [x] Forecast/wind polling with gridpoint resolution
+- [x] HE inhibit/restore logic (port existing state machine)
+- [x] Weather config in DB
+- [x] Weather status + history in event journal
+- [x] API endpoints for weather status and config
 
-### Phase 5: Web Frontend
+### Phase 5: Web Frontend -- COMPLETE (except setup wizard)
 
 React + Tailwind SPA, built on dev machine, static bundle served by daemon.
 
-- [ ] Project setup (Vite + React + Tailwind)
-- [ ] Auth flow (login page, token management)
-- [ ] Dashboard page (live status, key metrics, outlet states, weather badge)
-- [ ] Telemetry page (historical charts — lightweight charting lib)
-- [ ] Events page (filterable table with severity icons)
-- [ ] Commands page (action buttons, confirmation dialogs, status feedback)
-- [ ] UPS Config page (register table with edit-in-place)
-- [ ] App Config page (settings forms)
-- [ ] Shutdown Config page (target/group CRUD, drag-to-reorder, test button)
-- [ ] Weather Config page (location, zones, thresholds, enable/disable)
-- [ ] Setup wizard (first-run flow)
-- [ ] Build pipeline: Vite builds to static dir, Makefile copies to daemon asset path
+- [x] Project setup (Vite + React + Tailwind)
+- [x] Auth flow (login page, token management)
+- [x] Dashboard page — topology-aware (SRT double-conversion / SMT line-interactive AVR)
+      - Summary bar: model, serial, rating, driver, status dot, HE inhibit badge
+      - 4 overview cards: Battery (charge/runtime/voltage), Load (% / watts / amps / VA), Output (voltage/frequency/outlet groups filtered by sog_config), Input (voltage with bar graph using transfer thresholds + warn_offset from alert config)
+      - 3 cascading planes with color-coded health:
+        - Utility: green (HE eligible), blue (online), orange (degraded), red (on battery)
+        - UPS: green (normal/AVR states), yellow (commanded bypass), orange (fault-forced bypass), red (fault), gray (off). AVR boost/buck/passthrough detection for SMT.
+        - Output: green (active), yellow (load elevated 60-80%), orange (load critical >80% or overload), red (off + fault), gray (off commanded)
+- [x] Telemetry page (historical charts with uPlot, date range picker)
+- [x] Events page (filterable by severity + category toggle chips, dynamic category list from data)
+- [x] Commands page — grouped by operational use:
+      - Power Control: bypass (state-aware toggle with voltage window + battery warning in modal), shutdown (dry-run + full with modal)
+      - Diagnostics: battery test, runtime calibration (with charge time + bad battery warnings), beep test (short + continuous with stop)
+      - Alarm & Fault Management: mute/unmute, clear faults
+      - All commands use confirmation modals; results shown as toasts
+- [x] UPS Config page (register table with edit-in-place, skeleton matches real data size)
+- [x] App Config page (settings forms)
+- [x] Shutdown Config page (target/group CRUD, drag-to-reorder, test button)
+- [x] Weather Config page (location, zones, thresholds, enable/disable)
+- [ ] Setup wizard (first-run flow):
+      - Change `on_first_run` from `CFG_FIRST_RUN_EXIT` to `CFG_FIRST_RUN_CONTINUE`
+      - Daemon starts with defaults on first run, no exit, no manual config editing
+      - Web UI serves immediately — the setup wizard IS the web UI
+      - Flow: set admin password → configure serial port → UPS auto-detects → optional Pushover/weather/shutdown
+      - Need "reconnect UPS" API endpoint so user doesn't restart daemon after changing serial port
+      - Gated behind `auth_is_setup()` check — if no password set, redirect to wizard
+- [x] Build pipeline: Vite builds to static dir, Makefile copies to daemon asset path
 
-### Phase 6: Polish + Hardening
+### Phase 6: Polish + Hardening -- IN PROGRESS
 
+- [x] Deploy script (`deploy.sh`) with modes: full, build, restart, frontend, install-service
+- [x] Deployment documentation (`DEPLOY.md`)
+- [x] Systemd service file (updated for new binary layout)
+- [x] API restart endpoint (`POST /api/restart`) using c-utils `appguard_restart()`
+- [x] UTC timestamps throughout (events, telemetry, retention, auth)
+- [x] Granular event system — per-bit state transition events replacing generic "UPS Status Change"
+- [x] Configurable Pushover severity threshold (`push.min_severity` app config)
 - [ ] Cross-compilation toolchain (ARM target from x86 dev machine)
 - [ ] Serial port forwarding for dev (socat TCP bridge)
-- [ ] Systemd service files for daemon
 - [ ] Telemetry retention policies and DB vacuuming
 - [ ] Error recovery (serial port reconnection, DB corruption handling)
 - [ ] API rate limiting
-- [ ] Graceful shutdown (drain in-flight requests, close DB cleanly)
 - [ ] Comprehensive testing
+
+### Data Capture Gaps
+
+Items not currently captured that should be addressed:
+
+- [ ] UPS config register change history — `ups_config` table exists but isn't populated on reads; should snapshot on change
+- [ ] Telemetry connectivity gaps — no record of when UPS was unreachable or how long
+- [ ] Outlet group states over time — MOG/SOG0/SOG1 state changes not tracked in telemetry
+- [ ] Cumulative energy consumption — `output_energy_wh` from dynamic block not recorded
+- [ ] Weather forecast data — severe/clear transitions go to events but raw NWS forecast data isn't stored
+- [ ] Auth/session audit log — login attempts, token creation not logged
+
+---
+
+## Upcoming Work
+
+### SMT Driver Verification
+
+SMT750RM2U hardware arriving soon for testing:
+- Verify all register reads/commands against actual hardware
+- Populate config register descriptors (currently empty TODO)
+- Confirm HE mode support (bit 13 marked as supported for SMX/SMT in register map)
+- Verify AVR voltage differential thresholds for boost/buck detection (currently 2V)
+- Test SOG availability per model via `sog_config` register
+
+### Weather Subsystem — Generic Parameter Control
+
+The weather subsystem currently hardcodes frequency tolerance as the parameter it controls for HE inhibit. This should be generalized:
+
+- **Any writable UPS register** should be selectable as the weather-controlled parameter, not just frequency tolerance. Configure register name + severe value + normal value in weather config.
+- **Read/save/restore pattern**: before writing the severe value, read and save the current register value. On restore, write back the saved value (what the register was before weather touched it), OR fall back to a configured default. This prevents the weather system from overwriting a manually-set custom value with a generic "normal" setting.
+- Makes the weather system work for any UPS and any parameter, not just freq tolerance on the SRT.
+
+### Bypass Voltage Thresholds
+
+Bypass voltage window (e.g. 90V–140V) is not exposed via Modbus — it's only configurable through the UPS LCD. Register probing confirmed the values don't appear in any documented or undocumented register range that changes when LCD settings are modified.
+
+Current approach: stored as app config keys (`bypass.voltage_high`, `bypass.voltage_low`) that the user sets to match their LCD. Surfaced in the bypass enable modal as context for the operator.
+
+### Dashboard Power Flow Visualization
+
+Future enhancement: connected graphic/lines between the 3 cascading planes showing energy flow from utility through UPS to output. Lines change color/thickness based on plane health states. Animated flow direction. Deferred until both topologies are running and validated.
 
 ---
 
@@ -314,8 +377,9 @@ React + Tailwind SPA, built on dev machine, static bundle served by daemon.
 - `libc-utils.a` — application framework (DB, logging, config, push, lifecycle)
 - `libmodbus` — Modbus RTU communication
 - `cJSON` — JSON API request/response (vendored via c-utils or separately)
-- HTTP server library — TBD (see open questions)
-- Frontend: React, Tailwind, Vite (dev-machine only, output is static assets)
+- `libmicrohttpd` — embedded HTTP server
+- `libcrypto` (OpenSSL) — auth password hashing
+- Frontend: React 19, Tailwind 4, Vite 8, uPlot 1.6 (dev-machine only, output is static assets)
 
 ### Retired
 - `log.h` — replaced by c-utils logging subsystem
@@ -323,10 +387,8 @@ React + Tailwind SPA, built on dev machine, static bundle served by daemon.
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-1. **HTTP server library** — `libmicrohttpd` is battle-tested and handles TLS, threading, etc. But it's a real dependency. A hand-rolled HTTP/1.1 server is feasible for this scope (single-client web UI, low request rate) and keeps deps minimal. Preference?
-2. **Charting library (frontend)** — lightweight options: Chart.js, uPlot (fast, small), Recharts (React-native). Preference?
-3. **TLS** — does the web UI need HTTPS, or is it behind a reverse proxy / LAN-only?
-4. **Telemetry retention** — how far back do you want to keep data? 30 days? 90? A year? This affects DB size and query performance.
-5. **Serial port scanning** — for the setup wizard, do you want the daemon to enumerate `/dev/ttyUSB*` and probe each for a Modbus response, or just present a dropdown of available ports?
+1. **HTTP server library** — `libmicrohttpd`. Battle-tested, handles threading, dual transport (TCP + unix socket).
+2. **Charting library (frontend)** — uPlot. Fast, small, lightweight.
+3. **TLS** — LAN-only, no HTTPS needed. Reverse proxy if required later.
