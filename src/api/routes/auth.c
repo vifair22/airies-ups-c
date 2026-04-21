@@ -1,5 +1,4 @@
 #include "api/routes/routes.h"
-#include "config/app_config.h"
 #include <cJSON.h>
 
 #include <stdio.h>
@@ -77,12 +76,12 @@ static api_response_t handle_auth_login(const api_request_t *req, void *ud)
     cJSON_Delete(body);
     auth_event(ctx->db, "info", "Login", "Admin login successful");
 
-    char *token = auth_create_token(ctx->db, 24);
+    char *token = auth_create_token(ctx->db, 24 * 365);
     if (!token) return api_error(500, "failed to create session");
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "token", token);
-    cJSON_AddNumberToObject(resp, "expires_in", 86400);
+    cJSON_AddNumberToObject(resp, "expires_in", 24 * 365 * 3600);
     char *json = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
     free(token);
