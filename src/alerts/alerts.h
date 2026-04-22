@@ -2,6 +2,7 @@
 #define ALERTS_H
 
 #include "ups/ups.h"
+#include "monitor/status_snapshot.h"
 #include <cutils/db.h>
 
 /* --- Alert Engine ---
@@ -49,6 +50,16 @@ typedef void (*alert_notify_fn)(const char *severity, const char *title,
 
 /* Initialize alert state (all clear). */
 void alerts_init(alert_state_t *state);
+
+/* Seed the alert state's "previous observation" fields from a persisted
+ * snapshot. Call after alerts_init when a snapshot is available so the
+ * first alerts_check on daemon startup doesn't re-fire alerts for
+ * conditions that were already active when the daemon last ran. The
+ * threshold-tracker fields (input_high/input_low/load_high/bat_low) are
+ * NOT seeded — those re-converge naturally within a few polls and have
+ * no edge-trigger persistence concern. */
+void alerts_seed_from_snapshot(alert_state_t *state,
+                               const status_snapshot_t *snap);
 
 /* Load alert config from c-utils config system. */
 alert_config_t alerts_load_config(const void *cfg);

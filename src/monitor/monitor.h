@@ -3,6 +3,7 @@
 
 #include "ups/ups.h"
 #include "monitor/retention.h"
+#include "monitor/status_snapshot.h"
 #include <cutils/db.h>
 #include <cutils/config.h>
 
@@ -67,6 +68,12 @@ int monitor_is_connected(monitor_t *mon);
 void monitor_fire_event(monitor_t *mon, const char *severity,
                         const char *category, const char *title,
                         const char *message);
+
+/* Get a copy of the loaded status snapshot. The alert engine seeds its
+ * prev fields from this so it doesn't re-fire alerts on startup for
+ * conditions that were already active when the daemon last shut down.
+ * Safe to call after monitor_start; returns 0 on success. */
+int monitor_get_snapshot(monitor_t *mon, status_snapshot_t *out);
 
 /* HE inhibit state */
 int monitor_he_inhibit_active(monitor_t *mon);

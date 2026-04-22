@@ -62,6 +62,7 @@ API_SRCS   = src/api/server.c src/api/auth.c \
              src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
              src/monitor/retention.c \
+             src/monitor/status_snapshot.c \
              src/alerts/alerts.c \
              src/shutdown/shutdown.c \
              src/weather/weather.c
@@ -265,6 +266,10 @@ $(eval $(call build_test,test_config_validation,\
   tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS),$(TEST_DIR),))
 
+$(eval $(call build_test,test_status_snapshot,\
+  tests/test_status_snapshot.c src/monitor/status_snapshot.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
 # --- Coverage builds (same definitions, --coverage flag) ---
 
 $(eval $(call build_test,test_ups_strings,\
@@ -295,9 +300,13 @@ $(eval $(call build_test,test_config_validation,\
   tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_status_snapshot,\
+  tests/test_status_snapshot.c src/monitor/status_snapshot.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_status_snapshot
 
 # --- Run targets ---
 
