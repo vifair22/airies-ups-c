@@ -39,6 +39,8 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
             cJSON_AddNumberToObject(obj, "min", reg->meta.scalar.min);
             cJSON_AddNumberToObject(obj, "max", reg->meta.scalar.max);
         }
+        if (reg->meta.scalar.step != 0)
+            cJSON_AddNumberToObject(obj, "step", reg->meta.scalar.step);
     } else if (reg->type == UPS_CFG_BITFIELD) {
         cJSON_AddStringToObject(obj, "type", "bitfield");
         for (size_t i = 0; i < reg->meta.bitfield.count; i++) {
@@ -57,8 +59,11 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
             cJSON_AddItemToArray(opts, o);
         }
         cJSON_AddItemToObject(obj, "options", opts);
+        cJSON_AddBoolToObject(obj, "strict", reg->meta.bitfield.strict);
     } else if (reg->type == UPS_CFG_STRING) {
         cJSON_AddStringToObject(obj, "type", "string");
+        if (reg->meta.string.max_chars != 0)
+            cJSON_AddNumberToObject(obj, "max_chars", (double)reg->meta.string.max_chars);
         if (str_val)
             cJSON_AddStringToObject(obj, "string_value", str_val);
     }
@@ -140,6 +145,33 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     cJSON_Delete(body);
 
     int rc = ups_config_write(ctx->ups, reg, val);
+
+    /* Validation failure is an operator error, not a UPS/network error —
+     * surface it as HTTP 400 with enough metadata for the frontend to
+     * render an inline explanation without re-fetching the register. */
+    if (rc == UPS_ERR_INVALID_VALUE) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "out_of_range");
+        cJSON_AddStringToObject(err, "register", reg->name);
+        cJSON_AddNumberToObject(err, "attempted_value", val);
+        if (reg->type == UPS_CFG_SCALAR) {
+            if (reg->meta.scalar.min != 0 || reg->meta.scalar.max != 0) {
+                cJSON_AddNumberToObject(err, "min", reg->meta.scalar.min);
+                cJSON_AddNumberToObject(err, "max", reg->meta.scalar.max);
+            }
+            if (reg->meta.scalar.step != 0)
+                cJSON_AddNumberToObject(err, "step", reg->meta.scalar.step);
+        } else if (reg->type == UPS_CFG_BITFIELD) {
+            cJSON *accepted = cJSON_CreateArray();
+            for (size_t i = 0; i < reg->meta.bitfield.count; i++)
+                cJSON_AddItemToArray(accepted,
+                    cJSON_CreateNumber(reg->meta.bitfield.opts[i].value));
+            cJSON_AddItemToObject(err, "accepted_values", accepted);
+        }
+        char *ejson = cJSON_PrintUnformatted(err);
+        cJSON_Delete(err);
+        return api_ok_status(400, ejson);
+    }
 
     uint16_t readback = 0;
     ups_config_read(ctx->ups, reg, &readback, NULL, 0);

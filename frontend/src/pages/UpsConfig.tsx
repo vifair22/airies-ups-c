@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { useApi, apiPost } from '../hooks/useApi'
-import type { ConfigReg } from '../types/config'
+import { useApi } from '../hooks/useApi'
+import type { ConfigReg, ConfigWriteError } from '../types/config'
 
 export default function UpsConfig() {
   const { data: regs, error, loading, refetch } = useApi<ConfigReg[]>('/api/config/ups')
   const [saving, setSaving] = useState<string | null>(null)
-  const [writeResult, setWriteResult] = useState<{ name: string; result: string } | null>(null)
+  const [writeResult, setWriteResult] = useState<{ name: string; result: string; detail?: string } | null>(null)
 
   if (loading) return (
     <div>
@@ -64,13 +64,37 @@ export default function UpsConfig() {
   const handleWrite = async (name: string, value: number) => {
     setSaving(name)
     try {
-      const res = await apiPost<{ result: string }>('/api/config/ups', { name, value })
-      setWriteResult({ name, result: res.result })
-      await refetch()
-      setTimeout(() => setWriteResult(null), 4000)
+      /* Use fetch directly so we can distinguish 400 (operator error,
+       * structured ConfigWriteError body) from 200 (write attempt,
+       * with result=written|rejected) and from 5xx (UPS/network). */
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch('/api/config/ups', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ name, value }),
+      })
+      const body = await res.json()
+      if (res.status === 400 && body && body.error === 'out_of_range') {
+        const e = body as ConfigWriteError
+        let detail = `value ${e.attempted_value} is out of range`
+        if (e.min !== undefined && e.max !== undefined)
+          detail = `value ${e.attempted_value} outside ${e.min}–${e.max}`
+        else if (e.accepted_values)
+          detail = `value ${e.attempted_value} is not one of ${e.accepted_values.join(', ')}`
+        setWriteResult({ name, result: 'invalid', detail })
+      } else if (res.ok && body && body.result) {
+        setWriteResult({ name, result: body.result })
+        await refetch()
+      } else {
+        setWriteResult({ name, result: 'error' })
+      }
+      setTimeout(() => setWriteResult(null), 5000)
     } catch {
       setWriteResult({ name, result: 'error' })
-      setTimeout(() => setWriteResult(null), 4000)
+      setTimeout(() => setWriteResult(null), 5000)
     }
     setSaving(null)
   }
@@ -120,6 +144,7 @@ export default function UpsConfig() {
                       saving={saving}
                       onWrite={handleWrite}
                       feedback={writeResult?.name === reg.name ? writeResult.result : null}
+                      feedbackDetail={writeResult?.name === reg.name ? writeResult.detail : undefined}
                     />
                   ))}
               </>
@@ -131,12 +156,13 @@ export default function UpsConfig() {
   )
 }
 
-function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
+function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail }: {
   reg: ConfigReg
   displayValue: string
   saving: string | null
   onWrite: (name: string, value: number) => void
   feedback: string | null
+  feedbackDetail?: string
 }) {
   const [editVal, setEditVal] = useState<string>('')
   const [editing, setEditing] = useState(false)
@@ -145,11 +171,13 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
     ? 'bg-green-900/20 border-t border-edge'
     : feedback === 'rejected'
       ? 'bg-yellow-900/20 border-t border-edge'
-      : feedback === 'error'
-        ? 'bg-red-900/20 border-t border-edge'
-        : saving === reg.name
-          ? 'bg-blue-900/10 border-t border-edge'
-          : 'border-t border-edge hover:bg-panel/30'
+      : feedback === 'invalid'
+        ? 'bg-amber-900/20 border-t border-edge'
+        : feedback === 'error'
+          ? 'bg-red-900/20 border-t border-edge'
+          : saving === reg.name
+            ? 'bg-blue-900/10 border-t border-edge'
+            : 'border-t border-edge hover:bg-panel/30'
 
   return (
     <tr className={`transition-colors duration-300 ${rowBg}`}>
@@ -167,12 +195,19 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
       <td className="px-4 py-2 text-right text-faint font-mono text-xs">{reg.raw_value}</td>
       <td className="px-4 py-2 text-right">
         {feedback && (
-          <span className={`text-xs font-medium ${
-            feedback === 'written' ? 'text-green-400'
-            : feedback === 'rejected' ? 'text-yellow-400'
-            : 'text-red-400'
-          }`}>
-            {feedback === 'written' ? 'saved' : feedback === 'rejected' ? 'rejected by UPS' : 'error'}
+          <span
+            title={feedbackDetail}
+            className={`text-xs font-medium ${
+              feedback === 'written' ? 'text-green-400'
+              : feedback === 'rejected' ? 'text-yellow-400'
+              : feedback === 'invalid' ? 'text-amber-400'
+              : 'text-red-400'
+            }`}
+          >
+            {feedback === 'written' ? 'saved'
+              : feedback === 'rejected' ? 'rejected by UPS'
+              : feedback === 'invalid' ? (feedbackDetail || 'invalid value')
+              : 'error'}
           </span>
         )}
         {!feedback && reg.writable && !editing && (
@@ -199,14 +234,26 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback }: {
                 ))}
               </select>
             ) : (
-              <input
-                type="number"
-                value={editVal}
-                onChange={(e) => setEditVal(e.target.value)}
-                min={reg.min}
-                max={reg.max}
-                className="bg-field border border-edge-strong rounded px-2 py-1 text-xs w-20 text-right"
-              />
+              <>
+                <input
+                  type="number"
+                  value={editVal}
+                  onChange={(e) => setEditVal(e.target.value)}
+                  min={reg.min}
+                  max={reg.max}
+                  step={reg.step ?? 1}
+                  className="bg-field border border-edge-strong rounded px-2 py-1 text-xs w-20 text-right"
+                />
+                {/* Range hint — visible while editing so the operator
+                    sees the constraint before clicking Save. The same
+                    bounds are enforced server-side via the descriptor's
+                    meta.scalar.{min,max} (see ups_config_validate). */}
+                {reg.min !== undefined && reg.max !== undefined && (
+                  <span className="text-[10px] text-faint whitespace-nowrap">
+                    {reg.min}–{reg.max}{reg.unit ? ` ${reg.unit}` : ''}
+                  </span>
+                )}
+              </>
             )}
             <button
               onClick={() => { onWrite(reg.name, parseInt(editVal)); setEditing(false) }}

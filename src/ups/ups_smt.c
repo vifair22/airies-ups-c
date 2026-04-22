@@ -369,15 +369,26 @@ enum {
     CFG_COUNT
 };
 
+/* BatteryTestIntervalSetting_BF: AN-176 defines six values (bits 0..5).
+ * SMT firmware (verified on SMT1500RM2UC FW UPS 04.1) rejects bits 2
+ * (OnStartUpPlus7 = value 4) and 3 (OnStartUpPlus14 = value 8) with
+ * Modbus exception 0x04 — same constraint as the SRT line. The bits
+ * are spec-defined but apparently never wired into the operational
+ * firmware. Strict-on validation in the registry blocks writes of
+ * these values before they hit the wire.
+ *
+ * Do not "fix" the gaps by re-adding 4/8 here without verifying on the
+ * specific firmware in question. See APC_SMT_MODBUS_REFERENCE.md
+ * "Battery test interval — register 1024" for reproduction details. */
 static const ups_bitfield_opt_t smt_bat_test_opts[] = {
     { 1,  "never",         "Never" },
     { 2,  "onstart_only",  "Startup Only" },
-    { 4,  "onstart_plus_7","Startup + Every 7 Days" },
-    { 8,  "onstart_plus_14","Startup + Every 14 Days" },
     { 16, "onstart_7d",    "Startup + 7 Days Since Test" },
     { 32, "onstart_14d",   "Startup + 14 Days Since Test" },
 };
 
+/* SensitivitySetting_BF: AN-176 defines three values, all verified
+ * accepted on SMT1500RM2UC FW UPS 04.1. */
 static const ups_bitfield_opt_t smt_sensitivity_opts[] = {
     { 1, "normal",  "Normal (minimum line deviations to load)" },
     { 2, "reduced", "Reduced (more line deviations to load)" },
@@ -406,17 +417,20 @@ static const ups_config_reg_t smt_config_regs[] = {
         "bat_test_interval", "Battery Test Interval", NULL, "battery",
         1024, 1, UPS_CFG_BITFIELD, 1, 1,
         .meta.bitfield = { smt_bat_test_opts,
-                           sizeof(smt_bat_test_opts)/sizeof(smt_bat_test_opts[0]) } },
+                           sizeof(smt_bat_test_opts)/sizeof(smt_bat_test_opts[0]),
+                           1 /* strict */ } },
     [CFG_SENSITIVITY] = {
         "sensitivity", "Line Sensitivity", NULL, "input",
         1028, 1, UPS_CFG_BITFIELD, 1, 1,
         .meta.bitfield = { smt_sensitivity_opts,
-                           sizeof(smt_sensitivity_opts)/sizeof(smt_sensitivity_opts[0]) } },
+                           sizeof(smt_sensitivity_opts)/sizeof(smt_sensitivity_opts[0]),
+                           1 /* strict */ } },
     [CFG_OUTPUT_VOLTAGE_SETTING] = {
         "output_voltage_setting", "Output Voltage Setting", NULL, "output",
         592, 1, UPS_CFG_BITFIELD, 1, 0,
         .meta.bitfield = { smt_voltage_opts,
-                           sizeof(smt_voltage_opts)/sizeof(smt_voltage_opts[0]) } },
+                           sizeof(smt_voltage_opts)/sizeof(smt_voltage_opts[0]),
+                           1 /* strict */ } },
     [CFG_MANUFACTURE_DATE] = {
         "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
         591, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
@@ -434,15 +448,29 @@ static const ups_config_reg_t smt_config_regs[] = {
     [CFG_MOG_MIN_RETURN_RUNTIME] = {
         "mog_min_return_runtime", "MOG Minimum Return Runtime", "s", "outlet_delays",
         1033, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    /* Load Shed registers (1054, 1056, 1064, 1068, 1072, 1073) — declared
+     * in 990-9840B as RW for SMX/SMT but not implemented for write on
+     * SMT1500RM2UC FW UPS 04.1 (verified by probe: writes to 1064 and
+     * 1072 return Modbus exception 0x02 "Illegal Data Address"; reads
+     * return AN-176 §3.2.2 "not applicable" sentinels: 0x0000 for the
+     * config bitfields, 0xFFFF for the threshold scalars). Likely the
+     * whole load-shed feature is gated on a firmware capability bit
+     * we don't have on this vintage.
+     *
+     * Marked writable=0 so the UI offers no Edit button rather than
+     * letting the user attempt writes that always fail. Re-verify on
+     * FW 18.x — newer firmware may implement load shed, in which case
+     * flip these back to writable=1 (and re-evaluate whether 65535
+     * functions as a "disabled" sentinel on the threshold registers). */
     [CFG_MOG_LOADSHED_CONFIG] = {
         "mog_loadshed_config", "MOG Load Shed Config", NULL, "load_shed",
-        1054, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+        1054, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
     [CFG_MOG_LOADSHED_RUNTIME] = {
         "mog_loadshed_runtime", "MOG Load Shed Runtime Threshold", "s", "load_shed",
-        1072, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1072, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
     [CFG_MOG_LOADSHED_TIME_ON_BAT] = {
         "mog_loadshed_time_on_bat", "MOG Load Shed Time on Battery", "s", "load_shed",
-        1073, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1073, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
 
     /* SOG0 — narrowed away by resolve_config_regs when SOG0 absent */
     [CFG_SOG0_TURN_OFF_DELAY] = {
@@ -454,15 +482,17 @@ static const ups_config_reg_t smt_config_regs[] = {
     [CFG_SOG0_MIN_RETURN_RUNTIME] = {
         "sog0_min_return_runtime", "SOG0 Minimum Return Runtime", "s", "outlet_delays",
         1038, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    /* SOG0 Load Shed — same firmware-gap as MOG above; see comment near
+     * CFG_MOG_LOADSHED_CONFIG. */
     [CFG_SOG0_LOADSHED_CONFIG] = {
         "sog0_loadshed_config", "SOG0 Load Shed Config", NULL, "load_shed",
-        1056, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+        1056, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
     [CFG_SOG0_LOADSHED_RUNTIME] = {
         "sog0_loadshed_runtime", "SOG0 Load Shed Runtime Threshold", "s", "load_shed",
-        1064, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1064, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
     [CFG_SOG0_LOADSHED_TIME_ON_BAT] = {
         "sog0_loadshed_time_on_bat", "SOG0 Load Shed Time on Battery", "s", "load_shed",
-        1068, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1068, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
 
     /* SOG1 */
     [CFG_SOG1_TURN_OFF_DELAY] = {
@@ -474,15 +504,18 @@ static const ups_config_reg_t smt_config_regs[] = {
     [CFG_SOG1_MIN_RETURN_RUNTIME] = {
         "sog1_min_return_runtime", "SOG1 Minimum Return Runtime", "s", "outlet_delays",
         1043, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    /* SOG1 Load Shed — same firmware-gap as MOG / SOG0; see comment near
+     * CFG_MOG_LOADSHED_CONFIG. (resolve_config_regs drops these on SKUs
+     * without SOG1 anyway.) */
     [CFG_SOG1_LOADSHED_CONFIG] = {
         "sog1_loadshed_config", "SOG1 Load Shed Config", NULL, "load_shed",
-        1058, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+        1058, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
     [CFG_SOG1_LOADSHED_RUNTIME] = {
         "sog1_loadshed_runtime", "SOG1 Load Shed Runtime Threshold", "s", "load_shed",
-        1065, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1065, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
     [CFG_SOG1_LOADSHED_TIME_ON_BAT] = {
         "sog1_loadshed_time_on_bat", "SOG1 Load Shed Time on Battery", "s", "load_shed",
-        1069, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1069, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
 
     /* SOG2 */
     [CFG_SOG2_TURN_OFF_DELAY] = {
@@ -494,15 +527,16 @@ static const ups_config_reg_t smt_config_regs[] = {
     [CFG_SOG2_MIN_RETURN_RUNTIME] = {
         "sog2_min_return_runtime", "SOG2 Minimum Return Runtime", "s", "outlet_delays",
         1048, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+    /* SOG2 Load Shed — same firmware-gap as the other groups. */
     [CFG_SOG2_LOADSHED_CONFIG] = {
         "sog2_loadshed_config", "SOG2 Load Shed Config", NULL, "load_shed",
-        1060, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+        1060, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
     [CFG_SOG2_LOADSHED_RUNTIME] = {
         "sog2_loadshed_runtime", "SOG2 Load Shed Runtime Threshold", "s", "load_shed",
-        1066, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1066, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
     [CFG_SOG2_LOADSHED_TIME_ON_BAT] = {
         "sog2_loadshed_time_on_bat", "SOG2 Load Shed Time on Battery", "s", "load_shed",
-        1070, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
+        1070, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
 };
 
 _Static_assert(sizeof(smt_config_regs) / sizeof(smt_config_regs[0]) == CFG_COUNT,

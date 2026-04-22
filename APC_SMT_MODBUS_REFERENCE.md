@@ -18,12 +18,14 @@ The companion SRT reference (`APC_SRT_MODBUS_REFERENCE.md`) covers a different m
 | `UPSStatusChangeCause_EN` (reg 2) | values 0–30 per AN-176 | TBD | APC may have added new transition causes; unknown values pass through untouched as integers. |
 | Status bit 13 (HighEfficiency) | observed set on idle | TBD | Newer firmware may split HE into sub-modes that this single bit can no longer distinguish. |
 | `SOGRelayConfigSetting_BF` (reg 590) | `0x0003` (MOG + SOG0) on this SKU | TBD per SKU | Larger SMTs (SMT3000, SMTLxxxRM) may light up SOG1/SOG2/SOG3. The driver's `resolve_config_regs` already adapts. |
-| `Output.SensitivitySetting_BF` (reg 1028) | bits 0/1/2 (Normal/Reduced/Low) | TBD | If APC has added a fourth setting, the driver's bitfield options need a new entry. |
+| `Output.SensitivitySetting_BF` (reg 1028) | bits 0/1/2 all writable (Normal/Reduced/Low) — verified by probe | TBD | If APC has added a fourth setting, the driver's bitfield options need a new entry. |
 | `Output.VoltageACSetting_BF` short form (reg 592) | bits 0–6 + bit 11 | TBD | The 32-bit long form at reg 644 already lists VAC100_200, VAC115, VAC125 and split-phase auto-select; newer firmware may rely on those instead. |
 | SKU naming pattern | `SMT1500RM2UC` matches `"SMT"` substring | assume stable | If APC ever ships a newer line with a non-"SMT" prefix on the SKU, the driver's detect needs to widen. |
-| `BatteryTestIntervalSetting_BF` (reg 1024) | bits 0–5 | TBD | Could grow new options. |
+| `BatteryTestIntervalSetting_BF` (reg 1024) | bits 0/1/4/5 accepted, bits 2/3 firmware-rejected — verified by probe | TBD | Same constraint as the SRT line. Driver omits bits 2/3 from `smt_bat_test_opts`. |
 | Bypass-related registers (147, 148, 149) | `0x0000` / `0xFFFF` (N/A) | assume stable | Bypass is fundamentally not a feature of line-interactive topology, so a firmware update is unlikely to change this. |
 | `Output.AcceptableFrequencySetting_BF` (reg 593) | `0x0000` (N/A) | assume stable | Per 990-9840B this register is SRT/SURTD-only; same reasoning as bypass. |
+| Timing/runtime scalar range (regs 1029, 1030, 1033, 1034, 1035, 1038) | 0..32767 enforced (writes >= 32768 return modbus exc 0x04) — verified by probe | TBD | Spec says UINT16 (0..65535); firmware enforces signed int16 range. Driver descriptors set `meta.scalar.max = 32767` to match. |
+| Load Shed registers (regs 1054, 1056, 1064, 1068, 1072, 1073) | **Not implemented for write** — Illegal Data Address on every write attempt; reads return AN-176 "not applicable" sentinels (`0x0000` / `0xFFFF`) — verified by probe | TBD | Driver flips `writable=0` on these descriptors. Re-verify on FW 18.x — newer firmware may implement load shed and possibly use 65535 as a "disabled" sentinel on the threshold registers. See "Implementation gaps on FW UPS 04.1" section below for full details. |
 
 **When you re-probe against a newer unit:**
 
@@ -379,16 +381,24 @@ The 32-bit form at register 644–645 lists the same voltage options plus extras
 
 ### Battery test interval — register 1024 (`BatteryTestIntervalSetting_BF`, RW)
 
-| Bit | Setting |
-|-----|---------|
-| 0 | Never |
-| 1 | OnStartUpOnly |
-| 2 | OnStartUpPlus7 (startup + every 7 days) |
-| 3 | OnStartUpPlus14 |
-| 4 | OnStartUp7Since (every 7 days since last test, observed default `0x10`) |
-| 5 | OnStartUp14Since |
+| Value | Bit | Setting | Status |
+|-------|-----|---------|--------|
+| 1 | 0 | Never | Accepted |
+| 2 | 1 | OnStartUpOnly | Accepted |
+| 4 | 2 | OnStartUpPlus7 (startup + every 7 days) | **Defined in spec, rejected on SMT FW UPS 04.1** |
+| 8 | 3 | OnStartUpPlus14 | **Defined in spec, rejected on SMT FW UPS 04.1** |
+| 16 | 4 | OnStartUp7Since (every 7 days since last test, observed default `0x10`) | Accepted |
+| 32 | 5 | OnStartUp14Since | Accepted |
 
 Live value `0x0010` = OnStartUp7Since.
+
+#### Rejected Values (SMT1500RM2UC FW UPS 04.1)
+
+Values 4 (OnStartUpPlus7) and 8 (OnStartUpPlus14) are defined in AN-176 / 990-9840B but rejected by this firmware with Modbus exception 0x04 ("Slave device or server failure"). The same constraint exists on the SRT line per `APC_SRT_MODBUS_REFERENCE.md` — the bits appear to be spec-defined but never wired into operational firmware. The driver omits them from `smt_bat_test_opts` and the registry's strict-bitfield validation blocks writes of these values before they hit the wire.
+
+| Value | Result |
+|-------|--------|
+| 4, 8 | Slave device or server failure (Modbus exception 0x04) |
 
 ### Transfer voltages — registers 1026 / 1027 (RW)
 
@@ -422,7 +432,7 @@ Driver returns these as volts to the daemon's `ups_read_thresholds` contract.
 
 Same per-group layout as MOG but starting at 1034 (SOG0), 1039 (SOG1), 1044 (SOG2) with `MinReturnRuntime` at 1038/1043/1048.
 
-### Load shed configuration — registers 1054–1073 (RW)
+### Load shed configuration — registers 1054–1073 (declared RW, see implementation gap)
 
 | Reg | Field |
 |-----|-------|
@@ -444,6 +454,26 @@ Same per-group layout as MOG but starting at 1034 (SOG0), 1039 (SOG1), 1044 (SOG
 | 3 | TimeOnBattery — shed when on battery longer than `LoadShedTimeOnBatterySetting` |
 | 4 | RunTimeRemaining — shed when remaining runtime ≤ `LoadShedRunTimeRemainingSetting` |
 | 5 | UPSOverload — immediate shed when overloaded (SOG only, not MOG) |
+
+---
+
+## Implementation gaps on FW UPS 04.1
+
+Aggregating the firmware-vs-spec mismatches discovered while bringing up the SMT driver. Each one was reproduced against the SMT1500RM2UC test unit using a libmodbus probe; if you re-test on a newer firmware vintage and the behaviour has changed, please update this section so the driver author has a verified trail.
+
+### Effective scalar ranges differ from spec data type
+
+The 990-9840B map declares the timing/runtime scalar registers (TurnOff/TurnOn delays, MinReturnRuntime) as plain UINT16 with no documented upper bound — implying valid range 0..65535. In practice the firmware enforces a tighter `0..32767` (signed int16 max), and writes of any value `>= 32768` return Modbus exception 0x04 ("Slave device or server failure"). Verified directly on regs 1029, 1033, 1038. Driver descriptors set `meta.scalar = { 0, 32767 }` to match firmware reality; the strict-bitfield validation in `ups_config_write` therefore blocks out-of-range writes before they hit the wire.
+
+### Load Shed registers (1054, 1056, 1064, 1068, 1072, 1073) are not implemented for write
+
+The 990-9840B map declares all six SMX/SMT-applicable load-shed registers as RW. On this firmware, **every write** returns Modbus exception 0x02 ("Illegal Data Address") — the AN-176 §3.2.2 signal that the register is "Not Applicable" on this product. Reads return AN-176's "value for un-implemented register": `0x0000` for the config bitfields (1054, 1056), `0xFFFF` for the threshold scalars (1072, 1073). For the SOG groups, depending on the SKU's actual SOG count, some threshold registers (1064 = SOG0 LoadShedRunTimeRemain, 1068 = SOG0 LoadShedTimeOnBattery) report sane-looking values like 120 / 300 — but those are factory defaults left by the production-line firmware, not user-set values, and writes to them still get Illegal Data Address.
+
+In summary: the entire load-shed feature appears not implemented on FW UPS 04.1. The driver flips these descriptors to `writable=0` so the UI offers no Edit button rather than letting operators try writes that always fail. Re-verify on FW 18.x — if writes are accepted there, flip back to `writable=1` and re-evaluate whether `0xFFFF` functions as a "disabled" sentinel value on the threshold registers.
+
+### Rapid-fire config writes can desync the control plane
+
+Writing to multiple registers in the 1024-1073 block in quick succession (sub-200ms intervals) reliably triggers a control plane reset on this firmware: subsequent reads return Invalid CRC or Illegal Data Address spuriously, and the bus needs ~1-2 seconds to settle before it accepts further traffic. Same quirk documented for the SRT line in `APC_SRT_MODBUS_REFERENCE.md` "Rapid-fire config register writes" — the registry's existing 200ms post-write quiet window (see `post_command_settle()` in `src/ups/ups.c`) is the workaround. Drivers should not bypass it.
 
 ---
 
