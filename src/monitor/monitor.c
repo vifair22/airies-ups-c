@@ -1,4 +1,5 @@
 #include "monitor/monitor.h"
+#include "monitor/status_snapshot.h"
 #include <cutils/log.h>
 #include <cutils/error.h>
 
@@ -31,10 +32,16 @@ struct monitor {
     int             has_data;
     int             connected;
 
-    /* State change detection */
-    uint64_t      prev_sig;
-    uint32_t      prev_status;
-    int           first_poll;
+    /* State change detection. `snapshot` is loaded from SQLite at
+     * thread start so transitions are detected against the daemon's
+     * last known state (catches faults that became active while the
+     * daemon was offline). prev_status mirrors snapshot.status for
+     * the existing transition-detection block; the wider snapshot is
+     * also handed to the alert engine on init for the same reason. */
+    uint64_t          prev_sig;
+    uint32_t          prev_status;
+    status_snapshot_t snapshot;
+    int               first_poll;
 
     /* Daily config snapshot */
     time_t        last_config_snapshot;
@@ -224,6 +231,12 @@ static void *monitor_thread(void *arg)
         log_warn("UPS inventory not available");
     }
 
+    /* mon->snapshot was loaded by monitor_create() before this thread
+     * started, so transition detection has a valid baseline regardless
+     * of whether the initial UPS read below succeeds. */
+    mon->prev_status = mon->snapshot.status;
+    mon->first_poll  = 0;
+
     /* Initial status read */
     if (ups_read_status(mon->ups, &data) == 0 &&
         ups_read_dynamic(mon->ups, &data) == 0) {
@@ -232,8 +245,6 @@ static void *monitor_thread(void *arg)
         mon->has_data = 1;
         mon->connected = 1;
         mon->prev_sig = status_signature(&data);
-        mon->prev_status = data.status;
-        mon->first_poll = 0;
         pthread_mutex_unlock(&mon->mutex);
 
         char line[512];
@@ -405,13 +416,26 @@ static void *monitor_thread(void *arg)
             mon->prev_status = data.status;
         }
 
+        /* Persist any change in tracked diff fields to SQLite. Write
+         * only on change so stable systems generate no DB traffic and
+         * the on-disk row always reflects the last observed transition.
+         * Snapshot is reloaded by both the monitor and the alert engine
+         * at the next daemon startup. */
+        if (data.status              != mon->snapshot.status              ||
+            data.bat_system_error    != mon->snapshot.bat_system_error    ||
+            data.general_error       != mon->snapshot.general_error       ||
+            data.power_system_error  != mon->snapshot.power_system_error  ||
+            data.bat_lifetime_status != mon->snapshot.bat_lifetime_status) {
+            mon->snapshot.status              = data.status;
+            mon->snapshot.bat_system_error    = data.bat_system_error;
+            mon->snapshot.general_error       = data.general_error;
+            mon->snapshot.power_system_error  = data.power_system_error;
+            mon->snapshot.bat_lifetime_status = data.bat_lifetime_status;
+            status_snapshot_save(mon->db, &mon->snapshot);
+        }
+
         /* Also track the full signature for transfer reason changes */
         uint64_t sig = status_signature(&data);
-        if (mon->first_poll) {
-            mon->prev_sig = sig;
-            mon->prev_status = data.status;
-            mon->first_poll = 0;
-        }
         mon->prev_sig = sig;
 
         /* Telemetry recording (downsampled) */
@@ -452,6 +476,25 @@ monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
     mon->first_poll = 1;
 
     pthread_mutex_init(&mon->mutex, NULL);
+
+    /* Load persisted status snapshot synchronously so callers that need
+     * it before monitor_start (e.g. main.c seeding the alert engine via
+     * alerts_seed_from_snapshot) see the loaded state, not zeros. If no
+     * snapshot exists (fresh install / DB wipe), seed a baseline of
+     * UPS_ST_ONLINE so a healthy first boot is silent — anything else
+     * active on first poll fires events as if newly transitioned. */
+    if (status_snapshot_load(db, &mon->snapshot) != 0) {
+        memset(&mon->snapshot, 0, sizeof(mon->snapshot));
+        mon->snapshot.status = UPS_ST_ONLINE;
+        log_info("status snapshot: no prior state — baseline = UPS_ST_ONLINE");
+    } else {
+        log_info("status snapshot: loaded prior state "
+                 "(status=0x%08x, bat_err=0x%04x, gen_err=0x%04x, "
+                 "pwr_err=0x%08x, lifetime=0x%04x, updated %s)",
+                 mon->snapshot.status, mon->snapshot.bat_system_error,
+                 mon->snapshot.general_error, mon->snapshot.power_system_error,
+                 mon->snapshot.bat_lifetime_status, mon->snapshot.updated_at);
+    }
 
     return mon;
 }
@@ -502,6 +545,23 @@ void monitor_stop(monitor_t *mon)
     if (!mon) return;
     mon->running = 0;
     pthread_join(mon->thread, NULL);
+
+    /* Belt-and-suspenders: write a final snapshot reflecting the very
+     * last observed state. The on-change writes inside the poll loop
+     * already cover the practical failure modes; this only narrows the
+     * one-poll-cycle window where a status change observed in the loop's
+     * last iteration could be lost if the daemon was killed before the
+     * next save would have fired. Cheap insurance — single UPSERT. */
+    if (mon->has_data) {
+        status_snapshot_t final = mon->snapshot;
+        final.status              = mon->data.status;
+        final.bat_system_error    = mon->data.bat_system_error;
+        final.general_error       = mon->data.general_error;
+        final.power_system_error  = mon->data.power_system_error;
+        final.bat_lifetime_status = mon->data.bat_lifetime_status;
+        status_snapshot_save(mon->db, &final);
+    }
+
     pthread_mutex_destroy(&mon->mutex);
     free(mon);
 }
@@ -524,6 +584,14 @@ int monitor_get_inventory(monitor_t *mon, ups_inventory_t *out)
 {
     pthread_mutex_lock(&mon->mutex);
     *out = mon->inventory;
+    pthread_mutex_unlock(&mon->mutex);
+    return 0;
+}
+
+int monitor_get_snapshot(monitor_t *mon, status_snapshot_t *out)
+{
+    pthread_mutex_lock(&mon->mutex);
+    *out = mon->snapshot;
     pthread_mutex_unlock(&mon->mutex);
     return 0;
 }

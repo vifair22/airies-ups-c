@@ -11,6 +11,23 @@ void alerts_init(alert_state_t *state)
     state->prev_charge = -1.0;
 }
 
+void alerts_seed_from_snapshot(alert_state_t *state,
+                               const status_snapshot_t *snap)
+{
+    /* Reconstruct the bool/derived fields from the persisted bitfields.
+     * This mirrors the conditions check_bit_alert and the per-error
+     * transition blocks evaluate, so the very first alerts_check after
+     * daemon start sees prev == current for any condition that's still
+     * active and stays quiet. New transitions still fire normally. */
+    state->overload    = (snap->status & UPS_ST_OVERLOAD) != 0;
+    state->fault       = (snap->status & UPS_ST_FAULT) != 0;
+    state->bat_replace = (snap->bat_system_error & UPS_BATERR_REPLACE) != 0;
+
+    state->prev_general_error = snap->general_error;
+    state->prev_power_error   = snap->power_system_error;
+    state->prev_battery_error = snap->bat_system_error;
+}
+
 alert_config_t alerts_load_config(const void *cfg_ptr)
 {
     const cutils_config_t *cfg = cfg_ptr;

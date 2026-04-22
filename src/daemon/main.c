@@ -226,8 +226,17 @@ int main(int argc, char *argv[])
         if (mon) {
             monitor_on_event(mon, on_monitor_event, cfg);
 
-            /* Wire alert engine into monitor poll cycle */
+            /* Wire alert engine into monitor poll cycle. Seed alert state
+             * from the persisted snapshot so we don't re-fire alerts on
+             * restart for conditions that were already active when the
+             * daemon last ran (e.g. an unresolved fault). monitor_start
+             * has already loaded the snapshot during its thread bring-up. */
             alerts_init(&alert_ctx.state);
+            {
+                status_snapshot_t snap;
+                if (monitor_get_snapshot(mon, &snap) == 0)
+                    alerts_seed_from_snapshot(&alert_ctx.state, &snap);
+            }
             alert_ctx.cfg = alerts_load_config(cfg);
             ups_read_thresholds(ups, &alert_ctx.thresh.transfer_high,
                                 &alert_ctx.thresh.transfer_low);
