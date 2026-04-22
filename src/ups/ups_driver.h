@@ -165,7 +165,16 @@ typedef enum {
     UPS_CFG_STRING,     /* multiple registers, 2 ASCII chars per register */
 } ups_cfg_type_t;
 
-/* One named option for a BITFIELD config register. */
+/* One named option for a BITFIELD config register.
+ *
+ * The set of opts[] is treated as the authoritative list of values
+ * accepted by the UPS firmware on this model. Values NOT in the list
+ * may be spec-defined but rejected in practice (see e.g. SRT bat_test
+ * where the firmware rejects OnStartUpPlus7 / OnStartUpPlus14 even
+ * though AN-176 defines them) — driver comments should explain any
+ * such omissions so future maintainers don't "fix" them by adding the
+ * rejected values back. When `bitfield.strict` is set on the
+ * descriptor, the registry blocks writes of any value not in opts[]. */
 typedef struct {
     uint16_t    value;  /* raw register value (usually a single bit set) */
     const char *name;   /* API key (e.g. "onstart_plus_7") */
@@ -192,11 +201,38 @@ typedef struct {
     uint16_t       scale;        /* divisor for display (1 = raw) */
     int            writable;     /* non-zero if driver supports writing */
 
-    /* Type-specific metadata. Access the union branch that matches `type`. */
+    /* Type-specific metadata. Access the union branch that matches `type`.
+     *
+     * Validation contract (enforced by ups_config_write before the driver
+     * sees the value, returns UPS_ERR_INVALID_VALUE on failure):
+     *   SCALAR   — value must satisfy `min <= value <= max` when min/max
+     *              are set. The convention `min == 0 && max == 0` means
+     *              "no range constraint declared" and skips the check.
+     *   BITFIELD — when `strict` is non-zero, value must equal one of the
+     *              entries in `opts[]`. When `strict` is zero, any value
+     *              passes through (use sparingly — only when the driver
+     *              accepts arbitrary bit combinations or raw bypass).
+     *   STRING   — max_chars is enforced by the string-write path.
+     *
+     * Hints (UI-only, no enforcement):
+     *   scalar.step — preferred increment for spinners and sliders
+     *                 (frontend uses it as <input step=N>); 0 = no
+     *                 declared step. The wire still accepts any in-range
+     *                 integer; step is purely a UX hint. */
     union {
-        struct { int32_t min; int32_t max; } scalar;                           /* UPS_CFG_SCALAR */
-        struct { const ups_bitfield_opt_t *opts; size_t count; } bitfield;     /* UPS_CFG_BITFIELD */
-        struct { size_t max_chars; } string;                                   /* UPS_CFG_STRING */
+        struct {
+            int32_t min;
+            int32_t max;
+            int32_t step;     /* UI hint, 0 = no declared step */
+        } scalar;             /* UPS_CFG_SCALAR */
+        struct {
+            const ups_bitfield_opt_t *opts;
+            size_t                    count;
+            int                       strict;  /* 1 = reject writes not in opts[] */
+        } bitfield;           /* UPS_CFG_BITFIELD */
+        struct {
+            size_t max_chars; /* enforced on string writes */
+        } string;             /* UPS_CFG_STRING */
     } meta;
 } ups_config_reg_t;
 

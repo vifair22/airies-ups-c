@@ -880,13 +880,15 @@ static ups_config_reg_t backups_config_regs[] = {
     { "sensitivity", "Input Sensitivity", NULL, "power_quality",
       0, 1, UPS_CFG_BITFIELD, 1, 1,
       .meta.bitfield = { sensitivity_opts,
-                         sizeof(sensitivity_opts) / sizeof(sensitivity_opts[0]) } },
+                         sizeof(sensitivity_opts) / sizeof(sensitivity_opts[0]),
+                         1 /* strict */ } },
 
     /* --- Group: alarm --- */
     { "alarm_setting", "Audible Alarm", NULL, "alarm",
       0, 1, UPS_CFG_BITFIELD, 1, 1,
       .meta.bitfield = { alarm_opts,
-                         sizeof(alarm_opts) / sizeof(alarm_opts[0]) } },
+                         sizeof(alarm_opts) / sizeof(alarm_opts[0]),
+                         1 /* strict */ } },
 
     /* --- Group: battery --- */
     { "low_battery_warning", "Low Runtime Warning", "s", "battery",

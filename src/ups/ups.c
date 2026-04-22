@@ -456,10 +456,51 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
     return rc;
 }
 
+/* Validate a write against the descriptor's metadata before letting it
+ * reach the driver. Keeps invalid values off the wire entirely (some
+ * UPS firmwares respond to out-of-range writes with a control-plane
+ * reset; see APC_SRT_MODBUS_REFERENCE.md "Rapid-fire config register
+ * writes" note) and gives the API layer a clean operator-error signal
+ * distinct from real I/O failures.
+ *
+ * Returns UPS_OK if the value is acceptable to enqueue; otherwise
+ * UPS_ERR_INVALID_VALUE. The contract is documented next to the meta
+ * union in ups_driver.h. */
+static int ups_config_validate(const ups_config_reg_t *reg, uint16_t value)
+{
+    switch (reg->type) {
+    case UPS_CFG_SCALAR: {
+        int32_t v   = (int32_t)value;
+        int32_t min = reg->meta.scalar.min;
+        int32_t max = reg->meta.scalar.max;
+        /* Convention: min == 0 && max == 0 means "no range declared" */
+        if (min == 0 && max == 0) return UPS_OK;
+        if (v < min || v > max)   return UPS_ERR_INVALID_VALUE;
+        return UPS_OK;
+    }
+    case UPS_CFG_BITFIELD: {
+        if (!reg->meta.bitfield.strict) return UPS_OK;
+        for (size_t i = 0; i < reg->meta.bitfield.count; i++)
+            if (reg->meta.bitfield.opts[i].value == value)
+                return UPS_OK;
+        return UPS_ERR_INVALID_VALUE;
+    }
+    case UPS_CFG_STRING:
+        /* String writes don't go through this path; the string-write
+         * helper enforces max_chars at its own boundary. */
+        return UPS_OK;
+    }
+    return UPS_OK;
+}
+
 int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
 {
     if (!reg->writable) return UPS_ERR_NOT_SUPPORTED;
     if (!ups->driver->config_write) return UPS_ERR_NOT_SUPPORTED;
+
+    int vrc = ups_config_validate(reg, value);
+    if (vrc != UPS_OK) return vrc;
+
     pthread_mutex_lock(&ups->cmd_mutex);
     if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->config_write(ups->transport, reg, value);

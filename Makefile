@@ -261,6 +261,10 @@ $(eval $(call build_test,test_shutdown,\
   tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
 
+$(eval $(call build_test,test_config_validation,\
+  tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
 # --- Coverage builds (same definitions, --coverage flag) ---
 
 $(eval $(call build_test,test_ups_strings,\
@@ -287,9 +291,13 @@ $(eval $(call build_test,test_shutdown,\
   tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_config_validation,\
+  tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation
 
 # --- Run targets ---
 

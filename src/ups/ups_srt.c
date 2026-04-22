@@ -286,7 +286,17 @@ static int srt_cmd_bypass_disable(void *transport)
     return modbus_write_registers(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
-/* --- Frequency tolerance settings --- */
+/* --- Frequency tolerance settings ---
+ *
+ * AN-176 / 990-9840B define seven values for AcceptableFrequencySetting_BF
+ * (bits 0..6). On SRT1000XLA FW 16.5 only five are accepted; the SRT
+ * firmware rejects bits 2 (Hz50_1_0 = value 4) and 5 (Hz60_1_0 = value
+ * 32) with Modbus exception 0x04. See APC_SRT_MODBUS_REFERENCE.md
+ * "Rejected Values (SRT1000XLA FW 16.5)" for reproduction details.
+ *
+ * Do not "fix" the gaps by re-adding 4/32 here without verifying on the
+ * specific firmware in question — the same set is mirrored in
+ * srt_freq_tol_opts below and surfaced via UPS_CAP_FREQ_TOLERANCE. */
 
 static const ups_freq_setting_t srt_freq_settings[] = {
     { 1,  "auto",     "Automatic 50/60Hz (47-53, 57-63)" },
@@ -296,7 +306,16 @@ static const ups_freq_setting_t srt_freq_settings[] = {
     { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz" },
 };
 
-/* --- Config register descriptors --- */
+/* --- Config register descriptors ---
+ *
+ * BatteryTestIntervalSetting_BF: AN-176 defines six values (bits 0..5).
+ * SRT firmware (verified on SRT1000XLA FW 16.5; same constraint
+ * confirmed on SMT FW 04.1) rejects bits 2 (OnStartUpPlus7 = value 4)
+ * and 3 (OnStartUpPlus14 = value 8) with Modbus exception 0x04. The
+ * bits are spec-defined but apparently never wired into the operational
+ * firmware. Strict-on validation in the registry blocks writes of these
+ * values before they hit the wire. See APC_SRT_MODBUS_REFERENCE.md
+ * "Battery Test Interval (Register 1024)" for the full table. */
 
 static const ups_bitfield_opt_t srt_bat_test_opts[] = {
     { 1,  "never",           "Never" },
@@ -332,7 +351,8 @@ static const ups_config_reg_t srt_config_regs[] = {
     { "bat_test_interval", "Battery Test Interval", NULL, "battery",
       1024, 1, UPS_CFG_BITFIELD, 1, 1,
       .meta.bitfield = { srt_bat_test_opts,
-                         sizeof(srt_bat_test_opts) / sizeof(srt_bat_test_opts[0]) } },
+                         sizeof(srt_bat_test_opts) / sizeof(srt_bat_test_opts[0]),
+                         1 /* strict */ } },
     { "mog_turn_off_delay", "MOG Turn Off Countdown", "s", "outlet_delays",
       1029, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 32767 } },
     { "mog_turn_on_delay", "MOG Turn On Countdown", "s", "outlet_delays",
@@ -372,11 +392,13 @@ static const ups_config_reg_t srt_config_regs[] = {
     { "output_voltage_setting", "Output Voltage Setting", NULL, "output",
       592, 1, UPS_CFG_BITFIELD, 1, 0,
       .meta.bitfield = { srt_voltage_opts,
-                         sizeof(srt_voltage_opts) / sizeof(srt_voltage_opts[0]) } },
+                         sizeof(srt_voltage_opts) / sizeof(srt_voltage_opts[0]),
+                         1 /* strict */ } },
     { "freq_tolerance", "Output Frequency Tolerance", NULL, "output",
       593, 1, UPS_CFG_BITFIELD, 1, 1,
       .meta.bitfield = { srt_freq_tol_opts,
-                         sizeof(srt_freq_tol_opts) / sizeof(srt_freq_tol_opts[0]) } },
+                         sizeof(srt_freq_tol_opts) / sizeof(srt_freq_tol_opts[0]),
+                         1 /* strict */ } },
     { "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
       591, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
     { "battery_date", "Battery Install Date", "days since 2000-01-01", "info",
