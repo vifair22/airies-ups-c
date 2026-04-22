@@ -501,7 +501,13 @@ static double get_ups_field(const ups_data_t *data, const char *name)
     if (strcmp(name, "output_voltage") == 0)    return data->output_voltage;
     if (strcmp(name, "output_frequency") == 0)  return data->output_frequency;
     if (strcmp(name, "input_voltage") == 0)     return data->input_voltage;
-    if (strcmp(name, "efficiency") == 0)        return data->efficiency;
+    if (strcmp(name, "efficiency") == 0) {
+        /* efficiency is only meaningful when the reason is UPS_EFF_OK.
+         * Return NaN otherwise so compare_field treats it as "no trigger." */
+        return data->efficiency_reason == UPS_EFF_OK
+               ? data->efficiency
+               : (0.0 / 0.0);
+    }
     if (strcmp(name, "bypass_voltage") == 0)    return data->bypass_voltage;
     if (strcmp(name, "bypass_frequency") == 0)  return data->bypass_frequency;
     return 0;

@@ -684,9 +684,10 @@ static int backups_read_dynamic(void *transport, ups_data_t *data)
     }
 
     /* No bypass or efficiency on Back-UPS */
-    data->bypass_voltage   = 0;
-    data->bypass_frequency = 0;
-    data->efficiency       = -1;
+    data->bypass_voltage    = 0;
+    data->bypass_frequency  = 0;
+    data->efficiency        = 0.0;
+    data->efficiency_reason = UPS_EFF_NOT_AVAILABLE;
 
     return 0;
 }
@@ -1105,6 +1106,56 @@ static const ups_cmd_desc_t backups_commands[] = {
       backups_cmd_cancel_mute, NULL },
 };
 
+/* Narrow the config register set to descriptors whose backing HID field
+ * actually resolved on this device. Descriptors whose field is NULL get
+ * dropped; consumers iterating ups_get_config_regs then only see settings
+ * that can actually be read/written. */
+static size_t backups_resolve_config_regs(void *transport,
+                                          const ups_config_reg_t *default_regs,
+                                          size_t default_count,
+                                          ups_config_reg_t *out)
+{
+    hid_transport_t *t = transport;
+    (void)default_count;  /* CFG_* constants keyed to the static array order */
+
+    size_t n = 0;
+    #define KEEP_IF(idx, fld) do { if ((fld)) out[n++] = default_regs[(idx)]; } while (0)
+    KEEP_IF(CFG_TRANSFER_LOW,          t->f.transfer_low);
+    KEEP_IF(CFG_TRANSFER_HIGH,         t->f.transfer_high);
+    KEEP_IF(CFG_SENSITIVITY,           t->f.apc_sensitivity);
+    KEEP_IF(CFG_ALARM_SETTING,         t->f.alarm_control);
+    KEEP_IF(CFG_LOW_BATTERY_WARNING,   t->f.remaining_time_limit);
+    KEEP_IF(CFG_LOW_BATTERY_THRESHOLD, t->f.remaining_cap_limit);
+    KEEP_IF(CFG_WARNING_CAPACITY,      t->f.warning_cap_limit);
+    KEEP_IF(CFG_MANUFACTURE_DATE,      t->f.manufacture_date);
+    KEEP_IF(CFG_NOMINAL_VOLTAGE,       t->f.output_voltage);
+    KEEP_IF(CFG_NOMINAL_VA,            t->f.config_apparent_power);
+    KEEP_IF(CFG_DESIGN_CAPACITY,       t->f.design_capacity);
+    #undef KEEP_IF
+    return n;
+}
+
+/* Narrow the advertised capability set to what the HID descriptor actually
+ * resolved against this device. Different Back-UPS models expose different
+ * subsets (e.g., older ES units lack ModuleReset, many lack Test). Running
+ * this at connect time means ups_has_cap() only returns true for features
+ * we can actually perform — the frontend and API gate off that honest set. */
+static uint32_t backups_resolve_caps(void *transport, uint32_t default_caps)
+{
+    hid_transport_t *t = transport;
+    uint32_t caps = default_caps;
+
+    if (!t->f.delay_before_shutdown) caps &= (uint32_t)~UPS_CAP_SHUTDOWN;
+    if (!t->f.test)                  caps &= (uint32_t)~UPS_CAP_BATTERY_TEST;
+    if (!t->f.module_reset)          caps &= (uint32_t)~UPS_CAP_CLEAR_FAULTS;
+    if (!t->f.alarm_control) {
+        caps &= (uint32_t)~UPS_CAP_MUTE;
+        caps &= (uint32_t)~UPS_CAP_BEEP;
+    }
+
+    return caps;
+}
+
 /* --- Driver definition --- */
 
 const ups_driver_t ups_driver_backups_hid = {
@@ -1115,15 +1166,17 @@ const ups_driver_t ups_driver_backups_hid = {
     .disconnect          = backups_disconnect,
     .detect              = backups_detect,
     .get_topology        = backups_get_topology,
-    /* Advertise all capabilities; individual handlers return -1 if
-     * the underlying HID field is not present on this device. */
+    /* Maximum advertised capabilities; backups_resolve_caps() narrows these
+     * to what the device's HID descriptor actually exposes. */
     .caps                = UPS_CAP_SHUTDOWN | UPS_CAP_BATTERY_TEST |
                            UPS_CAP_CLEAR_FAULTS |
                            UPS_CAP_MUTE | UPS_CAP_BEEP,
+    .resolve_caps        = backups_resolve_caps,
     .freq_settings       = NULL,
     .freq_settings_count = 0,
     .config_regs         = backups_config_regs,
     .config_regs_count   = BACKUPS_CFG_COUNT,
+    .resolve_config_regs = backups_resolve_config_regs,
     .read_status         = backups_read_status,
     .read_dynamic        = backups_read_dynamic,
     .read_inventory      = backups_read_inventory,

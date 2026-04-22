@@ -61,20 +61,21 @@ const char *ups_status_str(uint32_t status, char *buf, size_t len)
 
 /* --- Efficiency string --- */
 
-const char *ups_efficiency_str(int16_t raw, char *buf, size_t len)
+const char *ups_efficiency_str(int reason, double pct, char *buf, size_t len)
 {
-    if (raw >= 0) {
-        snprintf(buf, len, "%.1f%%", raw / 128.0);
+    /* Index 0 is UPS_EFF_OK; rows 1..8 map to reason codes. Keep in sync
+     * with ups_eff_reason_t in ups.h — ordering is load-bearing. */
+    static const char *reasons[] = {
+        NULL,  /* UPS_EFF_OK → handled below */
+        "NotAvailable", "LoadTooLow", "OutputOff", "OnBattery",
+        "InBypass", "BatteryCharging", "PoorACInput", "BatteryDisconnected",
+    };
+    if (reason == 0) {
+        snprintf(buf, len, "%.1f%%", pct);
+    } else if (reason > 0 && reason < (int)(sizeof(reasons) / sizeof(reasons[0]))) {
+        snprintf(buf, len, "%s", reasons[reason]);
     } else {
-        const char *reasons[] = {
-            "NotAvailable", "LoadTooLow", "OutputOff", "OnBattery",
-            "InBypass", "BatteryCharging", "PoorACInput", "BatteryDisconnected",
-        };
-        int idx = -raw - 1;
-        if (idx >= 0 && idx < (int)(sizeof(reasons) / sizeof(reasons[0])))
-            snprintf(buf, len, "%s", reasons[idx]);
-        else
-            snprintf(buf, len, "Unknown(%d)", raw);
+        snprintf(buf, len, "Unknown(%d)", reason);
     }
     return buf;
 }

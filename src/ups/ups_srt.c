@@ -123,7 +123,16 @@ static int srt_read_dynamic(void *transport, ups_data_t *data)
     data->bypass_frequency = regs[21] / 128.0;
     data->input_status     = regs[22];
     data->input_voltage    = regs[23] / 64.0;
-    data->efficiency       = (int16_t)regs[26] / 128.0;
+    {
+        int16_t raw = (int16_t)regs[26];
+        if (raw >= 0) {
+            data->efficiency        = raw / 128.0;
+            data->efficiency_reason = UPS_EFF_OK;
+        } else {
+            data->efficiency        = 0.0;
+            data->efficiency_reason = (ups_eff_reason_t)(-raw);
+        }
+    }
     data->timer_shutdown   = (int16_t)regs[27];
     data->timer_start      = (int16_t)regs[28];
     data->timer_reboot     = ((int32_t)regs[29] << 16) | regs[30];
@@ -155,7 +164,6 @@ static int srt_read_inventory(void *transport, ups_inventory_t *inv)
     inv->nominal_va     = regs[72];
     inv->nominal_watts  = regs[73];
     inv->sog_config     = regs[74];
-    inv->freq_tolerance = regs[77];
 
     return 0;
 }

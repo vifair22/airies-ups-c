@@ -198,12 +198,15 @@ int main(int argc, char *argv[])
             log_info("connecting to UPS at %s (baud %d, slave %d)", device, baud, slave_id);
         }
 
-        ups = ups_connect(&conn_params);
-        while (!ups && running) {
-            log_warn("UPS not found — retrying in 5s");
+        int rc = ups_connect(&conn_params, &ups);
+        while (rc != UPS_OK && running) {
+            const char *why = (rc == UPS_ERR_NO_DRIVER)
+                              ? "no matching driver identified the UPS"
+                              : "transport connect failed";
+            log_warn("UPS not found (%s) — retrying in 5s", why);
             sleep(5);
             if (!running) break;
-            ups = ups_connect(&conn_params);
+            rc = ups_connect(&conn_params, &ups);
         }
         if (ups)
             log_info("UPS connected — driver: %s", ups_driver_name(ups));

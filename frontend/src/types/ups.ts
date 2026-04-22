@@ -12,7 +12,6 @@ export interface UpsStatus {
     nominal_va: number
     nominal_watts: number
     sog_config: number
-    freq_tolerance: number
   }
   status?: { raw: number; text: string }
   battery?: { charge_pct: number; voltage: number; runtime_sec: number }

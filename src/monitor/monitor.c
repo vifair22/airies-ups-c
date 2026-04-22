@@ -146,7 +146,7 @@ static void format_status_line(const ups_data_t *d, char *buf, size_t len)
 {
     char status_str[256], eff_str[64];
     ups_status_str(d->status, status_str, sizeof(status_str));
-    ups_efficiency_str((int16_t)(d->efficiency * 128), eff_str, sizeof(eff_str));
+    ups_efficiency_str((int)d->efficiency_reason, d->efficiency, eff_str, sizeof(eff_str));
 
     snprintf(buf, len,
              "Status: %s | Chg: %.0f%% | Rt: %um%us | Bv: %.1fV | "

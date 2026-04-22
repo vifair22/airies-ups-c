@@ -18,6 +18,42 @@ const ups_driver_t *ups_drivers[] = {
     NULL,
 };
 
+/* --- Runtime subset resolution ---
+ *
+ * Both initial connect and reconnect need to narrow the driver's static
+ * capability mask and config_regs array to what actually resolved against
+ * the live device. Factored into one helper so the reconnect path can't
+ * drift from the connect path. */
+static void ups_resolve_runtime(ups_t *ups, void *transport)
+{
+    const ups_driver_t *drv = ups->driver;
+
+    ups->caps = drv->caps;
+    if (drv->resolve_caps)
+        ups->caps = drv->resolve_caps(transport, drv->caps);
+
+    /* Drop any previous resolved set (matters on reconnect). */
+    free(ups->resolved_regs);
+    ups->resolved_regs       = NULL;
+    ups->resolved_regs_count = 0;
+
+    if (drv->resolve_config_regs && drv->config_regs && drv->config_regs_count > 0) {
+        ups_config_reg_t *buf = calloc(drv->config_regs_count, sizeof(*buf));
+        if (buf) {
+            size_t n = drv->resolve_config_regs(transport,
+                                                drv->config_regs,
+                                                drv->config_regs_count,
+                                                buf);
+            if (n == 0) {
+                free(buf);
+            } else {
+                ups->resolved_regs       = buf;
+                ups->resolved_regs_count = n;
+            }
+        }
+    }
+}
+
 /* --- Connection + auto-detect ---
  *
  * For each registered driver matching the connection type:
@@ -26,16 +62,25 @@ const ups_driver_t *ups_drivers[] = {
  *   3. If detect returns 1, we have our driver. Otherwise disconnect and try next.
  */
 
-ups_t *ups_connect(const ups_conn_params_t *params)
+int ups_connect(const ups_conn_params_t *params, ups_t **out)
 {
-    if (!params) return NULL;
+    if (!params || !out) return UPS_ERR_IO;
+    *out = NULL;
+
+    /* Distinguish three failure modes:
+     *   - No driver registered for this conn_type     → UPS_ERR_NO_DRIVER
+     *   - Matching driver(s), but connect() always failed → UPS_ERR_IO
+     *   - connect() succeeded but no detect() claimed it  → UPS_ERR_NO_DRIVER
+     */
+    int any_matched_type = 0;
+    int any_connected    = 0;
 
     for (int i = 0; ups_drivers[i] != NULL; i++) {
         const ups_driver_t *drv = ups_drivers[i];
 
-        /* Skip drivers that don't match the connection type */
         if (drv->conn_type != params->type)
             continue;
+        any_matched_type = 1;
 
         if (!drv->connect || !drv->detect)
             continue;
@@ -43,6 +88,7 @@ ups_t *ups_connect(const ups_conn_params_t *params)
         void *transport = drv->connect(params);
         if (!transport)
             continue;
+        any_connected = 1;
 
         if (!drv->detect(transport)) {
             if (drv->disconnect) drv->disconnect(transport);
@@ -53,7 +99,7 @@ ups_t *ups_connect(const ups_conn_params_t *params)
         ups_t *ups = calloc(1, sizeof(*ups));
         if (!ups) {
             if (drv->disconnect) drv->disconnect(transport);
-            return NULL;
+            return UPS_ERR_IO;
         }
 
         ups->transport = transport;
@@ -72,17 +118,29 @@ ups_t *ups_connect(const ups_conn_params_t *params)
             snprintf(ups->_host_buf, sizeof(ups->_host_buf), "%s", params->tcp.host);
             ups->params.tcp.host = ups->_host_buf;
         }
+        if (params->type == UPS_CONN_SNMP && params->snmp.host) {
+            snprintf(ups->_host_buf, sizeof(ups->_host_buf), "%s", params->snmp.host);
+            ups->params.snmp.host = ups->_host_buf;
+        }
 
         pthread_mutex_init(&ups->cmd_mutex, NULL);
+
+        /* Resolve effective capabilities + config registers. Drivers may
+         * narrow both based on what actually resolved against the live
+         * device (missing HID fields, Modbus exception codes, etc.). */
+        ups_resolve_runtime(ups, transport);
 
         /* Read inventory immediately while connection is fresh */
         if (ups_read_inventory(ups, &ups->inventory) == 0)
             ups->has_inventory = 1;
 
-        return ups;
+        *out = ups;
+        return UPS_OK;
     }
 
-    return NULL;
+    if (!any_matched_type) return UPS_ERR_NO_DRIVER;
+    if (!any_connected)    return UPS_ERR_IO;
+    return UPS_ERR_NO_DRIVER;
 }
 
 void ups_close(ups_t *ups)
@@ -91,6 +149,7 @@ void ups_close(ups_t *ups)
         if (ups->transport && ups->driver->disconnect)
             ups->driver->disconnect(ups->transport);
         pthread_mutex_destroy(&ups->cmd_mutex);
+        free(ups->resolved_regs);
         free(ups);
     }
 }
@@ -99,7 +158,7 @@ void ups_close(ups_t *ups)
 
 int ups_has_cap(const ups_t *ups, ups_cap_t cap)
 {
-    return (ups->driver->caps & (uint32_t)cap) != 0;
+    return ups && (ups->caps & (uint32_t)cap) != 0;
 }
 
 const char *ups_driver_name(const ups_t *ups)
@@ -168,8 +227,17 @@ static void ups_clear_errors(ups_t *ups)
 }
 
 /* Attempt to (re)open the transport if it's currently down.
- * Rate-limited to one attempt per RECONNECT_INTERVAL_SEC so a fast
- * poll loop doesn't hammer the driver's connect path. */
+ *
+ * Rate-limited to one attempt per RECONNECT_INTERVAL_SEC so a fast poll
+ * loop doesn't hammer the driver's connect path.
+ *
+ * Reconnect runs the same post-connect steps as initial ups_connect():
+ * detect() to guard against a different device appearing on the same
+ * port, resolve_caps() because the new device may expose a different
+ * subset, and read_inventory() because cached identity fields may be
+ * stale. If detect() fails (different UPS on the wire now), we tear the
+ * transport back down and leave ups->transport NULL so the next tick
+ * retries from scratch. */
 static void ups_try_reconnect(ups_t *ups)
 {
     if (ups->transport) return;
@@ -179,9 +247,32 @@ static void ups_try_reconnect(ups_t *ups)
     if (now - ups->last_reconnect_attempt < RECONNECT_INTERVAL_SEC) return;
     ups->last_reconnect_attempt = now;
 
-    ups->transport = ups->driver->connect(&ups->params);
-    if (ups->transport)
-        ups->consecutive_errors = 0;
+    void *transport = ups->driver->connect(&ups->params);
+    if (!transport) return;
+
+    /* Guard against a different device on the wire. */
+    if (ups->driver->detect && !ups->driver->detect(transport)) {
+        if (ups->driver->disconnect) ups->driver->disconnect(transport);
+        return;
+    }
+
+    ups->transport = transport;
+    ups->consecutive_errors = 0;
+
+    /* Re-narrow caps and config_regs; a different-generation device (or
+     * a replaced UPS of the same family) may expose a different subset. */
+    ups_resolve_runtime(ups, transport);
+
+    /* Refresh cached inventory; otherwise model/serial/firmware stay
+     * frozen at the original connect's reading. read_inventory may fail
+     * transiently — leave the previous cache in place if so. */
+    if (ups->driver->read_inventory) {
+        ups_inventory_t fresh = {0};
+        if (ups->driver->read_inventory(transport, &fresh) == 0) {
+            ups->inventory = fresh;
+            ups->has_inventory = 1;
+        }
+    }
 }
 
 /* Tear down the transport after repeated read failures. The next read
@@ -327,6 +418,12 @@ int ups_cmd_execute(ups_t *ups, const char *name, int is_off)
 
 const ups_config_reg_t *ups_get_config_regs(const ups_t *ups, size_t *count)
 {
+    /* Prefer the resolved subset if the driver narrowed; otherwise fall
+     * back to the driver's static array verbatim. */
+    if (ups->resolved_regs) {
+        if (count) *count = ups->resolved_regs_count;
+        return ups->resolved_regs;
+    }
     if (!ups->driver->config_regs) {
         if (count) *count = 0;
         return NULL;

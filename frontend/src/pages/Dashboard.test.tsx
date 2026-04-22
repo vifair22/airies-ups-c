@@ -20,7 +20,6 @@ const connectedStatus: UpsStatus = {
     nominal_va: 3000,
     nominal_watts: 2700,
     sog_config: 0,
-    freq_tolerance: 0,
   },
   status: { raw: 2, text: 'online' },
   battery: { charge_pct: 100, voltage: 54.6, runtime_sec: 3600 },

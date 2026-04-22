@@ -59,7 +59,6 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         cJSON_AddNumberToObject(inv_obj, "nominal_va", inv.nominal_va);
         cJSON_AddNumberToObject(inv_obj, "nominal_watts", inv.nominal_watts);
         cJSON_AddNumberToObject(inv_obj, "sog_config", inv.sog_config);
-        cJSON_AddNumberToObject(inv_obj, "freq_tolerance", inv.freq_tolerance);
         cJSON_AddItemToObject(obj, "inventory", inv_obj);
     }
 
@@ -113,7 +112,13 @@ static cJSON *build_status_json(route_ctx_t *ctx)
         }
         cJSON_AddItemToObject(obj, "input", in);
 
-        cJSON_AddNumberToObject(obj, "efficiency", data.efficiency);
+        {
+            cJSON *eff = cJSON_CreateObject();
+            cJSON_AddNumberToObject(eff, "value", data.efficiency);
+            cJSON_AddNumberToObject(eff, "reason", (double)data.efficiency_reason);
+            cJSON_AddBoolToObject(eff, "valid", data.efficiency_reason == UPS_EFF_OK);
+            cJSON_AddItemToObject(obj, "efficiency", eff);
+        }
         cJSON_AddStringToObject(obj, "transfer_reason",
                                 ups_transfer_reason_str(data.transfer_reason));
 

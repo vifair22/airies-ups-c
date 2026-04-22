@@ -82,53 +82,51 @@ static void test_status_str_truncation(void **state)
 
 /* --- ups_efficiency_str --- */
 
-static void test_efficiency_str_positive(void **state)
+static void test_efficiency_str_valid(void **state)
 {
     (void)state;
     char buf[64];
 
-    /* 128 raw = 1.0% (128/128) */
-    ups_efficiency_str(128, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_OK, 1.0, buf, sizeof(buf));
     assert_string_equal(buf, "1.0%");
 
-    /* 12800 raw = 100.0% */
-    ups_efficiency_str(12800, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_OK, 100.0, buf, sizeof(buf));
     assert_string_equal(buf, "100.0%");
 
-    /* 12160 raw = 95.0% */
-    ups_efficiency_str(12160, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_OK, 95.0, buf, sizeof(buf));
     assert_string_equal(buf, "95.0%");
 }
 
-static void test_efficiency_str_negative_reasons(void **state)
+static void test_efficiency_str_reasons(void **state)
 {
     (void)state;
     char buf[64];
 
-    ups_efficiency_str(-1, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_NOT_AVAILABLE, 0.0, buf, sizeof(buf));
     assert_string_equal(buf, "NotAvailable");
 
-    ups_efficiency_str(-2, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_LOAD_TOO_LOW, 0.0, buf, sizeof(buf));
     assert_string_equal(buf, "LoadTooLow");
 
-    ups_efficiency_str(-3, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_OUTPUT_OFF, 0.0, buf, sizeof(buf));
     assert_string_equal(buf, "OutputOff");
 
-    ups_efficiency_str(-4, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_ON_BATTERY, 0.0, buf, sizeof(buf));
     assert_string_equal(buf, "OnBattery");
 
-    ups_efficiency_str(-8, buf, sizeof(buf));
+    ups_efficiency_str(UPS_EFF_BATTERY_DISCONNECTED, 0.0, buf, sizeof(buf));
     assert_string_equal(buf, "BatteryDisconnected");
 }
 
-static void test_efficiency_str_unknown_negative(void **state)
+static void test_efficiency_str_unknown_reason(void **state)
 {
     (void)state;
     char buf[64];
-    ups_efficiency_str(-9, buf, sizeof(buf));
+    /* Out-of-range reason codes render as Unknown(n). */
+    ups_efficiency_str(9, 0.0, buf, sizeof(buf));
     assert_true(strstr(buf, "Unknown") != NULL);
 
-    ups_efficiency_str(-100, buf, sizeof(buf));
+    ups_efficiency_str(100, 0.0, buf, sizeof(buf));
     assert_true(strstr(buf, "Unknown") != NULL);
 }
 
@@ -245,9 +243,9 @@ int main(void)
         cmocka_unit_test(test_status_str_zero),
         cmocka_unit_test(test_status_str_truncation),
         /* efficiency string */
-        cmocka_unit_test(test_efficiency_str_positive),
-        cmocka_unit_test(test_efficiency_str_negative_reasons),
-        cmocka_unit_test(test_efficiency_str_unknown_negative),
+        cmocka_unit_test(test_efficiency_str_valid),
+        cmocka_unit_test(test_efficiency_str_reasons),
+        cmocka_unit_test(test_efficiency_str_unknown_reason),
         /* general errors */
         cmocka_unit_test(test_decode_general_errors_none),
         cmocka_unit_test(test_decode_general_errors_single),

@@ -269,9 +269,13 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
     }
     cJSON_Delete(body);
 
-    ups_t *test_ups = ups_connect(&params);
-    if (!test_ups) {
-        return api_error(502, "failed to connect — check device path, baud rate, and that the UPS is powered on");
+    ups_t *test_ups = NULL;
+    int cc = ups_connect(&params, &test_ups);
+    if (cc != UPS_OK) {
+        const char *hint = (cc == UPS_ERR_NO_DRIVER)
+            ? "no driver recognized this UPS — check that Modbus is enabled and the slave address matches"
+            : "failed to connect — check device path, baud rate, and that the UPS is powered on";
+        return api_error(502, hint);
     }
 
     cJSON *resp = cJSON_CreateObject();
