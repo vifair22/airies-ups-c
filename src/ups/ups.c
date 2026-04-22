@@ -148,18 +148,44 @@ const ups_freq_setting_t *ups_find_freq_value(const ups_t *ups, uint16_t value)
     return NULL;
 }
 
-/* --- Error recovery --- */
+/* --- Error recovery ---
+ *
+ * Two-phase recovery: repeated read failures tear down the transport
+ * (ups_handle_error), and any subsequent read attempts reconnect
+ * (ups_try_reconnect). The retry path never "gives up" — a USB serial
+ * device that disappears briefly is expected to come back, and the
+ * monitor loop will keep invoking reads that drive retries.
+ *
+ * RECONNECT_INTERVAL_SEC rate-limits reconnects so we don't try every
+ * single poll while the port is down. It is NOT a giving-up timeout. */
 
 #define MAX_CONSECUTIVE_ERRORS 5
-#define RECONNECT_BACKOFF_SEC  2
+#define RECONNECT_INTERVAL_SEC 2
 
 static void ups_clear_errors(ups_t *ups)
 {
     ups->consecutive_errors = 0;
 }
 
-/* After repeated failures, disconnect and reconnect through the driver.
- * Includes a brief backoff delay to avoid hammering a misbehaving port. */
+/* Attempt to (re)open the transport if it's currently down.
+ * Rate-limited to one attempt per RECONNECT_INTERVAL_SEC so a fast
+ * poll loop doesn't hammer the driver's connect path. */
+static void ups_try_reconnect(ups_t *ups)
+{
+    if (ups->transport) return;
+    if (!ups->driver->connect) return;
+
+    time_t now = time(NULL);
+    if (now - ups->last_reconnect_attempt < RECONNECT_INTERVAL_SEC) return;
+    ups->last_reconnect_attempt = now;
+
+    ups->transport = ups->driver->connect(&ups->params);
+    if (ups->transport)
+        ups->consecutive_errors = 0;
+}
+
+/* Tear down the transport after repeated read failures. The next read
+ * call will reopen via ups_try_reconnect. */
 static void ups_handle_error(ups_t *ups)
 {
     ups->consecutive_errors++;
@@ -168,17 +194,16 @@ static void ups_handle_error(ups_t *ups)
         if (ups->transport && ups->driver->disconnect)
             ups->driver->disconnect(ups->transport);
         ups->transport = NULL;
-
-        /* Brief backoff before reconnect attempt */
-        struct timespec delay = { .tv_sec = RECONNECT_BACKOFF_SEC, .tv_nsec = 0 };
-        nanosleep(&delay, NULL);
-
-        if (ups->driver->connect) {
-            ups->transport = ups->driver->connect(&ups->params);
-            if (ups->transport)
-                ups->consecutive_errors = 0;
-        }
+        ups->last_reconnect_attempt = 0;  /* allow immediate first retry */
     }
+}
+
+/* Shared prologue for driver calls: if transport is down, try to bring
+ * it back. Returns 1 if transport is usable, 0 if caller should bail. */
+static int ups_ensure_transport(ups_t *ups)
+{
+    if (!ups->transport) ups_try_reconnect(ups);
+    return ups->transport != NULL;
 }
 
 /* --- Read dispatch --- */
@@ -187,7 +212,7 @@ int ups_read_status(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_status) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->read_status(ups->transport, data);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
@@ -198,7 +223,7 @@ int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->read_dynamic(ups->transport, data);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
@@ -218,7 +243,7 @@ int ups_read_inventory(ups_t *ups, ups_inventory_t *inv)
 {
     if (!ups->driver->read_inventory) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->read_inventory(ups->transport, inv);
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
@@ -228,7 +253,7 @@ int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_
 {
     if (!ups->driver->read_thresholds) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->read_thresholds(ups->transport, transfer_high, transfer_low);
     pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
@@ -289,7 +314,7 @@ int ups_cmd_execute(ups_t *ups, const char *name, int is_off)
     if (!fn) return UPS_ERR_NOT_SUPPORTED;
 
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = fn(ups->transport);
     post_command_settle();
     pthread_mutex_unlock(&ups->cmd_mutex);
@@ -327,7 +352,7 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
 {
     if (!ups->driver->config_read) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->config_read(ups->transport, reg, raw_value, str_buf, str_bufsz);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
     pthread_mutex_unlock(&ups->cmd_mutex);
@@ -339,7 +364,7 @@ int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
     if (!reg->writable) return UPS_ERR_NOT_SUPPORTED;
     if (!ups->driver->config_write) return UPS_ERR_NOT_SUPPORTED;
     pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups->transport) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
     int rc = ups->driver->config_write(ups->transport, reg, value);
     post_command_settle();
     pthread_mutex_unlock(&ups->cmd_mutex);

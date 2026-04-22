@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <time.h>
 #include <pthread.h>
 #include "ups_driver.h"
 #include "ups_format.h"
@@ -125,6 +126,7 @@ typedef struct ups_context {
     int                 has_inventory;
     pthread_mutex_t     cmd_mutex;  /* serializes all driver calls */
     int                 consecutive_errors;
+    time_t              last_reconnect_attempt;  /* rate-limits retries when transport is down */
     ups_conn_params_t   params;     /* saved for reconnect */
     /* String storage for params (so params can outlive the caller's stack) */
     char                _device_buf[256];
