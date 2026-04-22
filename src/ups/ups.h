@@ -111,6 +111,9 @@
 #define UPS_ERR_IO            -1    /* I/O failure (transport down, driver returned -1) */
 #define UPS_ERR_NO_DRIVER     -2    /* no driver claimed the UPS */
 #define UPS_ERR_NOT_SUPPORTED -3    /* the active driver does not implement this feature */
+#define UPS_ERR_INVALID_VALUE -4    /* config write failed validation (out of range, not in
+                                     * strict bitfield opts, etc.) — caller error, not driver
+                                     * error; API should map to HTTP 400 */
 
 /* ---------------------------------------------------------------------------
  *  Efficiency encoding

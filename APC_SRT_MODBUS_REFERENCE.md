@@ -419,14 +419,22 @@ These registers are **read/write** and control UPS operational parameters.
 
 `BatteryTestIntervalSetting_BF` — controls automatic battery self-test schedule.
 
-| Bit | Setting |
-|-----|---------|
-| 0 | Never |
-| 1 | OnStartUpOnly |
-| 2 | OnStartUpPlus7 (startup + every 7 days) |
-| 3 | OnStartUpPlus14 (startup + every 14 days) |
-| 4 | OnStartUp7Since (every 7 days since last test) |
-| 5 | OnStartUp14Since (every 14 days since last test) |
+| Value | Bit | Setting | Status |
+|-------|-----|---------|--------|
+| 1 | 0 | Never | Accepted |
+| 2 | 1 | OnStartUpOnly | Accepted |
+| 4 | 2 | OnStartUpPlus7 (startup + every 7 days) | **Defined in spec, rejected on SRT1000XLA FW 16.5** |
+| 8 | 3 | OnStartUpPlus14 (startup + every 14 days) | **Defined in spec, rejected on SRT1000XLA FW 16.5** |
+| 16 | 4 | OnStartUp7Since (every 7 days since last test) | Accepted |
+| 32 | 5 | OnStartUp14Since (every 14 days since last test) | Accepted |
+
+#### Rejected Values (SRT1000XLA FW 16.5)
+
+Values 4 (OnStartUpPlus7) and 8 (OnStartUpPlus14) are defined in AN-176 / 990-9840B but rejected by this firmware with Modbus exception 0x04 ("Slave device or server failure"). The same constraint was independently confirmed on the SMT line (SMT1500RM2UC FW UPS 04.1) — these bits appear to be spec-defined but never wired into operational firmware. The driver omits them from `srt_bat_test_opts` and the registry's strict-bitfield validation blocks writes of these values before they hit the wire.
+
+| Value | Result |
+|-------|--------|
+| 4, 8 | Slave device or server failure (Modbus exception 0x04) |
 
 ### Transfer Voltages
 
