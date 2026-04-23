@@ -10,6 +10,7 @@ The frontend (React/Vite) and SQL migrations are embedded into the daemon binary
 |------|------|-----|--------|
 | upspi | `sysadmin@upspi.internal.airies.net` | APC SRT (Modbus RTU) | `http://upspi.internal.airies.net:8080` |
 | upspi2 | `sysadmin@upspi2.internal.airies.net` | APC Back-UPS ES 600M1 (USB HID) | `http://upspi2.internal.airies.net:8080` |
+| upspi3 | `sysadmin@upspi3.internal.airies.net` | APC SMT1500RM2UC (Modbus RTU) | `http://upspi3.internal.airies.net:8080` |
 
 ## Prerequisites
 
@@ -92,6 +93,7 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 ./deploy.sh              # full deploy to all hosts
 ./deploy.sh full upspi   # deploy to upspi only
 ./deploy.sh full upspi2  # deploy to upspi2 only
+./deploy.sh full upspi3  # deploy to upspi3 only
 ```
 
 ## Deploy script modes
@@ -104,7 +106,7 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 | `./deploy.sh restart [target]` | Restart the service only (no build) |
 | `./deploy.sh install-service [target]` | Copy the service file to systemd and reload (one-time setup) |
 
-Target is `all` (default), `upspi`, or `upspi2`.
+Target is `all` (default), `upspi`, `upspi2`, or `upspi3`.
 
 ## What gets deployed
 

@@ -16,6 +16,7 @@
 # Target selection:
 #   ./deploy.sh full upspi   # deploy to upspi only
 #   ./deploy.sh full upspi2  # deploy to upspi2 only
+#   ./deploy.sh full upspi3  # deploy to upspi3 only
 #   ./deploy.sh full all     # deploy to all (default)
 #
 # Requires: aarch64-unknown-linux-gnu-gcc (crossdev), bun, brotli, gzip, xxd
@@ -25,6 +26,7 @@ set -euo pipefail
 declare -A HOSTS=(
     [upspi]="sysadmin@upspi.internal.airies.net"
     [upspi2]="sysadmin@upspi2.internal.airies.net"
+    [upspi3]="sysadmin@upspi3.internal.airies.net"
 )
 
 PI_APP_DIR="/home/sysadmin/airies-ups"
@@ -124,7 +126,7 @@ case "$ACTION" in
         done
         ;;
     *)
-        echo "Usage: $0 [local|full|build|restart|install-service] [upspi|upspi2|all]"
+        echo "Usage: $0 [local|full|build|restart|install-service] [upspi|upspi2|upspi3|all]"
         exit 1
         ;;
 esac
