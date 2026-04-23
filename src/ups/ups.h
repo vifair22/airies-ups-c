@@ -308,6 +308,13 @@ int ups_has_cap(const ups_t *ups, ups_cap_t cap);
  * the ups_t's lifetime. */
 const char *ups_driver_name(const ups_t *ups);
 
+/* Whether the underlying transport is currently open. Tracks the recovery
+ * layer's ground truth: a single failed read does not flip this — only a
+ * sustained failure that forces ups_handle_error to tear down the transport
+ * (see MAX_CONSECUTIVE_ERRORS in ups.c). The monitor uses this to avoid
+ * firing disconnect/reconnect events on transient flakes. */
+int ups_is_connected(const ups_t *ups);
+
 /* Power-path topology for this UPS. Calls the driver's get_topology
  * callback if set; otherwise returns the static topology field. */
 ups_topology_t ups_topology(const ups_t *ups);

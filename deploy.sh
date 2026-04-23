@@ -32,6 +32,7 @@ declare -A HOSTS=(
 PI_APP_DIR="/home/sysadmin/airies-ups"
 LOCAL_DIR="$HOME/.local/share/airies-ups"
 SERVICE="airies-ups.service"
+UDEV_RULE="99-airies-ups-ftdi.rules"
 
 info()  { echo -e "\033[1;34m==>\033[0m $*"; }
 err()   { echo -e "\033[1;31m==>\033[0m $*" >&2; exit 1; }
@@ -92,6 +93,14 @@ install_service() {
     info "[$host] Installing service file..."
     rsync -az airies-ups.service "${HOSTS[$host]}:$PI_APP_DIR/"
     ssh "${HOSTS[$host]}" "sudo cp $PI_APP_DIR/airies-ups.service /etc/systemd/system/$SERVICE && sudo systemctl daemon-reload"
+
+    info "[$host] Installing udev rule ($UDEV_RULE)..."
+    rsync -az "$UDEV_RULE" "${HOSTS[$host]}:$PI_APP_DIR/"
+    # No-op on hosts without an FTDI adapter (e.g. upspi2 uses USB HID);
+    # the rule matches ftdi_sio specifically.
+    ssh "${HOSTS[$host]}" "sudo cp $PI_APP_DIR/$UDEV_RULE /etc/udev/rules.d/$UDEV_RULE \
+        && sudo udevadm control --reload \
+        && sudo udevadm trigger --subsystem-match=usb-serial --action=change"
 }
 
 ACTION="${1:-full}"
