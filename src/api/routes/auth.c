@@ -245,6 +245,10 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
     const char *conn_type = (jtype && cJSON_IsString(jtype)) ? jtype->valuestring : "serial";
 
     ups_conn_params_t params = {0};
+    /* Own the device path locally — cJSON_Delete(body) below frees the
+     * jdev->valuestring we'd otherwise hand to the driver, and ups_connect
+     * doesn't deep-copy until *after* drv->connect() has already used it. */
+    char device_buf[256] = {0};
 
     if (strcmp(conn_type, "usb") == 0) {
         const cJSON *jvid = cJSON_GetObjectItem(body, "usb_vid");
@@ -262,8 +266,9 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
             cJSON_Delete(body);
             return api_error(400, "missing 'device' field");
         }
+        snprintf(device_buf, sizeof(device_buf), "%s", jdev->valuestring);
         params.type = UPS_CONN_SERIAL;
-        params.serial.device = jdev->valuestring;
+        params.serial.device = device_buf;
         params.serial.baud = (jbaud && cJSON_IsNumber(jbaud)) ? jbaud->valueint : 9600;
         params.serial.slave_id = (jslave && cJSON_IsNumber(jslave)) ? jslave->valueint : 1;
     }
