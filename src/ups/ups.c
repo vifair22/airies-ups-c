@@ -166,6 +166,11 @@ const char *ups_driver_name(const ups_t *ups)
     return ups->driver->name;
 }
 
+int ups_is_connected(const ups_t *ups)
+{
+    return ups && ups->transport != NULL;
+}
+
 ups_topology_t ups_topology(const ups_t *ups)
 {
     if (ups->driver->get_topology)

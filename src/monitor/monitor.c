@@ -266,13 +266,25 @@ static void *monitor_thread(void *arg)
         memset(&data, 0, sizeof(data));
         if (ups_read_status(mon->ups, &data) != 0 ||
             ups_read_dynamic(mon->ups, &data) != 0) {
-            log_error("failed to read UPS data");
+            /* Debounce connectivity events against the transport state,
+             * not this single read. The recovery layer in ups.c keeps the
+             * transport open across a handful of transient Modbus flakes
+             * (CRC errors, inter-frame races on FTDI-backed links) and
+             * only tears it down after MAX_CONSECUTIVE_ERRORS in a row.
+             * Firing "UPS Disconnected" on every transient misread floods
+             * the event log with phantom cycles even though comms never
+             * actually dropped. */
+            int transport_up = ups_is_connected(mon->ups);
+            if (transport_up)
+                log_warn("UPS read failed (transient — transport still open)");
+            else
+                log_error("UPS connection lost");
+
             pthread_mutex_lock(&mon->mutex);
-            mon->connected = 0;
+            mon->connected = transport_up;
             pthread_mutex_unlock(&mon->mutex);
 
-            /* Fire disconnect event on transition */
-            if (mon->was_connected) {
+            if (!transport_up && mon->was_connected) {
                 mon->was_connected = 0;
                 mon->disconnected_at = time(NULL);
                 fire_event(mon, "error", "system", "UPS Disconnected",

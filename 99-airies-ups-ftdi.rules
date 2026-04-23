@@ -1,0 +1,13 @@
+# FTDI latency timer tweak for Modbus RTU links.
+#
+# The FT232R defaults to a 16 ms latency_timer, meaning the chip buffers
+# incoming bytes for up to 16 ms before delivering them to the host. At
+# 9600 baud 8N1, one character takes ~1.04 ms and Modbus RTU's 3.5-char
+# inter-frame gap is ~3.65 ms. The default latency races libmodbus's
+# RTU end-of-frame detection and occasionally produces response timeouts
+# or CRC misreads on an otherwise healthy link.
+#
+# Dropping to 1 ms gives libmodbus a tight, predictable frame boundary
+# and eliminates the spurious per-transaction failures observed on
+# upspi / upspi3.
+SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTR{latency_timer}="1"
