@@ -1,5 +1,6 @@
 #include "api/routes/routes.h"
 #include <cJSON.h>
+#include <cutils/error.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -365,6 +366,16 @@ static api_response_t handle_shutdown_settings_get(const api_request_t *req, voi
     return api_ok(json);
 }
 
+/* Wrap config_set_db with JSON-body cleanup and API-error propagation.
+ * Uses ctx->config and body from the enclosing function scope. */
+#define SET_OR_FAIL(key, val) \
+    do { \
+        if (config_set_db(ctx->config, (key), (val)) != CUTILS_OK) { \
+            cJSON_Delete(body); \
+            return api_error(500, cutils_get_error()); \
+        } \
+    } while (0)
+
 static api_response_t handle_shutdown_settings_set(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
@@ -376,39 +387,39 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
     if (trigger) {
         const cJSON *jm = cJSON_GetObjectItem(trigger, "mode");
         if (jm && cJSON_IsString(jm))
-            config_set_db(ctx->config, "shutdown.trigger", jm->valuestring);
+            SET_OR_FAIL("shutdown.trigger", jm->valuestring);
         const cJSON *jsrc = cJSON_GetObjectItem(trigger, "source");
         if (jsrc && cJSON_IsString(jsrc))
-            config_set_db(ctx->config, "shutdown.trigger_source", jsrc->valuestring);
+            SET_OR_FAIL("shutdown.trigger_source", jsrc->valuestring);
         const cJSON *jrt = cJSON_GetObjectItem(trigger, "runtime_sec");
         if (jrt && cJSON_IsNumber(jrt)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jrt->valueint);
-            config_set_db(ctx->config, "shutdown.trigger_runtime_sec", v);
+            SET_OR_FAIL("shutdown.trigger_runtime_sec", v);
         }
         const cJSON *jbp = cJSON_GetObjectItem(trigger, "battery_pct");
         if (jbp && cJSON_IsNumber(jbp)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jbp->valueint);
-            config_set_db(ctx->config, "shutdown.trigger_battery_pct", v);
+            SET_OR_FAIL("shutdown.trigger_battery_pct", v);
         }
         const cJSON *job = cJSON_GetObjectItem(trigger, "on_battery");
         if (job && cJSON_IsBool(job))
-            config_set_db(ctx->config, "shutdown.trigger_on_battery",
-                          cJSON_IsTrue(job) ? "1" : "0");
+            SET_OR_FAIL("shutdown.trigger_on_battery",
+                        cJSON_IsTrue(job) ? "1" : "0");
         const cJSON *jds = cJSON_GetObjectItem(trigger, "delay_sec");
         if (jds && cJSON_IsNumber(jds)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jds->valueint);
-            config_set_db(ctx->config, "shutdown.trigger_delay_sec", v);
+            SET_OR_FAIL("shutdown.trigger_delay_sec", v);
         }
         const cJSON *jf = cJSON_GetObjectItem(trigger, "field");
         if (jf && cJSON_IsString(jf))
-            config_set_db(ctx->config, "shutdown.trigger_field", jf->valuestring);
+            SET_OR_FAIL("shutdown.trigger_field", jf->valuestring);
         const cJSON *jfo = cJSON_GetObjectItem(trigger, "field_op");
         if (jfo && cJSON_IsString(jfo))
-            config_set_db(ctx->config, "shutdown.trigger_field_op", jfo->valuestring);
+            SET_OR_FAIL("shutdown.trigger_field_op", jfo->valuestring);
         const cJSON *jfv = cJSON_GetObjectItem(trigger, "field_value");
         if (jfv && cJSON_IsNumber(jfv)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jfv->valueint);
-            config_set_db(ctx->config, "shutdown.trigger_field_value", v);
+            SET_OR_FAIL("shutdown.trigger_field_value", v);
         }
     }
 
@@ -420,16 +431,16 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
         const cJSON *jdly  = cJSON_GetObjectItem(ups_action, "delay");
 
         if (jmode && cJSON_IsString(jmode))
-            config_set_db(ctx->config, "shutdown.ups_mode", jmode->valuestring);
+            SET_OR_FAIL("shutdown.ups_mode", jmode->valuestring);
         if (jreg && cJSON_IsString(jreg))
-            config_set_db(ctx->config, "shutdown.ups_register", jreg->valuestring);
+            SET_OR_FAIL("shutdown.ups_register", jreg->valuestring);
         if (jval && cJSON_IsNumber(jval)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jval->valueint);
-            config_set_db(ctx->config, "shutdown.ups_value", v);
+            SET_OR_FAIL("shutdown.ups_value", v);
         }
         if (jdly && cJSON_IsNumber(jdly)) {
             char v[16]; snprintf(v, sizeof(v), "%d", jdly->valueint);
-            config_set_db(ctx->config, "shutdown.ups_delay", v);
+            SET_OR_FAIL("shutdown.ups_delay", v);
         }
     }
 
@@ -437,13 +448,15 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
     if (controller) {
         const cJSON *jen = cJSON_GetObjectItem(controller, "enabled");
         if (jen && cJSON_IsBool(jen))
-            config_set_db(ctx->config, "shutdown.controller_enabled",
-                          cJSON_IsTrue(jen) ? "1" : "0");
+            SET_OR_FAIL("shutdown.controller_enabled",
+                        cJSON_IsTrue(jen) ? "1" : "0");
     }
 
     cJSON_Delete(body);
     return api_ok_msg("updated");
 }
+
+#undef SET_OR_FAIL
 
 /* --- Registration --- */
 

@@ -9,6 +9,7 @@
 
 #include <openssl/sha.h>
 #include <cutils/db.h>
+#include <cutils/error.h>
 #include "api/auth.h"
 
 /* --- Test fixture: in-memory SQLite DB with auth schema --- */
@@ -128,17 +129,17 @@ static void test_legacy_hash_migration(void **state)
     hex[64] = '\0';
 
     const char *params[] = { hex, NULL };
-    db_execute_non_query(db,
+    assert_int_equal(db_execute_non_query(db,
         "INSERT INTO auth (id, password_hash) VALUES (1, ?)",
-        params, NULL);
+        params, NULL), CUTILS_OK);
 
     /* Verify works with legacy hash */
     assert_int_equal(auth_verify_password(db, "legacypass"), 1);
 
     /* Should have auto-upgraded to PBKDF2 */
     db_result_t *result = NULL;
-    db_execute(db, "SELECT password_hash FROM auth WHERE id = 1",
-               NULL, &result);
+    assert_int_equal(db_execute(db, "SELECT password_hash FROM auth WHERE id = 1",
+               NULL, &result), CUTILS_OK);
     assert_non_null(result);
     assert_true(result->nrows > 0);
     assert_true(strncmp(result->rows[0][0], "$pbkdf2$", 8) == 0);
@@ -224,9 +225,9 @@ static void test_expired_token_invalid(void **state)
 
     /* Insert a token that expired in the past */
     const char *params[] = { "expired_tok_123", "2020-01-01 00:00:00", NULL };
-    db_execute_non_query(db,
+    assert_int_equal(db_execute_non_query(db,
         "INSERT INTO sessions (token, expires_at) VALUES (?, ?)",
-        params, NULL);
+        params, NULL), CUTILS_OK);
 
     assert_int_equal(auth_validate_token(db, "expired_tok_123"), 0);
 }
@@ -239,9 +240,9 @@ static void test_cleanup_removes_expired(void **state)
 
     /* Insert an expired session */
     const char *exp_params[] = { "old_token", "2020-01-01 00:00:00", NULL };
-    db_execute_non_query(db,
+    assert_int_equal(db_execute_non_query(db,
         "INSERT INTO sessions (token, expires_at) VALUES (?, ?)",
-        exp_params, NULL);
+        exp_params, NULL), CUTILS_OK);
 
     /* Insert a valid session */
     char *valid = auth_create_token(db, 24);
@@ -265,9 +266,9 @@ static void inject_hash(cutils_db_t *db, const char *hash)
 {
     /* Ensure row exists first, then update */
     const char *ins_params[] = { hash, NULL };
-    db_execute_non_query(db,
+    assert_int_equal(db_execute_non_query(db,
         "INSERT OR REPLACE INTO auth (id, password_hash) VALUES (1, ?)",
-        ins_params, NULL);
+        ins_params, NULL), CUTILS_OK);
 }
 
 static void test_malformed_pbkdf2_missing_fields(void **state)

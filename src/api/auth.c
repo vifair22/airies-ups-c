@@ -242,9 +242,11 @@ int auth_validate_token(cutils_db_t *db, const char *token)
 void auth_cleanup_sessions(cutils_db_t *db)
 {
     int deleted = 0;
-    db_execute_non_query(db,
+    /* Best-effort maintenance; on failure deleted stays 0 so the
+     * conditional log below won't produce a misleading "cleaned up N" line. */
+    CUTILS_UNUSED(db_execute_non_query(db,
         "DELETE FROM sessions WHERE expires_at < datetime('now')",
-        NULL, &deleted);
+        NULL, &deleted));
     if (deleted > 0)
         log_info("auth: cleaned up %d expired sessions", deleted);
 }

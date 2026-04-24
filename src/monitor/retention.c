@@ -19,8 +19,10 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
 
         const char *params[] = { ts, NULL };
         int deleted = 0;
-        db_execute_non_query(db,
-            "DELETE FROM telemetry WHERE timestamp < ?", params, &deleted);
+        /* Best-effort retention sweep; on failure deleted stays 0 so the
+         * conditional log below won't report work that didn't happen. */
+        CUTILS_UNUSED(db_execute_non_query(db,
+            "DELETE FROM telemetry WHERE timestamp < ?", params, &deleted));
 
         if (deleted > 0) {
             log_info("retention: deleted %d telemetry rows older than %d days",
@@ -46,12 +48,13 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
 
         const char *params[] = { ts, interval_s, ts, interval_s, NULL };
         int downsampled = 0;
-        db_execute_non_query(db,
+        /* Best-effort downsampling; same reasoning as the delete above. */
+        CUTILS_UNUSED(db_execute_non_query(db,
             "DELETE FROM telemetry WHERE timestamp < ? AND id NOT IN ("
             "  SELECT MIN(id) FROM telemetry WHERE timestamp < ? "
             "  GROUP BY CAST(strftime('%%s', timestamp) AS INTEGER) / ?"
             ")",
-            params, &downsampled);
+            params, &downsampled));
 
         if (downsampled > 0) {
             log_info("retention: downsampled %d telemetry rows (older than %dh, "
@@ -63,7 +66,9 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
 
     /* Phase 3: Vacuum if we deleted anything */
     if (affected > 0)
-        db_exec_raw(db, "PRAGMA incremental_vacuum;");
+        /* Pure housekeeping; a failed vacuum just delays space reclaim
+         * until the next retention pass. */
+        CUTILS_UNUSED(db_exec_raw(db, "PRAGMA incremental_vacuum;"));
 
     return 0;
 }

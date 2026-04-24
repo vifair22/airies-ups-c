@@ -96,10 +96,12 @@ static void fire_event(monitor_t *mon, const char *severity,
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
     const char *params[] = { ts, severity, category, title, message, NULL };
-    db_execute_non_query(mon->db,
+    /* Best-effort event journaling; downstream callbacks run regardless
+     * so the event isn't lost even if persistence fails. */
+    CUTILS_UNUSED(db_execute_non_query(mon->db,
         "INSERT INTO events (timestamp, severity, category, title, message) "
         "VALUES (?, ?, ?, ?, ?)",
-        params, NULL);
+        params, NULL));
 
     /* Fire callbacks */
     for (int i = 0; i < mon->nevent_cbs; i++) {
@@ -159,13 +161,15 @@ static void record_telemetry(monitor_t *mon, const ups_data_t *d)
         ov_s, of_s, oc_s, iv_s, eff_s,
         mog_s, sog0_s, sog1_s, energy_s, NULL
     };
-    db_execute_non_query(mon->db,
+    /* Best-effort telemetry insert; next poll will append a fresh row
+     * regardless, so a transient DB error is self-healing. */
+    CUTILS_UNUSED(db_execute_non_query(mon->db,
         "INSERT INTO telemetry (timestamp, status, charge_pct, runtime_sec, "
         "battery_voltage, load_pct, output_voltage, output_frequency, "
         "output_current, input_voltage, efficiency, "
         "outlet_mog, outlet_sog0, outlet_sog1, output_energy_wh) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params, NULL);
+        params, NULL));
 }
 
 static void format_status_line(const ups_data_t *d, char *buf, size_t len)
@@ -231,11 +235,13 @@ static void snapshot_config_registers(monitor_t *mon)
                      regs[i].unit ? " " : "", regs[i].unit ? regs[i].unit : "");
 
         const char *ins_params[] = { regs[i].name, raw_s, display_s, ts, source, NULL };
-        db_execute_non_query(mon->db,
+        /* Best-effort per-register snapshot; snapped counter reflects
+         * attempts, not successes — the summary log line is informational. */
+        CUTILS_UNUSED(db_execute_non_query(mon->db,
             "INSERT INTO ups_config "
             "(register_name, raw_value, display_value, timestamp, source) "
             "VALUES (?, ?, ?, ?, ?)",
-            ins_params, NULL);
+            ins_params, NULL));
         snapped++;
     }
 
