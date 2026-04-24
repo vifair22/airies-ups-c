@@ -89,8 +89,8 @@ static int setup(void **state)
     if (rc != CUTILS_OK) { db_close(db); config_free(cfg); return -1; }
 
     /* Safety: make shutdown_execute a no-op */
-    config_set_db(cfg, "shutdown.ups_mode", "none");
-    config_set_db(cfg, "shutdown.controller_enabled", "0");
+    assert_int_equal(config_set_db(cfg, "shutdown.ups_mode", "none"), CUTILS_OK);
+    assert_int_equal(config_set_db(cfg, "shutdown.controller_enabled", "0"), CUTILS_OK);
 
     /* Create shutdown manager (ups=NULL is safe with ups_mode=none) */
     shutdown_mgr_t *mgr = shutdown_create(db, NULL, cfg);
@@ -123,7 +123,7 @@ static int teardown(void **state)
 static void test_trigger_manual_never_fires(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "manual");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "manual"), CUTILS_OK);
 
     /* On battery, low runtime — should still not trigger */
     ups_data_t d = {0};
@@ -144,11 +144,11 @@ static void test_trigger_manual_never_fires(void **state)
 static void test_trigger_software_requires_battery(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1");
-    config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "0");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "0"), CUTILS_OK);
 
     /* Online (not on battery) with low runtime — should NOT trigger */
     ups_data_t d = {0};
@@ -164,11 +164,11 @@ static void test_trigger_software_requires_battery(void **state)
 static void test_trigger_software_runtime_debounce(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1");
-    config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.status = UPS_ST_ON_BATTERY;
@@ -185,11 +185,11 @@ static void test_trigger_software_runtime_debounce(void **state)
 static void test_trigger_software_runtime_resets_on_recovery(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1");
-    config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.status = UPS_ST_ON_BATTERY;
@@ -213,12 +213,12 @@ static void test_trigger_software_runtime_resets_on_recovery(void **state)
 static void test_trigger_software_battery_threshold(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1");
-    config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_battery_pct", "20");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "1"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_battery_pct", "20"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.status = UPS_ST_ON_BATTERY;
@@ -236,11 +236,11 @@ static void test_trigger_software_battery_threshold(void **state)
 static void test_trigger_software_no_battery_requirement(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "runtime"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec", "300"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     /* Online (not on battery) but low runtime — should still trigger
      * because trigger_on_battery=0 */
@@ -258,8 +258,8 @@ static void test_trigger_software_no_battery_requirement(void **state)
 static void test_trigger_ups_mode(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "ups");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "ups"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.sig_status = 0;
@@ -281,13 +281,13 @@ static void test_trigger_ups_mode(void **state)
 static void test_trigger_field_lt(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "field");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_field", "input_voltage");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_op", "lt");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_value", "90");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "field"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "input_voltage"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_op", "lt"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_value", "90"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.input_voltage = 120.0;
@@ -307,13 +307,13 @@ static void test_trigger_field_lt(void **state)
 static void test_trigger_field_gt(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "field");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_field", "load_pct");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_op", "gt");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_value", "95");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "field"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "load_pct"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_op", "gt"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_value", "95"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.load_pct = 50.0;
@@ -327,13 +327,13 @@ static void test_trigger_field_gt(void **state)
 static void test_trigger_field_eq(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "field");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_field", "charge_pct");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_op", "eq");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_value", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "field"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "charge_pct"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_op", "eq"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_value", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     d.charge_pct = 50.0;
@@ -347,11 +347,11 @@ static void test_trigger_field_eq(void **state)
 static void test_trigger_field_empty_name(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "field");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_field", "");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "field"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", ""), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     ups_data_t d = {0};
     /* Empty field name → get_ups_field returns 0, compare_field("lt",0,0) = false */
@@ -363,12 +363,12 @@ static void test_trigger_field_empty_name(void **state)
 static void test_trigger_all_data_fields(void **state)
 {
     test_ctx_t *ctx = *state;
-    config_set_db(ctx->cfg, "shutdown.trigger", "software");
-    config_set_db(ctx->cfg, "shutdown.trigger_source", "field");
-    config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_op", "gt");
-    config_set_db(ctx->cfg, "shutdown.trigger_field_value", "0");
-    config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger", "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source", "field"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_op", "gt"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_value", "0"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec", "9999"), CUTILS_OK);
 
     const char *fields[] = {
         "runtime_sec", "charge_pct", "battery_voltage", "load_pct",
@@ -394,7 +394,7 @@ static void test_trigger_all_data_fields(void **state)
         shutdown_free(ctx->mgr);
         ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
 
-        config_set_db(ctx->cfg, "shutdown.trigger_field", fields[i]);
+        assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", fields[i]), CUTILS_OK);
         shutdown_check_trigger(ctx->mgr, &d);
         /* Each field > 0, op=gt, value=0 → condition met, debounce starts */
     }
@@ -402,7 +402,7 @@ static void test_trigger_all_data_fields(void **state)
     /* Test unknown field name — should not trigger */
     shutdown_free(ctx->mgr);
     ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
-    config_set_db(ctx->cfg, "shutdown.trigger_field", "nonexistent_field");
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "nonexistent_field"), CUTILS_OK);
     shutdown_check_trigger(ctx->mgr, &d);
 }
 
@@ -455,15 +455,17 @@ static void test_execute_dry_run_with_group(void **state)
     test_ctx_t *ctx = *state;
 
     /* Insert a group and target */
-    db_exec_raw(ctx->db,
+    assert_int_equal(db_exec_raw(ctx->db,
         "INSERT INTO shutdown_groups (name, execution_order, parallel, "
-        "max_timeout_sec, post_group_delay) VALUES ('test_group', 1, 0, 0, 0)");
-    db_exec_raw(ctx->db,
+        "max_timeout_sec, post_group_delay) VALUES ('test_group', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(db_exec_raw(ctx->db,
         "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
         "credential, command, timeout_sec, order_in_group, confirm_method, "
         "confirm_port, confirm_command, post_confirm_delay) "
         "VALUES (1, 'test_target', 'command', NULL, NULL, NULL, "
-        "'echo test', 30, 1, 'none', NULL, NULL, 0)");
+        "'echo test', 30, 1, 'none', NULL, NULL, 0)"),
+        CUTILS_OK);
 
     g_progress_count = 0;
     shutdown_on_progress(ctx->mgr, test_progress_cb, &g_progress_count);
