@@ -78,6 +78,13 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
         return api_error(400, "invalid JSON");
 
+    /* Serialize concurrent writers: BEGIN IMMEDIATE takes RESERVED up
+     * front, so the SELECT below observes any committed concurrent
+     * write rather than racing it and losing the merge. */
+    CUTILS_AUTO_DB_TX cutils_db_tx_t tx = { 0 };
+    if (cutils_db_tx_begin_immediate(ctx->db, &tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     /* Fetch current config so unspecified fields keep their current values
      * (partial-update semantics). */
     CUTILS_AUTO_DBRES db_result_t *cur = NULL;
@@ -150,6 +157,9 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
         params, NULL);
 
     if (rc != CUTILS_OK) return api_error(500, "failed to update weather config");
+
+    if (db_tx_commit(&tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
 
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
     if (json_resp_new(&resp) != CUTILS_OK)

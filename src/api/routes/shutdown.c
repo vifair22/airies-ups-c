@@ -468,6 +468,14 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
     if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
         return api_error(400, "invalid JSON");
 
+    /* Atomicity for the fourteen SET_*_IF writes below: any one failing
+     * mid-sequence would otherwise leave the row half-updated. The
+     * CFG_SET_OR_FAIL early-return inside the macros unwinds through
+     * this scope, triggering the cleanup rollback. */
+    CUTILS_AUTO_DB_TX cutils_db_tx_t tx = { 0 };
+    if (cutils_db_tx_begin_immediate(ctx->db, &tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     SET_STR_IF ("trigger.mode",        "shutdown.trigger");
     SET_STR_IF ("trigger.source",      "shutdown.trigger_source");
     SET_I32_IF ("trigger.runtime_sec", "shutdown.trigger_runtime_sec");
@@ -485,6 +493,8 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
 
     SET_BOOL_IF("controller.enabled",  "shutdown.controller_enabled");
 
+    if (db_tx_commit(&tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
     return api_ok_msg("updated");
 }
 
