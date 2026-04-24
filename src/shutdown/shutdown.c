@@ -4,19 +4,6 @@
 #include <cutils/error.h>
 #include <cutils/mem.h>
 
-/* config_get_str for DB-backed keys returns a pointer into a shared static
- * buffer (db_val_buf in c-utils/src/config.c). Any subsequent config_get_*
- * call on another DB-backed key overwrites that buffer, silently clobbering
- * the previously-returned pointer. Callers that need to hold onto a string
- * across more than one config read MUST snapshot it into a local buffer
- * first — that's what this helper does. */
-static void cfg_get_str_copy(const cutils_config_t *cfg, const char *key,
-                             char *buf, size_t bufsz)
-{
-    const char *v = config_get_str(cfg, key);
-    snprintf(buf, bufsz, "%s", v ? v : "");
-}
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -428,9 +415,8 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
 
     /* --- Phase 2: UPS action --- */
 
-    char ups_mode[32];
-    cfg_get_str_copy(mgr->config, "shutdown.ups_mode", ups_mode, sizeof(ups_mode));
-    if (!ups_mode[0]) snprintf(ups_mode, sizeof(ups_mode), "%s", "command");
+    const char *ups_mode = config_get_str(mgr->config, "shutdown.ups_mode");
+    if (!ups_mode) ups_mode = "command";
     int ups_delay = config_get_int(mgr->config, "shutdown.ups_delay", 5);
 
     if (strcmp(ups_mode, "none") == 0) {
@@ -447,12 +433,12 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
                 log_error("UPS shutdown command FAILED");
         }
     } else if (strcmp(ups_mode, "register") == 0) {
-        char reg_name[64];
-        cfg_get_str_copy(mgr->config, "shutdown.ups_register", reg_name, sizeof(reg_name));
+        const char *reg_name = config_get_str(mgr->config, "shutdown.ups_register");
         int raw_val = config_get_int(mgr->config, "shutdown.ups_value", 0);
         if (dry_run) {
-            log_info("UPS action: would write %d to register '%s'", raw_val, reg_name);
-        } else if (reg_name[0]) {
+            log_info("UPS action: would write %d to register '%s'",
+                     raw_val, reg_name ? reg_name : "");
+        } else if (reg_name && reg_name[0]) {
             log_info("UPS action: writing %d to register '%s'", raw_val, reg_name);
             const ups_config_reg_t *reg = ups_find_config_reg(mgr->ups, reg_name);
             if (reg && reg->writable) {
@@ -535,9 +521,8 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
 {
     if (mgr->triggered) return;
 
-    char mode[32];
-    cfg_get_str_copy(mgr->config, "shutdown.trigger", mode, sizeof(mode));
-    if (!mode[0]) snprintf(mode, sizeof(mode), "%s", "software");
+    const char *mode = config_get_str(mgr->config, "shutdown.trigger");
+    if (!mode) mode = "software";
 
     /* Manual mode — never auto-trigger */
     if (strcmp(mode, "manual") == 0) return;
@@ -559,9 +544,8 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
             return;
         }
 
-        char source[32];
-        cfg_get_str_copy(mgr->config, "shutdown.trigger_source", source, sizeof(source));
-        if (!source[0]) snprintf(source, sizeof(source), "%s", "runtime");
+        const char *source = config_get_str(mgr->config, "shutdown.trigger_source");
+        if (!source) source = "runtime";
 
         if (strcmp(source, "runtime") == 0) {
             /* Runtime / battery percentage thresholds */
@@ -577,11 +561,9 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
 
         } else if (strcmp(source, "field") == 0) {
             /* Arbitrary data field watch */
-            char field[32];
-            cfg_get_str_copy(mgr->config, "shutdown.trigger_field", field, sizeof(field));
-            if (field[0]) {
-                char op[8];
-                cfg_get_str_copy(mgr->config, "shutdown.trigger_field_op", op, sizeof(op));
+            const char *field = config_get_str(mgr->config, "shutdown.trigger_field");
+            if (field && field[0]) {
+                const char *op = config_get_str(mgr->config, "shutdown.trigger_field_op");
                 int thresh_val = config_get_int(mgr->config, "shutdown.trigger_field_value", 0);
                 double actual = get_ups_field(data, field);
                 if (compare_field(actual, op, (double)thresh_val))
