@@ -479,6 +479,62 @@ static void test_auth_check_bearer_prefix(void **state)
     free(token);
 }
 
+/* --- Boundary tightening: public-endpoint allowlist is exact, not prefix --- */
+
+static void test_auth_check_unknown_setup_path_rejected(void **state)
+{
+    cutils_db_t *db = *state;
+    auth_set_password(db, "password");
+
+    /* Paths that look like setup endpoints but aren't registered must
+     * require auth — the allowlist is exact-match, not prefix-match. */
+    api_request_t req = make_request(0, NULL);
+    assert_int_equal(auth_check(&req, "/api/setup/foo",    db), 0);
+    assert_int_equal(auth_check(&req, "/api/setup/",       db), 0);
+    assert_int_equal(auth_check(&req, "/api/setup/statusx", db), 0);
+    assert_int_equal(auth_check(&req, "/api/auth/loginx",   db), 0);
+}
+
+/* --- Fail-closed behavior: DB errors must not grant access --- */
+
+static void test_auth_check_failsafe_on_db_error(void **state)
+{
+    cutils_db_t *db = *state;
+    auth_set_password(db, "password");
+
+    /* Drop the auth table so auth_is_setup's SELECT fails. auth_is_setup
+     * must report "set up" (fail-closed) so auth_check falls through to
+     * token validation — which then rejects the request for lack of a
+     * valid token. If this returned 1, we'd be fail-open. */
+    assert_int_equal(db_exec_raw(db, "DROP TABLE auth"), CUTILS_OK);
+    assert_int_equal(auth_is_setup(db), 1);
+
+    api_request_t req = make_request(0, NULL);
+    assert_int_equal(auth_check(&req, "/api/status", db), 0);
+}
+
+/* --- UPSERT preserves created_at across password changes --- */
+
+static void test_set_password_preserves_created_at(void **state)
+{
+    cutils_db_t *db = *state;
+
+    /* Seed with a known created_at we can check for equality later. */
+    const char *seed_params[] = { "$pbkdf2$100000$aa$bb", "2020-01-01 00:00:00", NULL };
+    assert_int_equal(db_execute_non_query(db,
+        "INSERT INTO auth (id, password_hash, created_at) VALUES (1, ?, ?)",
+        seed_params, NULL), CUTILS_OK);
+
+    assert_int_equal(auth_set_password(db, "newpassword"), 0);
+
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
+    assert_int_equal(db_execute(db,
+        "SELECT created_at FROM auth WHERE id = 1", NULL, &result), CUTILS_OK);
+    assert_non_null(result);
+    assert_true(result->nrows > 0);
+    assert_string_equal(result->rows[0][0], "2020-01-01 00:00:00");
+}
+
 /* --- auth_init (currently a no-op, but should succeed) --- */
 
 static void test_auth_init(void **state)
@@ -528,6 +584,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_auth_check_setup_mode_allows_all, setup, teardown),
         cmocka_unit_test_setup_teardown(test_auth_check_invalid_token_denied, setup, teardown),
         cmocka_unit_test_setup_teardown(test_auth_check_bearer_prefix, setup, teardown),
+        /* boundary tightening */
+        cmocka_unit_test_setup_teardown(test_auth_check_unknown_setup_path_rejected, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_auth_check_failsafe_on_db_error, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_set_password_preserves_created_at, setup, teardown),
         cmocka_unit_test_setup_teardown(test_auth_init, setup, teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

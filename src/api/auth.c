@@ -23,6 +23,18 @@
 #define SALT_BYTES         16
 #define KEY_BYTES          32
 
+/* Endpoints callable without authentication. Kept as an explicit allowlist
+ * (not a prefix match) so adding a new public route is a deliberate edit
+ * to this table rather than an accident of URL shape. */
+static const char *const PUBLIC_ENDPOINTS[] = {
+    "/api/auth/setup",
+    "/api/auth/login",
+    "/api/setup/status",
+    "/api/setup/ports",
+    "/api/setup/test",
+    NULL,
+};
+
 static void hex_encode(const unsigned char *in, size_t len, char *out)
 {
     for (size_t i = 0; i < len; i++)
@@ -138,7 +150,12 @@ int auth_is_setup(cutils_db_t *db)
     CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(db, "SELECT id FROM auth WHERE id = 1",
                         NULL, &result);
-    if (rc != 0 || !result) return 0;
+    /* Fail-closed: a DB failure here is treated as "set up" so the
+     * middleware won't grant setup-mode access on a transient query
+     * error. auth_set_password uses UPSERT and doesn't consult this,
+     * so the INSERT-vs-UPDATE path stays correct on genuinely empty
+     * databases. */
+    if (rc != 0 || !result) return 1;
     return result->nrows > 0;
 }
 
@@ -153,19 +170,17 @@ int auth_set_password(cutils_db_t *db, const char *password)
     char *hashed = hash_password(password);
     if (!hashed) return -1;
 
-    int rc;
-    if (auth_is_setup(db)) {
-        const char *params[] = { hashed, NULL };
-        rc = db_execute_non_query(db,
-            "UPDATE auth SET password_hash = ?, updated_at = datetime('now') "
-            "WHERE id = 1",
-            params, NULL);
-    } else {
-        const char *params[] = { hashed, NULL };
-        rc = db_execute_non_query(db,
-            "INSERT INTO auth (id, password_hash) VALUES (1, ?)",
-            params, NULL);
-    }
+    /* UPSERT so we don't depend on auth_is_setup to pick INSERT vs UPDATE.
+     * The DO UPDATE clause leaves created_at alone and only refreshes
+     * updated_at, so the original install timestamp survives password
+     * changes. */
+    const char *params[] = { hashed, NULL };
+    int rc = db_execute_non_query(db,
+        "INSERT INTO auth (id, password_hash) VALUES (1, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "    password_hash = excluded.password_hash, "
+        "    updated_at    = datetime('now')",
+        params, NULL);
 
     free(hashed);
     return rc;
@@ -268,13 +283,16 @@ int auth_check(const api_request_t *req, const char *url, void *userdata)
     if (req->is_local)
         return 1;
 
-    /* Public endpoints — no auth required */
-    if (strcmp(url, "/api/auth/setup") == 0 ||
-        strcmp(url, "/api/auth/login") == 0 ||
-        strncmp(url, "/api/setup/", 11) == 0)
-        return 1;
+    /* Public endpoints — exact-match allowlist */
+    for (const char *const *p = PUBLIC_ENDPOINTS; *p; p++) {
+        if (strcmp(url, *p) == 0)
+            return 1;
+    }
 
-    /* If auth not set up yet, allow everything (setup mode) */
+    /* Setup mode: allow everything only when we can affirmatively confirm
+     * the admin password has not been set. auth_is_setup fails closed on
+     * DB error, so a transient query failure cannot silently unlock the
+     * API. */
     if (!auth_is_setup(db))
         return 1;
 

@@ -66,7 +66,8 @@ static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
         strlen(password) < 4)
         return api_error(400, "password must be at least 4 characters");
 
-    auth_set_password(ctx->db, password);
+    if (auth_set_password(ctx->db, password) != 0)
+        return api_error(500, cutils_get_error());
     auth_event(ctx->db, "info", "Password Set", "Admin password configured during initial setup");
 
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
