@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import type uPlot from 'uplot'
 import { useApi } from '../hooks/useApi'
 import { WideModal } from '../components/Modal'
@@ -198,6 +198,16 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
     return [xs, ys]
   }, [points, getValue])
 
+  /* Hovered data index, driven by uPlot's setCursor hook below. null when
+   * the cursor is outside the plot — header falls back to the latest value. */
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+
+  /* Stash the setter in a ref so the setCursor closure captured by uPlot
+   * at construction time can always reach the current React setter without
+   * forcing opts to depend on it (which would recreate the plot). */
+  const setHoverIdxRef = useRef(setHoverIdx)
+  setHoverIdxRef.current = setHoverIdx
+
   /* Stable across data-only refreshes so the plot isn't recreated every
    * poll. Dependencies are visual-only (color + stroke width). */
   const opts: Omit<uPlot.Options, 'width' | 'height'> = useMemo(() => ({
@@ -214,13 +224,26 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
       },
     ],
     cursor: { points: { show: true, size: 6 } },
+    hooks: {
+      setCursor: [(u: uPlot) => {
+        const idx = u.cursor.idx
+        setHoverIdxRef.current(typeof idx === 'number' ? idx : null)
+      }],
+    },
   }), [metric.color, expanded])
 
   const values = points.map(getValue)
   const min = Math.min(...values)
   const max = Math.max(...values)
-  const current = values[values.length - 1]
+  const latest = values[values.length - 1]
   const avg = values.reduce((a, b) => a + b, 0) / values.length
+
+  /* Header readout: hovered value while cursor is on the plot, latest
+   * sample otherwise. `hoverIdx` can briefly lag `values` across a data
+   * refresh, so clamp to the array. */
+  const displayValue = hoverIdx !== null && hoverIdx < values.length
+    ? values[hoverIdx]
+    : latest
 
   const fmtVal = metric.format || ((v: number) => v.toFixed(1))
   const chartHeight = expanded ? 200 : 80
@@ -234,7 +257,7 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
         <h3 className="text-sm text-muted">{metric.label}</h3>
         <div className="text-right">
           <span className="text-xl font-semibold font-mono" style={{ color: metric.color }}>
-            {fmtVal(current)}
+            {fmtVal(displayValue)}
           </span>
           <span className="text-xs text-muted ml-1">{metric.unit}</span>
         </div>
