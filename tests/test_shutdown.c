@@ -8,11 +8,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include <pthread.h>
+
 #include <cutils/db.h>
 #include <cutils/config.h>
 #include <cutils/error.h>
 #include "shutdown/shutdown.h"
 #include "config/app_config.h"
+#include "ups/ups.h"
+#include "ups/ups_driver.h"
 
 /* --- Test fixture ---
  *
@@ -476,6 +480,258 @@ static void test_execute_dry_run_with_group(void **state)
     assert_true(g_progress_count > 0);
 }
 
+/* =========================================================================
+ * Trigger fire path + efficiency NaN gate
+ *
+ * The existing trigger tests all set delay_sec=9999 so they never reach
+ * the fire branch. These cover the tail of shutdown_check_trigger (the
+ * trigger_first_met debounce elapses and shutdown_execute fires) plus
+ * the efficiency NaN gate in get_ups_field.
+ * ========================================================================= */
+
+static void test_trigger_fires_after_debounce(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger",              "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source",       "runtime"),  CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery",   "1"),        CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_runtime_sec",  "300"),      CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec",    "0"),        CUTILS_OK);
+
+    ups_data_t d = {0};
+    d.status      = UPS_ST_ON_BATTERY;
+    d.runtime_sec = 100;
+
+    /* First call: trigger_first_met=0 → sets it to now, returns without firing. */
+    shutdown_check_trigger(ctx->mgr, &d);
+
+    /* Second call: now - trigger_first_met >= 0 (delay=0), fires
+     * shutdown_execute. Safe because ups_mode=none + controller_enabled=0. */
+    shutdown_check_trigger(ctx->mgr, &d);
+
+    /* Subsequent calls no-op (mgr->triggered latched). */
+    shutdown_check_trigger(ctx->mgr, &d);
+}
+
+static void test_trigger_field_efficiency_invalid_reason_no_fire(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger",             "software"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_source",      "field"),    CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_on_battery",  "0"),        CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field",       "efficiency"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_op",    "lt"),       CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field_value", "50"),       CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_delay_sec",   "9999"),     CUTILS_OK);
+
+    ups_data_t d = {0};
+    /* efficiency_reason != OK → get_ups_field returns NaN.
+     * NaN < 50 is false, so compare_field returns false → no trigger. */
+    d.efficiency_reason = UPS_EFF_LOAD_TOO_LOW;
+    d.efficiency        = 25.0;  /* ignored: reason gate zeros it */
+    shutdown_check_trigger(ctx->mgr, &d);
+
+    /* Valid reason with matching value → condition met, debounce starts. */
+    d.efficiency_reason = UPS_EFF_OK;
+    d.efficiency        = 25.0;
+    shutdown_check_trigger(ctx->mgr, &d);
+}
+
+/* =========================================================================
+ * shutdown_test_target — DB lookup + connectivity dispatch
+ *
+ * test_target_connectivity returns 0 for method='command' (can't test
+ * arbitrary commands) and -1 for unknown methods. Both paths deterministic.
+ * ========================================================================= */
+
+static int insert_group_and_target(cutils_db_t *db, const char *target_name,
+                                   const char *method)
+{
+    int rc = db_exec_raw(db,
+        "INSERT OR IGNORE INTO shutdown_groups (id, name, execution_order, "
+        "parallel, max_timeout_sec, post_group_delay) "
+        "VALUES (1, 'g', 1, 0, 0, 0)");
+    if (rc != CUTILS_OK) return rc;
+
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
+        "credential, command, timeout_sec, order_in_group, confirm_method, "
+        "post_confirm_delay) "
+        "VALUES (1, '%s', '%s', 'h', 'u', 'c', '/bin/true', 30, 1, 'none', 0)",
+        target_name, method);
+    return db_exec_raw(db, sql);
+}
+
+static void test_shutdown_test_target_not_found(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(shutdown_test_target(ctx->mgr, "does_not_exist"),
+                     CUTILS_ERR_NOT_FOUND);
+}
+
+static void test_shutdown_test_target_command_method_ok(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(insert_group_and_target(ctx->db, "cmd_ok", "command"),
+                     CUTILS_OK);
+    /* method='command' short-circuits test_target_connectivity to 0. */
+    assert_int_equal(shutdown_test_target(ctx->mgr, "cmd_ok"), 0);
+}
+
+static void test_shutdown_test_target_unknown_method_fails(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(insert_group_and_target(ctx->db, "weird", "bogus_method"),
+                     CUTILS_OK);
+    /* Unknown methods fall through the if-else chain and return -1. */
+    assert_int_equal(shutdown_test_target(ctx->mgr, "weird"), -1);
+}
+
+/* =========================================================================
+ * shutdown_execute UPS-action phase — swap mgr->ups for a fake
+ *
+ * Covers the three UPS action branches (none / command / register) plus
+ * the unknown-mode warn branch. Purely dispatch logic; no fork, no shell.
+ * ========================================================================= */
+
+static int fake_ups_transport_sentinel = 1;
+static int fake_ups_execute_calls;
+static int fake_ups_config_write_calls;
+static uint16_t fake_ups_config_write_last_value;
+
+static int fake_ups_execute_cb(void *t)
+{
+    (void)t;
+    fake_ups_execute_calls++;
+    return 0;
+}
+
+static int fake_ups_config_write_cb(void *t, const ups_config_reg_t *r, uint16_t v)
+{
+    (void)t; (void)r;
+    fake_ups_config_write_calls++;
+    fake_ups_config_write_last_value = v;
+    return 0;
+}
+
+static const ups_cmd_desc_t fake_ups_cmds[] = {
+    { .name = "shutdown_sig", .display_name = "Shutdown", .type = UPS_CMD_SIMPLE,
+      .flags = UPS_CMD_IS_SHUTDOWN, .execute = fake_ups_execute_cb },
+};
+
+static const ups_config_reg_t fake_ups_regs[] = {
+    { .name = "ups_delay", .display_name = "Shutdown Delay", .type = UPS_CFG_SCALAR,
+      .writable = 1 },
+};
+
+static const ups_driver_t fake_ups_driver = {
+    .name              = "fake_ups_driver",
+    .conn_type         = UPS_CONN_SERIAL,
+    .topology          = UPS_TOPO_ONLINE_DOUBLE,
+    .caps              = UPS_CAP_SHUTDOWN,
+    .commands          = fake_ups_cmds,
+    .commands_count    = sizeof(fake_ups_cmds) / sizeof(fake_ups_cmds[0]),
+    .config_regs       = fake_ups_regs,
+    .config_regs_count = sizeof(fake_ups_regs) / sizeof(fake_ups_regs[0]),
+    .config_write      = fake_ups_config_write_cb,
+};
+
+static ups_t *alloc_fake_ups(void)
+{
+    ups_t *u = calloc(1, sizeof(*u));
+    assert_non_null(u);
+    u->driver    = &fake_ups_driver;
+    u->transport = &fake_ups_transport_sentinel;
+    u->caps      = fake_ups_driver.caps;
+    pthread_mutex_init(&u->cmd_mutex, NULL);
+    return u;
+}
+
+static void free_fake_ups(ups_t *u)
+{
+    pthread_mutex_destroy(&u->cmd_mutex);
+    free(u);
+}
+
+/* The _command and _register tests need mgr->ups to point at a fake,
+ * but shutdown_mgr_t is opaque with no setter. Simplest approach:
+ * create a throw-away mgr bound to the fake for just these tests,
+ * sharing the fixture's db + cfg. */
+static shutdown_mgr_t *make_mgr_with_fake_ups(test_ctx_t *ctx, ups_t *fake)
+{
+    shutdown_mgr_t *m = shutdown_create(ctx->db, fake, ctx->cfg);
+    assert_non_null(m);
+    return m;
+}
+
+static void test_execute_ups_mode_none_skips_ups_action(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* ups_mode=none is the default from setup(). */
+    fake_ups_execute_calls = 0;
+    fake_ups_config_write_calls = 0;
+
+    int rc = shutdown_execute(ctx->mgr, 0 /* not dry-run */);
+    assert_int_equal(rc, CUTILS_OK);
+    assert_int_equal(fake_ups_execute_calls,      0);
+    assert_int_equal(fake_ups_config_write_calls, 0);
+}
+
+static void test_execute_ups_mode_unknown_warns(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_mode", "bogus"), CUTILS_OK);
+    fake_ups_execute_calls = 0;
+    fake_ups_config_write_calls = 0;
+
+    /* Unknown ups_mode falls to log_warn and skips all driver calls. NULL
+     * ups is safe here because neither branch dereferences it. */
+    int rc = shutdown_execute(ctx->mgr, 0);
+    assert_int_equal(rc, CUTILS_OK);
+    assert_int_equal(fake_ups_execute_calls,      0);
+    assert_int_equal(fake_ups_config_write_calls, 0);
+}
+
+static void test_execute_ups_mode_command_fires_shutdown(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_mode",  "command"), CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_delay", "0"),       CUTILS_OK);
+    fake_ups_execute_calls = 0;
+
+    ups_t *fake = alloc_fake_ups();
+    shutdown_mgr_t *m = make_mgr_with_fake_ups(ctx, fake);
+
+    int rc = shutdown_execute(m, 0);
+    assert_int_equal(rc, CUTILS_OK);
+    assert_int_equal(fake_ups_execute_calls, 1);
+
+    shutdown_free(m);
+    free_fake_ups(fake);
+}
+
+static void test_execute_ups_mode_register_writes_register(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_mode",     "register"),    CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_register", "ups_delay"),   CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_value",    "42"),          CUTILS_OK);
+    assert_int_equal(config_set_db(ctx->cfg, "shutdown.ups_delay",    "0"),           CUTILS_OK);
+    fake_ups_config_write_calls = 0;
+
+    ups_t *fake = alloc_fake_ups();
+    shutdown_mgr_t *m = make_mgr_with_fake_ups(ctx, fake);
+
+    int rc = shutdown_execute(m, 0);
+    assert_int_equal(rc, CUTILS_OK);
+    assert_int_equal(fake_ups_config_write_calls, 1);
+    assert_int_equal(fake_ups_config_write_last_value, 42);
+
+    shutdown_free(m);
+    free_fake_ups(fake);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -499,6 +755,18 @@ int main(void)
         /* execute */
         cmocka_unit_test_setup_teardown(test_execute_dry_run_no_groups, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_dry_run_with_group, setup, teardown),
+        /* trigger fire + efficiency nan */
+        cmocka_unit_test_setup_teardown(test_trigger_fires_after_debounce, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_trigger_field_efficiency_invalid_reason_no_fire, setup, teardown),
+        /* shutdown_test_target */
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_not_found, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_command_method_ok, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_unknown_method_fails, setup, teardown),
+        /* ups action phase */
+        cmocka_unit_test_setup_teardown(test_execute_ups_mode_none_skips_ups_action, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ups_mode_unknown_warns, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ups_mode_command_fires_shutdown, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ups_mode_register_writes_register, setup, teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
