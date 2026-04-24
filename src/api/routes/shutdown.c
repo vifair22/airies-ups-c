@@ -1,13 +1,8 @@
 #include "api/routes/routes.h"
+#include <cutils/db.h>
 #include <cutils/error.h>
 #include <cutils/json.h>
 #include <cutils/mem.h>
-
-/* Top-level bare-array responses (handle_shutdown_groups_get and
- * handle_shutdown_targets_get) stay on cJSON — cu_json roots are
- * objects only. Those two handlers are build-side code, no UAF
- * class applies. */
-#include <cJSON.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -48,21 +43,23 @@ static api_response_t handle_shutdown_groups_get(const api_request_t *req, void 
         NULL, &result);
     if (rc != CUTILS_OK || !result) return api_error(500, "failed to query groups");
 
-    /* Top-level array — see file-head note. */
-    cJSON *arr = cJSON_CreateArray();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new_array(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     for (int i = 0; i < result->nrows; i++) {
-        cJSON *g = cJSON_CreateObject();
-        cJSON_AddNumberToObject(g, "id",               atoi(result->rows[i][0]));
-        cJSON_AddStringToObject(g, "name",             result->rows[i][1]);
-        cJSON_AddNumberToObject(g, "execution_order",  atoi(result->rows[i][2]));
-        cJSON_AddBoolToObject  (g, "parallel",         atoi(result->rows[i][3]));
-        cJSON_AddNumberToObject(g, "max_timeout_sec",  atoi(result->rows[i][4]));
-        cJSON_AddNumberToObject(g, "post_group_delay", atoi(result->rows[i][5]));
-        cJSON_AddItemToArray(arr, g);
+        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t g;
+        ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &g));
+        ADD_OR_FAIL(json_elem_add_i32 (&g, "id",               atoi(result->rows[i][0])));
+        ADD_OR_FAIL(json_elem_add_str (&g, "name",             result->rows[i][1]));
+        ADD_OR_FAIL(json_elem_add_i32 (&g, "execution_order",  atoi(result->rows[i][2])));
+        ADD_OR_FAIL(json_elem_add_bool(&g, "parallel",         atoi(result->rows[i][3]) != 0));
+        ADD_OR_FAIL(json_elem_add_i32 (&g, "max_timeout_sec",  atoi(result->rows[i][4])));
+        ADD_OR_FAIL(json_elem_add_i32 (&g, "post_group_delay", atoi(result->rows[i][5])));
+        json_elem_commit(&g);
     }
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return api_ok(json);
+
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_shutdown_groups_post(const api_request_t *req, void *ud)
@@ -190,29 +187,31 @@ static api_response_t handle_shutdown_targets_get(const api_request_t *req, void
         NULL, &result);
     if (rc != CUTILS_OK || !result) return api_error(500, "failed to query targets");
 
-    /* Top-level array — see file-head note. */
-    cJSON *arr = cJSON_CreateArray();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new_array(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     for (int i = 0; i < result->nrows; i++) {
-        cJSON *t = cJSON_CreateObject();
-        cJSON_AddNumberToObject(t, "id",                 atoi(result->rows[i][0]));
-        cJSON_AddStringToObject(t, "name",               result->rows[i][1]);
-        cJSON_AddStringToObject(t, "method",             result->rows[i][2]);
-        cJSON_AddStringToObject(t, "host",               result->rows[i][3] ? result->rows[i][3] : "");
-        cJSON_AddStringToObject(t, "username",           result->rows[i][4] ? result->rows[i][4] : "");
-        cJSON_AddStringToObject(t, "command",            result->rows[i][5]);
-        cJSON_AddNumberToObject(t, "timeout_sec",        atoi(result->rows[i][6]));
-        cJSON_AddNumberToObject(t, "order_in_group",     atoi(result->rows[i][7]));
-        cJSON_AddStringToObject(t, "group",              result->rows[i][8]);
-        cJSON_AddStringToObject(t, "confirm_method",     result->rows[i][9] ? result->rows[i][9] : "ping");
-        cJSON_AddNumberToObject(t, "confirm_port",       result->rows[i][10] ? atoi(result->rows[i][10]) : 0);
-        cJSON_AddStringToObject(t, "confirm_command",    result->rows[i][11] ? result->rows[i][11] : "");
-        cJSON_AddNumberToObject(t, "post_confirm_delay", atoi(result->rows[i][12]));
-        cJSON_AddNumberToObject(t, "group_id",           atoi(result->rows[i][13]));
-        cJSON_AddItemToArray(arr, t);
+        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t t;
+        ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &t));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "id",                 atoi(result->rows[i][0])));
+        ADD_OR_FAIL(json_elem_add_str(&t, "name",               result->rows[i][1]));
+        ADD_OR_FAIL(json_elem_add_str(&t, "method",             result->rows[i][2]));
+        ADD_OR_FAIL(json_elem_add_str(&t, "host",               result->rows[i][3] ? result->rows[i][3] : ""));
+        ADD_OR_FAIL(json_elem_add_str(&t, "username",           result->rows[i][4] ? result->rows[i][4] : ""));
+        ADD_OR_FAIL(json_elem_add_str(&t, "command",            result->rows[i][5]));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "timeout_sec",        atoi(result->rows[i][6])));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "order_in_group",     atoi(result->rows[i][7])));
+        ADD_OR_FAIL(json_elem_add_str(&t, "group",              result->rows[i][8]));
+        ADD_OR_FAIL(json_elem_add_str(&t, "confirm_method",     result->rows[i][9] ? result->rows[i][9] : "ping"));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "confirm_port",       result->rows[i][10] ? atoi(result->rows[i][10]) : 0));
+        ADD_OR_FAIL(json_elem_add_str(&t, "confirm_command",    result->rows[i][11] ? result->rows[i][11] : ""));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "post_confirm_delay", atoi(result->rows[i][12])));
+        ADD_OR_FAIL(json_elem_add_i32(&t, "group_id",           atoi(result->rows[i][13])));
+        json_elem_commit(&t);
     }
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return api_ok(json);
+
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_shutdown_targets_post(const api_request_t *req, void *ud)

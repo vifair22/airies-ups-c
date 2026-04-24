@@ -10,7 +10,11 @@
  *   - parsing the /api/commands response, which is a top-level array
  *     (cu_json parse roots are objects only)
  * Outgoing request body construction (send_action and the two
- * body-build sites in cmd_cmd) is ported to cu_json. */
+ * body-build sites in cmd_cmd) is ported to cu_json.
+ *
+ * The cu_json fence (c-utils!8) blocks cJSON.h by default; this file
+ * legitimately needs it for the two helpers above. */
+#define CUTILS_CJSON_ALLOW
 #include <cJSON.h>
 
 #include <stdio.h>
