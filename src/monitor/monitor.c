@@ -1,5 +1,6 @@
 #include "monitor/monitor.h"
 #include "monitor/status_snapshot.h"
+#include "monitor/config_snapshot.h"
 #include <cutils/log.h>
 #include <cutils/error.h>
 
@@ -167,7 +168,14 @@ static void format_status_line(const ups_data_t *d, char *buf, size_t len)
              ups_transfer_reason_str(d->transfer_reason));
 }
 
-/* --- Config register snapshot --- */
+/* --- Config register snapshot ---
+ *
+ * Diff-aware: only inserts a row when the live register value differs from
+ * the most recent ups_config row for that register. First-ever read seeds
+ * a 'baseline' row; subsequent deltas are 'external' (i.e. not written via
+ * our API — usually a front-panel / LCD change). API writes stamp their
+ * own inserts with source='api' so the diff sees them as the prior value
+ * and doesn't re-record the same change as external. */
 
 static void snapshot_config_registers(monitor_t *mon)
 {
@@ -187,6 +195,12 @@ static void snapshot_config_registers(monitor_t *mon)
         if (ups_config_read(mon->ups, &regs[i], &raw, NULL, 0) != 0)
             continue;
 
+        config_snapshot_decision_t decision =
+            monitor_config_snapshot_decide(mon->db, regs[i].name, raw);
+        if (decision == CONFIG_SNAPSHOT_SKIP) continue;
+        const char *source = (decision == CONFIG_SNAPSHOT_BASELINE)
+            ? "baseline" : "external";
+
         char raw_s[16], display_s[64];
         snprintf(raw_s, sizeof(raw_s), "%u", raw);
         if (regs[i].scale > 1)
@@ -198,16 +212,18 @@ static void snapshot_config_registers(monitor_t *mon)
                      raw,
                      regs[i].unit ? " " : "", regs[i].unit ? regs[i].unit : "");
 
-        const char *params[] = { regs[i].name, raw_s, display_s, ts, NULL };
+        const char *ins_params[] = { regs[i].name, raw_s, display_s, ts, source, NULL };
         db_execute_non_query(mon->db,
-            "INSERT INTO ups_config (register_name, raw_value, display_value, timestamp) "
-            "VALUES (?, ?, ?, ?)",
-            params, NULL);
+            "INSERT INTO ups_config "
+            "(register_name, raw_value, display_value, timestamp, source) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ins_params, NULL);
         snapped++;
     }
 
     if (snapped > 0)
-        log_info("config snapshot: recorded %d registers", snapped);
+        log_info("config snapshot: %d change%s recorded", snapped,
+                 snapped == 1 ? "" : "s");
 }
 
 /* --- Monitor thread --- */
