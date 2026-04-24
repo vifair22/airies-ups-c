@@ -1,5 +1,7 @@
 #include "api/routes/routes.h"
-#include <cJSON.h>
+#include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +9,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <dirent.h>
+
+/* Propagate a JSON builder failure as 500 + cutils_get_error(). */
+#define ADD_OR_FAIL(expr) \
+    do { \
+        if ((expr) != CUTILS_OK) return api_error(500, cutils_get_error()); \
+    } while (0)
 
 /* --- Helpers --- */
 
@@ -28,6 +36,29 @@ static void auth_event(cutils_db_t *db, const char *severity,
         params, NULL));
 }
 
+/* Serialize a resp builder and hand the buffer off to api_ok. */
+static api_response_t finalize_ok(cutils_json_resp_t *resp)
+{
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok(CUTILS_MOVE(json));
+}
+
+/* Force an empty array to exist at `path` so downstream responses always
+ * contain the key — matches the original cJSON code that unconditionally
+ * attached the array even when empty. Exploits the fact that
+ * json_resp_array_append_begin creates the parent array before the
+ * element is built; we let the (empty) element discard on cleanup,
+ * leaving the array in place. Will become a public cu_json primitive
+ * if other files need it. */
+static int resp_ensure_array(cutils_json_resp_t *resp, const char *path)
+{
+    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t dummy;
+    return json_resp_array_append_begin(resp, path, &dummy);
+}
+
 /* --- Auth endpoints --- */
 
 static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
@@ -37,93 +68,85 @@ static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
         return api_error(400, "admin password already set");
 
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jpw = cJSON_GetObjectItem(body, "password");
-    if (!jpw || !cJSON_IsString(jpw) || strlen(jpw->valuestring) < 4) {
-        cJSON_Delete(body);
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    CUTILS_AUTOFREE char *password = NULL;
+    if (json_req_get_str(body, "password", &password) != CUTILS_OK ||
+        strlen(password) < 4)
         return api_error(400, "password must be at least 4 characters");
-    }
 
-    auth_set_password(ctx->db, jpw->valuestring);
-    cJSON_Delete(body);
+    auth_set_password(ctx->db, password);
     auth_event(ctx->db, "info", "Password Set", "Admin password configured during initial setup");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "password set");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "password set"));
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_auth_login(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jpw = cJSON_GetObjectItem(body, "password");
-    if (!jpw || !cJSON_IsString(jpw)) {
-        cJSON_Delete(body);
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    CUTILS_AUTOFREE char *password = NULL;
+    if (json_req_get_str(body, "password", &password) != CUTILS_OK)
         return api_error(400, "missing 'password'");
-    }
 
-    if (!auth_verify_password(ctx->db, jpw->valuestring)) {
-        cJSON_Delete(body);
+    if (!auth_verify_password(ctx->db, password)) {
         auth_event(ctx->db, "warning", "Login Failed", "Invalid password attempt");
         return api_error(401, "invalid password");
     }
-    cJSON_Delete(body);
     auth_event(ctx->db, "info", "Login", "Admin login successful");
 
-    char *token = auth_create_token(ctx->db, 24 * 365);
+    CUTILS_AUTOFREE char *token = auth_create_token(ctx->db, 24 * 365);
     if (!token) return api_error(500, "failed to create session");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "token", token);
-    cJSON_AddNumberToObject(resp, "expires_in", 24 * 365 * 3600);
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    free(token);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "token",      token));
+    ADD_OR_FAIL(json_resp_add_u32(resp, "expires_in", 24U * 365U * 3600U));
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_auth_change(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jold = cJSON_GetObjectItem(body, "old_password");
-    const cJSON *jnew = cJSON_GetObjectItem(body, "new_password");
-    if (!jold || !cJSON_IsString(jold) || !jnew || !cJSON_IsString(jnew)) {
-        cJSON_Delete(body);
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    CUTILS_AUTOFREE char *old_pw = NULL;
+    CUTILS_AUTOFREE char *new_pw = NULL;
+    if (json_req_get_str(body, "old_password", &old_pw) != CUTILS_OK ||
+        json_req_get_str(body, "new_password", &new_pw) != CUTILS_OK)
         return api_error(400, "missing 'old_password' and 'new_password'");
-    }
-    if (strlen(jnew->valuestring) < 4) {
-        cJSON_Delete(body);
+    if (strlen(new_pw) < 4)
         return api_error(400, "new password must be at least 4 characters");
-    }
-    if (!auth_verify_password(ctx->db, jold->valuestring)) {
-        cJSON_Delete(body);
+    if (!auth_verify_password(ctx->db, old_pw))
         return api_error(401, "current password is incorrect");
-    }
 
-    int rc = auth_set_password(ctx->db, jnew->valuestring);
-    cJSON_Delete(body);
-
+    int rc = auth_set_password(ctx->db, new_pw);
     if (rc != 0) return api_error(500, "failed to update password");
 
     auth_event(ctx->db, "info", "Password Changed", "Admin password updated");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "password changed");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "password changed"));
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
@@ -144,11 +167,11 @@ static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
 
     auth_event(ctx->db, "info", "Logout", "Admin session ended");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "logged out");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "logged out"));
+    return finalize_ok(resp);
 }
 
 /* --- Setup endpoints --- */
@@ -158,17 +181,19 @@ static api_response_t handle_setup_status(const api_request_t *req, void *ud)
     (void)req;
     route_ctx_t *ctx = ud;
 
-    int password_set  = auth_is_setup(ctx->db);
+    int password_set   = auth_is_setup(ctx->db);
     int ups_configured = config_get_int(ctx->config, "setup.ups_done", 0) != 0;
 
-    cJSON *obj = cJSON_CreateObject();
-    cJSON_AddBoolToObject(obj, "needs_setup", !password_set || !ups_configured);
-    cJSON_AddBoolToObject(obj, "password_set", password_set != 0);
-    cJSON_AddBoolToObject(obj, "ups_configured", ups_configured);
-    cJSON_AddBoolToObject(obj, "ups_connected", ctx->ups && monitor_is_connected(ctx->monitor));
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_bool(resp, "needs_setup",
+                                   !password_set || !ups_configured));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "password_set",   password_set != 0));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "ups_configured", ups_configured != 0));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "ups_connected",
+                                   ctx->ups && monitor_is_connected(ctx->monitor)));
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
@@ -176,23 +201,27 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
     (void)req;
     (void)ud;
 
-    cJSON *obj = cJSON_CreateObject();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
 
-    /* Scan for serial devices */
-    cJSON *serial = cJSON_CreateArray();
+    /* Both arrays are always present in the response, even if empty —
+     * match the original cJSON behavior. */
+    ADD_OR_FAIL(resp_ensure_array(resp, "serial"));
+    ADD_OR_FAIL(resp_ensure_array(resp, "usb"));
+
+    /* Scan for serial devices — scalar-append builds the 'serial' array. */
     const char *patterns[] = { "/dev/ttyUSB", "/dev/ttyACM", "/dev/ttyS", NULL };
     for (int p = 0; patterns[p]; p++) {
         for (int i = 0; i < 10; i++) {
             char path[64];
             snprintf(path, sizeof(path), "%s%d", patterns[p], i);
             if (access(path, R_OK | W_OK) == 0)
-                cJSON_AddItemToArray(serial, cJSON_CreateString(path));
+                ADD_OR_FAIL(json_resp_array_append_str(resp, "serial", path));
         }
     }
-    cJSON_AddItemToObject(obj, "serial", serial);
 
-    /* Scan for USB HID power devices */
-    cJSON *usb = cJSON_CreateArray();
+    /* Scan for USB HID power devices — element builder for array-of-objects. */
     DIR *dir = opendir("/sys/class/hidraw");
     if (dir) {
         struct dirent *ent;
@@ -201,7 +230,7 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
             char uevent[512];
             snprintf(uevent, sizeof(uevent),
                      "/sys/class/hidraw/%s/device/uevent", ent->d_name);
-            FILE *f = fopen(uevent, "r");
+            CUTILS_AUTOCLOSE FILE *f = fopen(uevent, "r");
             if (!f) continue;
 
             char line[256];
@@ -214,28 +243,31 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
                 if (sscanf(line, "HID_NAME=%127[^\n]", hid_name) == 1)
                     continue;
             }
-            fclose(f);
 
             if (vid > 0) {
-                cJSON *dev = cJSON_CreateObject();
+                CUTILS_AUTO_JSON_ELEM cutils_json_elem_t elem;
+                if (json_resp_array_append_begin(resp, "usb", &elem) != CUTILS_OK) {
+                    closedir(dir);
+                    return api_error(500, cutils_get_error());
+                }
                 char vid_s[8], pid_s[8], devpath[512];
-                snprintf(vid_s, sizeof(vid_s), "%04x", vid);
-                snprintf(pid_s, sizeof(pid_s), "%04x", pid);
+                snprintf(vid_s,   sizeof(vid_s),   "%04x", vid);
+                snprintf(pid_s,   sizeof(pid_s),   "%04x", pid);
                 snprintf(devpath, sizeof(devpath), "/dev/%s", ent->d_name);
-                cJSON_AddStringToObject(dev, "vid", vid_s);
-                cJSON_AddStringToObject(dev, "pid", pid_s);
-                cJSON_AddStringToObject(dev, "name", hid_name);
-                cJSON_AddStringToObject(dev, "device", devpath);
-                cJSON_AddItemToArray(usb, dev);
+                if (json_elem_add_str(&elem, "vid",    vid_s)    != CUTILS_OK ||
+                    json_elem_add_str(&elem, "pid",    pid_s)    != CUTILS_OK ||
+                    json_elem_add_str(&elem, "name",   hid_name) != CUTILS_OK ||
+                    json_elem_add_str(&elem, "device", devpath)  != CUTILS_OK) {
+                    closedir(dir);
+                    return api_error(500, cutils_get_error());
+                }
+                json_elem_commit(&elem);
             }
         }
         closedir(dir);
     }
-    cJSON_AddItemToObject(obj, "usb", usb);
 
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return api_ok(json);
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_setup_test(const api_request_t *req, void *ud)
@@ -243,41 +275,40 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
     (void)ud;
     if (!req->body) return api_error(400, "request body required");
 
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    const cJSON *jtype = cJSON_GetObjectItem(body, "conn_type");
-    const char *conn_type = (jtype && cJSON_IsString(jtype)) ? jtype->valuestring : "serial";
+    CUTILS_AUTOFREE char *conn_type = NULL;
+    CUTILS_UNUSED(json_req_get_str_opt(body, "conn_type", &conn_type));
+    const char *type = conn_type ? conn_type : "serial";
 
+    /* Owned strings from the request survive json_req_free, so there's no
+     * more UAF-through-valuestring risk here — the previous workaround
+     * (device_buf) is no longer needed. */
     ups_conn_params_t params = {0};
-    /* Own the device path locally — cJSON_Delete(body) below frees the
-     * jdev->valuestring we'd otherwise hand to the driver, and ups_connect
-     * doesn't deep-copy until *after* drv->connect() has already used it. */
-    char device_buf[256] = {0};
+    CUTILS_AUTOFREE char *device = NULL;
+    CUTILS_AUTOFREE char *vid_str = NULL;
+    CUTILS_AUTOFREE char *pid_str = NULL;
 
-    if (strcmp(conn_type, "usb") == 0) {
-        const cJSON *jvid = cJSON_GetObjectItem(body, "usb_vid");
-        const cJSON *jpid = cJSON_GetObjectItem(body, "usb_pid");
+    if (strcmp(type, "usb") == 0) {
+        CUTILS_UNUSED(json_req_get_str_opt(body, "usb_vid", &vid_str));
+        CUTILS_UNUSED(json_req_get_str_opt(body, "usb_pid", &pid_str));
         params.type = UPS_CONN_USB;
-        params.usb.vendor_id = (jvid && cJSON_IsString(jvid))
-            ? (uint16_t)strtol(jvid->valuestring, NULL, 16) : 0x051d;
-        params.usb.product_id = (jpid && cJSON_IsString(jpid))
-            ? (uint16_t)strtol(jpid->valuestring, NULL, 16) : 0x0002;
+        params.usb.vendor_id  = vid_str ? (uint16_t)strtol(vid_str, NULL, 16) : 0x051d;
+        params.usb.product_id = pid_str ? (uint16_t)strtol(pid_str, NULL, 16) : 0x0002;
     } else {
-        const cJSON *jdev = cJSON_GetObjectItem(body, "device");
-        const cJSON *jbaud = cJSON_GetObjectItem(body, "baud");
-        const cJSON *jslave = cJSON_GetObjectItem(body, "slave_id");
-        if (!jdev || !cJSON_IsString(jdev)) {
-            cJSON_Delete(body);
+        if (json_req_get_str(body, "device", &device) != CUTILS_OK)
             return api_error(400, "missing 'device' field");
-        }
-        snprintf(device_buf, sizeof(device_buf), "%s", jdev->valuestring);
+        int32_t baud     = 9600;
+        int32_t slave_id = 1;
+        CUTILS_UNUSED(json_req_get_i32(body, "baud",     &baud,     0, INT32_MAX));
+        CUTILS_UNUSED(json_req_get_i32(body, "slave_id", &slave_id, 0, INT32_MAX));
         params.type = UPS_CONN_SERIAL;
-        params.serial.device = device_buf;
-        params.serial.baud = (jbaud && cJSON_IsNumber(jbaud)) ? jbaud->valueint : 9600;
-        params.serial.slave_id = (jslave && cJSON_IsNumber(jslave)) ? jslave->valueint : 1;
+        params.serial.device   = device;
+        params.serial.baud     = baud;
+        params.serial.slave_id = slave_id;
     }
-    cJSON_Delete(body);
 
     ups_t *test_ups = NULL;
     int cc = ups_connect(&params, &test_ups);
@@ -288,9 +319,11 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
         return api_error(502, hint);
     }
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "connected");
-    cJSON_AddStringToObject(resp, "driver", ups_driver_name(test_ups));
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK) {
+        ups_close(test_ups);
+        return api_error(500, cutils_get_error());
+    }
 
     const char *topo = "unknown";
     switch (ups_topology(test_ups)) {
@@ -298,24 +331,31 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
     case UPS_TOPO_LINE_INTERACTIVE: topo = "line_interactive"; break;
     case UPS_TOPO_STANDBY:          topo = "standby"; break;
     }
-    cJSON_AddStringToObject(resp, "topology", topo);
+
+    int rv = CUTILS_OK;
+    if ((rv = json_resp_add_str(resp, "result",   "connected"))             != CUTILS_OK ||
+        (rv = json_resp_add_str(resp, "driver",   ups_driver_name(test_ups))) != CUTILS_OK ||
+        (rv = json_resp_add_str(resp, "topology", topo))                    != CUTILS_OK) {
+        ups_close(test_ups);
+        return api_error(500, cutils_get_error());
+    }
 
     if (test_ups->has_inventory) {
-        cJSON *inv = cJSON_CreateObject();
-        cJSON_AddStringToObject(inv, "model", test_ups->inventory.model);
-        cJSON_AddStringToObject(inv, "serial", test_ups->inventory.serial);
-        cJSON_AddStringToObject(inv, "firmware", test_ups->inventory.firmware);
-        cJSON_AddNumberToObject(inv, "nominal_va", test_ups->inventory.nominal_va);
-        cJSON_AddNumberToObject(inv, "nominal_watts", test_ups->inventory.nominal_watts);
-        cJSON_AddItemToObject(resp, "inventory", inv);
+        if ((rv = json_resp_add_str(resp, "inventory.model",         test_ups->inventory.model))        != CUTILS_OK ||
+            (rv = json_resp_add_str(resp, "inventory.serial",        test_ups->inventory.serial))       != CUTILS_OK ||
+            (rv = json_resp_add_str(resp, "inventory.firmware",      test_ups->inventory.firmware))     != CUTILS_OK ||
+            (rv = json_resp_add_u32(resp, "inventory.nominal_va",    test_ups->inventory.nominal_va))   != CUTILS_OK ||
+            (rv = json_resp_add_u32(resp, "inventory.nominal_watts", test_ups->inventory.nominal_watts))!= CUTILS_OK) {
+            ups_close(test_ups);
+            return api_error(500, cutils_get_error());
+        }
     }
 
     ups_close(test_ups);
-
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    return finalize_ok(resp);
 }
+
+#undef ADD_OR_FAIL
 
 /* --- Registration --- */
 
