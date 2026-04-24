@@ -69,11 +69,12 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
     CHECK_ADD(json_resp_add_str (resp, "driver",    monitor_driver_name(ctx->monitor)));
     CHECK_ADD(json_resp_add_bool(resp, "connected", monitor_is_connected(ctx->monitor) != 0));
 
-    const char *topo_str = "unknown";
+    const char *topo_str;
     switch (ups_topology(ctx->ups)) {
     case UPS_TOPO_ONLINE_DOUBLE:    topo_str = "online_double"; break;
     case UPS_TOPO_LINE_INTERACTIVE: topo_str = "line_interactive"; break;
     case UPS_TOPO_STANDBY:          topo_str = "standby"; break;
+    default:                        topo_str = "unknown"; break;
     }
     CHECK_ADD(json_resp_add_str(resp, "topology", topo_str));
 
@@ -244,7 +245,7 @@ static api_response_t handle_cmd(const api_request_t *req, void *ud)
         return api_error(400, "missing 'action' field");
 
     int rc;
-    const char *result_msg = "ok";
+    const char *result_msg;
 
     if (strcmp(act, "shutdown_workflow") == 0) {
         bool dry_run = false;

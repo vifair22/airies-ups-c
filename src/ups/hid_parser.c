@@ -230,8 +230,10 @@ int32_t hid_field_read_raw(int fd, const hid_field_t *field)
             result |= (1u << b);
     }
 
-    /* Sign-extend if logical_min is negative */
-    if (field->logical_min < 0 && bits < 32) {
+    /* Sign-extend if logical_min is negative. Guard against bits==0 on
+     * malformed descriptors: 1u << (bits - 1) underflows to a huge shift
+     * amount and invokes UB. A zero-bit field can only ever read as 0. */
+    if (field->logical_min < 0 && bits > 0 && bits < 32) {
         if (result & (1u << (bits - 1)))
             result |= ~((1u << bits) - 1);
     }

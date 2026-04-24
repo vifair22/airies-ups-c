@@ -82,7 +82,10 @@ static int http_request(const char *socket_path, const char *method,
         if (r <= 0) break;
         total += (size_t)r;
     }
-    response[total] = '\0';
+    /* total is bounded to resp_sz - 1 by the loop guard; the NUL write is
+     * always in-bounds. clang taints 'total' through read() and can't prove
+     * the bound. */
+    response[total] = '\0';  /* NOLINT(clang-analyzer-security.ArrayBound) */
     close(fd);
 
     char *body_start = strstr(response, "\r\n\r\n");

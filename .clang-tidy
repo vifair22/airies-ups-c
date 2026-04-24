@@ -1,0 +1,11 @@
+---
+# Start from the default clang-analyzer-* set; disable Annex K lint that
+# demands memcpy_s / snprintf_s / strncpy_s replacements — those variants
+# are bounds-check additions from C11 Annex K, which glibc and most libcs
+# never implemented. Substituting them is neither possible nor desired.
+Checks: >
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|include)/'
+FormatStyle: none

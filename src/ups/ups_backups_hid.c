@@ -259,7 +259,9 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
             }
         }
 
-        if (match) {
+        /* f is auto-closed by CUTILS_AUTOCLOSE at scope exit below; clang
+         * can't model the cleanup attribute. */
+        if (match) {  /* NOLINT(clang-analyzer-unix.Stream) */
             snprintf(path, path_sz, "/dev/%s", ent->d_name);
             memcpy(hidraw_name, ent->d_name, strlen(ent->d_name) + 1);
 
@@ -299,8 +301,9 @@ static void read_sysfs_string(const char *base, const char *attr,
     snprintf(path, sizeof(path), "%s/%s", base, attr);
     CUTILS_AUTOCLOSE FILE *f = fopen(path, "r");
     if (!f) { buf[0] = '\0'; return; }
+    /* f auto-closed on function return; clang-analyzer doesn't see cleanup. */
     if (!fgets(buf, (int)bufsz, f))
-        buf[0] = '\0';
+        buf[0] = '\0';  /* NOLINT(clang-analyzer-unix.Stream) */
     size_t len = strlen(buf);
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
         buf[--len] = '\0';

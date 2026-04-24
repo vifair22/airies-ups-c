@@ -203,8 +203,12 @@ analyze: check
 
 lint:
 	@echo "=== clang-tidy ==="
-	@clang-tidy $(ALL_SRCS) -- -std=c11 $(INCLUDES) 2>&1 | \
-	    grep -E "warning:|error:" || echo "clang-tidy: OK"
+	@if clang-tidy $(ALL_SRCS) -- \
+	    -std=c11 -D_POSIX_C_SOURCE=200809L $(INCLUDES) $(VERSION_DEF) 2>&1 | \
+	    grep -E "warning:|error:"; then \
+	    echo "clang-tidy: FAIL"; exit 1; \
+	fi
+	@echo "clang-tidy: OK"
 
 # ---- Testing --------------------------------------------------------------
 #

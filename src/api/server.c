@@ -184,9 +184,10 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
     else
         snprintf(path, sizeof(path), "%s%s", static_dir, url);
 
-    /* f is auto-closed by CUTILS_AUTOCLOSE on every return below; cppcheck
-     * doesn't model the cleanup attribute so it flags each early return as
-     * a resource leak. Suppressions are per-return and narrowly typed. */
+    /* f is auto-closed by CUTILS_AUTOCLOSE on every return below; neither
+     * cppcheck nor clang-analyzer model the cleanup attribute, so both flag
+     * each early return as a resource leak. Suppressions are per-return and
+     * narrowly typed. */
     CUTILS_AUTOCLOSE FILE *f = fopen(path, "rb");
     /* cppcheck-suppress resourceLeak */
     if (!f) return MHD_NO;
@@ -196,7 +197,7 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
     fseek(f, 0, SEEK_SET);
 
     /* cppcheck-suppress resourceLeak */
-    if (fsize <= 0) return MHD_NO;
+    if (fsize <= 0) return MHD_NO;  /* NOLINT(clang-analyzer-unix.Stream) */
 
     char *buf = malloc((size_t)fsize);
     /* cppcheck-suppress resourceLeak */
@@ -316,7 +317,7 @@ static enum MHD_Result request_handler(void *cls,
             free(pb);
             *req_cls = NULL;
             return send_response(conn, 401, "application/json",
-                strdup("{\"error\":\"unauthorized\"}"));
+                "{\"error\":\"unauthorized\"}");
         }
 
         api_response_t resp = route->handler(&req, route->userdata);

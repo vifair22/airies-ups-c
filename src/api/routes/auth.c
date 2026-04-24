@@ -313,27 +313,27 @@ static api_response_t handle_setup_test(const api_request_t *req, void *ud)
         return api_error(500, cutils_get_error());
     }
 
-    const char *topo = "unknown";
+    const char *topo;
     switch (ups_topology(test_ups)) {
     case UPS_TOPO_ONLINE_DOUBLE:    topo = "online_double"; break;
     case UPS_TOPO_LINE_INTERACTIVE: topo = "line_interactive"; break;
     case UPS_TOPO_STANDBY:          topo = "standby"; break;
+    default:                        topo = "unknown"; break;
     }
 
-    int rv = CUTILS_OK;
-    if ((rv = json_resp_add_str(resp, "result",   "connected"))             != CUTILS_OK ||
-        (rv = json_resp_add_str(resp, "driver",   ups_driver_name(test_ups))) != CUTILS_OK ||
-        (rv = json_resp_add_str(resp, "topology", topo))                    != CUTILS_OK) {
+    if (json_resp_add_str(resp, "result",   "connected")               != CUTILS_OK ||
+        json_resp_add_str(resp, "driver",   ups_driver_name(test_ups)) != CUTILS_OK ||
+        json_resp_add_str(resp, "topology", topo)                      != CUTILS_OK) {
         ups_close(test_ups);
         return api_error(500, cutils_get_error());
     }
 
     if (test_ups->has_inventory) {
-        if ((rv = json_resp_add_str(resp, "inventory.model",         test_ups->inventory.model))        != CUTILS_OK ||
-            (rv = json_resp_add_str(resp, "inventory.serial",        test_ups->inventory.serial))       != CUTILS_OK ||
-            (rv = json_resp_add_str(resp, "inventory.firmware",      test_ups->inventory.firmware))     != CUTILS_OK ||
-            (rv = json_resp_add_u32(resp, "inventory.nominal_va",    test_ups->inventory.nominal_va))   != CUTILS_OK ||
-            (rv = json_resp_add_u32(resp, "inventory.nominal_watts", test_ups->inventory.nominal_watts))!= CUTILS_OK) {
+        if (json_resp_add_str(resp, "inventory.model",         test_ups->inventory.model)         != CUTILS_OK ||
+            json_resp_add_str(resp, "inventory.serial",        test_ups->inventory.serial)        != CUTILS_OK ||
+            json_resp_add_str(resp, "inventory.firmware",      test_ups->inventory.firmware)      != CUTILS_OK ||
+            json_resp_add_u32(resp, "inventory.nominal_va",    test_ups->inventory.nominal_va)    != CUTILS_OK ||
+            json_resp_add_u32(resp, "inventory.nominal_watts", test_ups->inventory.nominal_watts) != CUTILS_OK) {
             ups_close(test_ups);
             return api_error(500, cutils_get_error());
         }

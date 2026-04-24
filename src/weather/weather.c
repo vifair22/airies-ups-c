@@ -499,18 +499,17 @@ char *weather_status_json(weather_t *w)
         return CUTILS_MOVE(json);
     }
 
-    int rv = CUTILS_OK;
-    if ((rv = json_resp_add_bool(resp, "enabled",            true))                    != CUTILS_OK ||
-        (rv = json_resp_add_bool(resp, "severe",             w->severe != 0))           != CUTILS_OK ||
-        (rv = json_resp_add_str (resp, "reasons",            w->reasons))               != CUTILS_OK ||
-        (rv = json_resp_add_f64 (resp, "latitude",           w->latitude))              != CUTILS_OK ||
-        (rv = json_resp_add_f64 (resp, "longitude",          w->longitude))             != CUTILS_OK ||
-        (rv = json_resp_add_str (resp, "alert_zones",        w->alert_zones))           != CUTILS_OK ||
-        (rv = json_resp_add_i32 (resp, "wind_threshold_mph", w->wind_speed_mph))        != CUTILS_OK ||
-        (rv = json_resp_add_i32 (resp, "poll_interval",      w->poll_interval))         != CUTILS_OK ||
-        (rv = json_resp_add_str (resp, "control_register",   w->control_register))      != CUTILS_OK ||
-        (rv = json_resp_add_bool(resp, "simulated",          w->sim_active != 0))       != CUTILS_OK ||
-        (rv = json_resp_finalize(resp, &json, &len))                                    != CUTILS_OK) {
+    if (json_resp_add_bool(resp, "enabled",            true)               != CUTILS_OK ||
+        json_resp_add_bool(resp, "severe",             w->severe != 0)     != CUTILS_OK ||
+        json_resp_add_str (resp, "reasons",            w->reasons)         != CUTILS_OK ||
+        json_resp_add_f64 (resp, "latitude",           w->latitude)        != CUTILS_OK ||
+        json_resp_add_f64 (resp, "longitude",          w->longitude)       != CUTILS_OK ||
+        json_resp_add_str (resp, "alert_zones",        w->alert_zones)     != CUTILS_OK ||
+        json_resp_add_i32 (resp, "wind_threshold_mph", w->wind_speed_mph)  != CUTILS_OK ||
+        json_resp_add_i32 (resp, "poll_interval",      w->poll_interval)   != CUTILS_OK ||
+        json_resp_add_str (resp, "control_register",   w->control_register)!= CUTILS_OK ||
+        json_resp_add_bool(resp, "simulated",          w->sim_active != 0) != CUTILS_OK ||
+        json_resp_finalize(resp, &json, &len)                              != CUTILS_OK) {
         return NULL;
     }
     return CUTILS_MOVE(json);

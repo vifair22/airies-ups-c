@@ -191,7 +191,10 @@ int auth_verify_password(cutils_db_t *db, const char *password)
         stored_copy = strdup(result->rows[0][0]);
         if (!stored_copy) return 0;
         valid = verify_password(password, stored_copy);
-        is_legacy = (strncmp(stored_copy, "$pbkdf2$", 8) != 0);
+        /* stored_copy is auto-freed by CUTILS_AUTOFREE at function return;
+         * clang-analyzer can't model cleanup-attribute and flags this as a
+         * leak. NOLINT scope is this scope exit only. */
+        is_legacy = (strncmp(stored_copy, "$pbkdf2$", 8) != 0);  /* NOLINT(clang-analyzer-unix.Malloc) */
     }
 
     /* Auto-upgrade legacy SHA256 hashes to PBKDF2 on successful login */
