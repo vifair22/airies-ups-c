@@ -11,7 +11,11 @@
  * all string fields extracted from the NWS tree are either used
  * immediately (strstr/atoi compare) or copied via snprintf / owned
  * adders before the tree is deleted, so the borrowed-valuestring UAF
- * class doesn't apply. */
+ * class doesn't apply.
+ *
+ * The cu_json fence (c-utils!8) blocks cJSON.h by default; this file
+ * legitimately needs it for the NWS parse helpers above. */
+#define CUTILS_CJSON_ALLOW
 #include <cJSON.h>
 
 #include <curl/curl.h>
@@ -528,14 +532,6 @@ void weather_simulate_clear(weather_t *w)
     log_info("weather: simulation cleared, will restore on next cycle");
 }
 
-/* Helper: force-create an empty array at `path`. Same technique as
- * the routes-layer helpers. */
-static int resp_ensure_array(cutils_json_resp_t *resp, const char *path)
-{
-    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t dummy;
-    return json_resp_array_append_begin(resp, path, &dummy);
-}
-
 /* Copy a cJSON string field (if present and correct type) into the
  * current element at the given key. Silently skips missing/wrong-type
  * to preserve the original's best-effort behavior. */
@@ -565,8 +561,8 @@ char *weather_report_json(weather_t *w)
     }
 
     /* Always emit both arrays, even if empty. */
-    if (resp_ensure_array(resp, "alerts")   != CUTILS_OK ||
-        resp_ensure_array(resp, "forecast") != CUTILS_OK)
+    if (json_resp_ensure_array(resp, "alerts")   != CUTILS_OK ||
+        json_resp_ensure_array(resp, "forecast") != CUTILS_OK)
         return NULL;
 
     /* Fetch active alerts — parse NWS with cJSON, build our response

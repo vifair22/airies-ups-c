@@ -6,14 +6,6 @@
 #include <cutils/json.h>
 #include <cutils/mem.h>
 
-/* cu_json roots are objects; three endpoints (events, telemetry,
- * commands) historically return bare top-level arrays that the frontend
- * consumes directly. Until cu_json gains an array-root primitive,
- * those three handlers build with cJSON locally. They're pure
- * build-side code (no external JSON parsing), so the UAF class the
- * wrapper exists to prevent doesn't apply here. */
-#include <cJSON.h>
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -54,15 +46,6 @@ static api_response_t finalize_ok(cutils_json_resp_t *resp)
     if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
         return api_error(500, cutils_get_error());
     return api_ok(CUTILS_MOVE(json));
-}
-
-/* Force an empty array to exist at `path`. Exploits append_begin's
- * implicit array creation; the in-progress element is discarded on
- * scope exit. */
-static int resp_ensure_array(cutils_json_resp_t *resp, const char *path)
-{
-    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t dummy;
-    return json_resp_array_append_begin(resp, path, &dummy);
 }
 
 /* --- Helper: populate status object at root of resp --- */
@@ -155,9 +138,9 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
         CHECK_ADD(json_resp_add_u32(resp, "errors.battery_system", data.bat_system_error));
 
         /* Detail arrays — always present, possibly empty. */
-        CHECK_ADD(resp_ensure_array(resp, "errors.general_detail"));
-        CHECK_ADD(resp_ensure_array(resp, "errors.power_system_detail"));
-        CHECK_ADD(resp_ensure_array(resp, "errors.battery_system_detail"));
+        CHECK_ADD(json_resp_ensure_array(resp, "errors.general_detail"));
+        CHECK_ADD(json_resp_ensure_array(resp, "errors.power_system_detail"));
+        CHECK_ADD(json_resp_ensure_array(resp, "errors.battery_system_detail"));
 
         const char *strs[16];
         int n;
@@ -190,7 +173,7 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
     }
 
     /* Capabilities — always present, possibly empty. */
-    CHECK_ADD(resp_ensure_array(resp, "capabilities"));
+    CHECK_ADD(json_resp_ensure_array(resp, "capabilities"));
     if (ups_has_cap(ctx->ups, UPS_CAP_SHUTDOWN))
         CHECK_ADD(json_resp_array_append_str(resp, "capabilities", "shutdown"));
     if (ups_has_cap(ctx->ups, UPS_CAP_BATTERY_TEST))
@@ -306,20 +289,22 @@ static api_response_t handle_events(const api_request_t *req, void *ud)
     if (rc != CUTILS_OK || !result)
         return api_error(500, "failed to query events");
 
-    /* Top-level array — see file-head note. */
-    cJSON *arr = cJSON_CreateArray();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new_array(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     for (int i = 0; i < result->nrows; i++) {
-        cJSON *ev = cJSON_CreateObject();
-        cJSON_AddStringToObject(ev, "timestamp", result->rows[i][0]);
-        cJSON_AddStringToObject(ev, "severity",  result->rows[i][1]);
-        cJSON_AddStringToObject(ev, "category",  result->rows[i][2]);
-        cJSON_AddStringToObject(ev, "title",     result->rows[i][3]);
-        cJSON_AddStringToObject(ev, "message",   result->rows[i][4]);
-        cJSON_AddItemToArray(arr, ev);
+        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t ev;
+        ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &ev));
+        ADD_OR_FAIL(json_elem_add_str(&ev, "timestamp", result->rows[i][0]));
+        ADD_OR_FAIL(json_elem_add_str(&ev, "severity",  result->rows[i][1]));
+        ADD_OR_FAIL(json_elem_add_str(&ev, "category",  result->rows[i][2]));
+        ADD_OR_FAIL(json_elem_add_str(&ev, "title",     result->rows[i][3]));
+        ADD_OR_FAIL(json_elem_add_str(&ev, "message",   result->rows[i][4]));
+        json_elem_commit(&ev);
     }
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return api_ok(json);
+
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_telemetry(const api_request_t *req, void *ud)
@@ -369,26 +354,28 @@ static api_response_t handle_telemetry(const api_request_t *req, void *ud)
     if (rc != CUTILS_OK || !result)
         return api_error(500, "failed to query telemetry");
 
-    /* Top-level array — see file-head note. */
-    cJSON *arr = cJSON_CreateArray();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new_array(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     for (int i = 0; i < result->nrows; i++) {
-        cJSON *pt = cJSON_CreateObject();
-        cJSON_AddStringToObject(pt, "timestamp",        result->rows[i][0]);
-        cJSON_AddNumberToObject(pt, "status",           atof(result->rows[i][1]));
-        cJSON_AddNumberToObject(pt, "charge_pct",       atof(result->rows[i][2]));
-        cJSON_AddNumberToObject(pt, "runtime_sec",      atof(result->rows[i][3]));
-        cJSON_AddNumberToObject(pt, "battery_voltage",  atof(result->rows[i][4]));
-        cJSON_AddNumberToObject(pt, "load_pct",         atof(result->rows[i][5]));
-        cJSON_AddNumberToObject(pt, "output_voltage",   atof(result->rows[i][6]));
-        cJSON_AddNumberToObject(pt, "output_frequency", atof(result->rows[i][7]));
-        cJSON_AddNumberToObject(pt, "output_current",   atof(result->rows[i][8]));
-        cJSON_AddNumberToObject(pt, "input_voltage",    atof(result->rows[i][9]));
-        cJSON_AddNumberToObject(pt, "efficiency",       atof(result->rows[i][10]));
-        cJSON_AddItemToArray(arr, pt);
+        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t pt;
+        ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &pt));
+        ADD_OR_FAIL(json_elem_add_str(&pt, "timestamp",        result->rows[i][0]));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "status",           atof(result->rows[i][1])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "charge_pct",       atof(result->rows[i][2])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "runtime_sec",      atof(result->rows[i][3])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "battery_voltage",  atof(result->rows[i][4])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "load_pct",         atof(result->rows[i][5])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_voltage",   atof(result->rows[i][6])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_frequency", atof(result->rows[i][7])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_current",   atof(result->rows[i][8])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "input_voltage",    atof(result->rows[i][9])));
+        ADD_OR_FAIL(json_elem_add_f64(&pt, "efficiency",       atof(result->rows[i][10])));
+        json_elem_commit(&pt);
     }
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return api_ok(json);
+
+    return finalize_ok(resp);
 }
 
 static api_response_t handle_commands(const api_request_t *req, void *ud)
@@ -396,36 +383,38 @@ static api_response_t handle_commands(const api_request_t *req, void *ud)
     (void)req;
     route_ctx_t *ctx = ud;
 
-    /* Top-level array — see file-head note. */
-    cJSON *arr = cJSON_CreateArray();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new_array(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     if (ctx->ups) {
         size_t count;
         const ups_cmd_desc_t *cmds = ups_get_commands(ctx->ups, &count);
         for (size_t i = 0; i < count; i++) {
-            cJSON *obj = cJSON_CreateObject();
-            cJSON_AddStringToObject(obj, "name",          cmds[i].name);
-            cJSON_AddStringToObject(obj, "display_name",  cmds[i].display_name);
-            cJSON_AddStringToObject(obj, "description",   cmds[i].description);
-            cJSON_AddStringToObject(obj, "group",         cmds[i].group);
-            cJSON_AddStringToObject(obj, "confirm_title", cmds[i].confirm_title);
-            cJSON_AddStringToObject(obj, "confirm_body",  cmds[i].confirm_body);
-            cJSON_AddStringToObject(obj, "type",
-                cmds[i].type == UPS_CMD_TOGGLE ? "toggle" : "simple");
-            cJSON_AddStringToObject(obj, "variant",
+            CUTILS_AUTO_JSON_ELEM cutils_json_elem_t c;
+            ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &c));
+            ADD_OR_FAIL(json_elem_add_str(&c, "name",          cmds[i].name));
+            ADD_OR_FAIL(json_elem_add_str(&c, "display_name",  cmds[i].display_name));
+            ADD_OR_FAIL(json_elem_add_str(&c, "description",   cmds[i].description));
+            ADD_OR_FAIL(json_elem_add_str(&c, "group",         cmds[i].group));
+            ADD_OR_FAIL(json_elem_add_str(&c, "confirm_title", cmds[i].confirm_title));
+            ADD_OR_FAIL(json_elem_add_str(&c, "confirm_body",  cmds[i].confirm_body));
+            ADD_OR_FAIL(json_elem_add_str(&c, "type",
+                cmds[i].type == UPS_CMD_TOGGLE ? "toggle" : "simple"));
+            ADD_OR_FAIL(json_elem_add_str(&c, "variant",
                 cmds[i].variant == UPS_CMD_DANGER ? "danger" :
-                cmds[i].variant == UPS_CMD_WARN   ? "warn"   : "default");
+                cmds[i].variant == UPS_CMD_WARN   ? "warn"   : "default"));
             if (cmds[i].flags & UPS_CMD_IS_SHUTDOWN)
-                cJSON_AddBoolToObject(obj, "is_shutdown", 1);
+                ADD_OR_FAIL(json_elem_add_bool(&c, "is_shutdown", true));
             if (cmds[i].flags & UPS_CMD_IS_MUTE)
-                cJSON_AddBoolToObject(obj, "is_mute", 1);
+                ADD_OR_FAIL(json_elem_add_bool(&c, "is_mute", true));
             if (cmds[i].type == UPS_CMD_TOGGLE)
-                cJSON_AddNumberToObject(obj, "status_bit", cmds[i].status_bit);
-            cJSON_AddItemToArray(arr, obj);
+                ADD_OR_FAIL(json_elem_add_u32(&c, "status_bit", cmds[i].status_bit));
+            json_elem_commit(&c);
         }
     }
-    char *json = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    return api_ok(json);
+
+    return finalize_ok(resp);
 }
 
 /* --- Restart endpoint --- */
