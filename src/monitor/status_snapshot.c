@@ -1,4 +1,5 @@
 #include "monitor/status_snapshot.h"
+#include <cutils/db.h>
 #include <cutils/log.h>
 
 #include <stdio.h>
@@ -7,17 +8,14 @@
 
 int status_snapshot_load(cutils_db_t *db, status_snapshot_t *out)
 {
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(db,
         "SELECT status, bat_system_error, general_error, "
         "       power_system_error, bat_lifetime_status, updated_at "
         "FROM ups_status_snapshot WHERE id = 1",
         NULL, &result);
 
-    if (rc != 0 || !result || result->nrows == 0) {
-        db_result_free(result);
-        return -1;
-    }
+    if (rc != 0 || !result || result->nrows == 0) return -1;
 
     /* All fields are stored as INTEGER (uint32 fits comfortably in
      * SQLite's INTEGER which is up to 64-bit signed). strtoul handles
@@ -31,7 +29,6 @@ int status_snapshot_load(cutils_db_t *db, status_snapshot_t *out)
     snprintf(out->updated_at, sizeof(out->updated_at), "%s",
              row[5] ? row[5] : "");
 
-    db_result_free(result);
     return 0;
 }
 

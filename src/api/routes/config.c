@@ -1,5 +1,6 @@
 #include "api/routes/routes.h"
 #include "config/app_config.h"
+#include <cutils/db.h>
 #include <cutils/error.h>
 #include <cutils/json.h>
 #include <cutils/mem.h>
@@ -145,7 +146,7 @@ static api_response_t handle_config_ups_history(const api_request_t *req, void *
         return api_error(404, "register not found");
 
     const char *params[] = { name, NULL };
-    db_result_t *res = NULL;
+    CUTILS_AUTO_DBRES db_result_t *res = NULL;
     int rc = db_execute(ctx->db,
         "SELECT timestamp, raw_value, display_value, source FROM ups_config "
         "WHERE register_name = ? ORDER BY id DESC",
@@ -165,7 +166,6 @@ static api_response_t handle_config_ups_history(const api_request_t *req, void *
             cJSON_AddItemToArray(arr, row);
         }
     }
-    db_result_free(res);
 
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
@@ -294,7 +294,7 @@ static api_response_t handle_app_config_get(const api_request_t *req, void *ud)
         cJSON_AddItemToArray(arr, c);
     }
 
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT key, value, type, default_value, description FROM config ORDER BY key",
         NULL, &result);
@@ -308,7 +308,6 @@ static api_response_t handle_app_config_get(const api_request_t *req, void *ud)
             cJSON_AddStringToObject(c, "description", result->rows[i][4]);
             cJSON_AddItemToArray(arr, c);
         }
-        db_result_free(result);
     }
 
     char *json = cJSON_PrintUnformatted(arr);

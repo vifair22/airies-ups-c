@@ -138,7 +138,7 @@ struct weather {
 
 static int load_config(weather_t *w)
 {
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(w->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
@@ -146,10 +146,7 @@ static int load_config(weather_t *w)
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
-    if (rc != 0 || !result || result->nrows == 0) {
-        db_result_free(result);
-        return -1;
-    }
+    if (rc != 0 || !result || result->nrows == 0) return -1;
 
     w->enabled = atoi(result->rows[0][0]);
     w->latitude = atof(result->rows[0][1]);
@@ -170,7 +167,6 @@ static int load_config(weather_t *w)
     w->severe_raw_value = result->rows[0][9] ? (uint16_t)atoi(result->rows[0][9]) : 0;
     w->normal_raw_value = result->rows[0][10] ? (uint16_t)atoi(result->rows[0][10]) : 0;
 
-    db_result_free(result);
     return 0;
 }
 
