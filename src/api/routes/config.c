@@ -234,11 +234,13 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
                      readback,
                      reg->unit ? " " : "", reg->unit ? reg->unit : "");
         const char *snap_params[] = { reg->name, raw_s, display_s, ts, "api", NULL };
-        db_execute_non_query(ctx->db,
+        /* Best-effort audit snapshot; the register write above is the
+         * primary operation and has already succeeded by this point. */
+        CUTILS_UNUSED(db_execute_non_query(ctx->db,
             "INSERT INTO ups_config "
             "(register_name, raw_value, display_value, timestamp, source) "
             "VALUES (?, ?, ?, ?, ?)",
-            snap_params, NULL);
+            snap_params, NULL));
     }
 
     cJSON *resp = reg_to_json(reg, readback, NULL);

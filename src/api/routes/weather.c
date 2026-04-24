@@ -76,11 +76,13 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
     char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16], srv_s[16], nrv_s[16];
 
     db_result_t *cur = NULL;
-    db_execute(ctx->db,
+    /* Failure manifests as cur == NULL or nrows == 0; the check below
+     * handles both identically (respond 404 weather-not-configured). */
+    CUTILS_UNUSED(db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
         "control_register, severe_raw_value, normal_raw_value "
-        "FROM weather_config WHERE id = 1", NULL, &cur);
+        "FROM weather_config WHERE id = 1", NULL, &cur));
 
     if (!cur || cur->nrows == 0) {
         db_result_free(cur);

@@ -95,7 +95,9 @@ static void push_notify(const char *severity, const char *title,
         .html     = 1,
         .priority = fmt.priority,
     };
-    push_send_opts(&opts);
+    /* Best-effort notification; a failure here must not cascade into the
+     * event pipeline that triggered it. */
+    CUTILS_UNUSED(push_send_opts(&opts));
 }
 
 /* --- Event callback: push alerts to Pushover --- */

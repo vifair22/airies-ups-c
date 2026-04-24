@@ -20,10 +20,12 @@ static void auth_event(cutils_db_t *db, const char *severity,
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
 
     const char *params[] = { ts, severity, "auth", title, message, NULL };
-    db_execute_non_query(db,
+    /* Best-effort audit trail; a failure here must not block whatever
+     * auth operation triggered this event. */
+    CUTILS_UNUSED(db_execute_non_query(db,
         "INSERT INTO events (timestamp, severity, category, title, message) "
         "VALUES (?, ?, ?, ?, ?)",
-        params, NULL);
+        params, NULL));
 }
 
 /* --- Auth endpoints --- */
@@ -133,8 +135,11 @@ static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
         const char *tok = req->auth_token;
         if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
         const char *params[] = { tok, NULL };
-        db_execute_non_query(ctx->db,
-            "DELETE FROM sessions WHERE token = ?", params, NULL);
+        /* Best-effort; on failure the token remains in the DB until its
+         * expires_at elapses (auth_cleanup_sessions will sweep it later).
+         * The client-side credential is already gone either way. */
+        CUTILS_UNUSED(db_execute_non_query(ctx->db,
+            "DELETE FROM sessions WHERE token = ?", params, NULL));
     }
 
     auth_event(ctx->db, "info", "Logout", "Admin session ended");
