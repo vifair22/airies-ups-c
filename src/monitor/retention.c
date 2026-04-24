@@ -46,7 +46,9 @@ int retention_run(cutils_db_t *db, const retention_config_t *cfg)
         char interval_s[16];
         snprintf(interval_s, sizeof(interval_s), "%d", cfg->downsample_minutes * 60);
 
-        const char *params[] = { ts, interval_s, ts, interval_s, NULL };
+        /* Three placeholders, three params: outer WHERE cutoff,
+         * inner WHERE cutoff, and the GROUP BY window size in seconds. */
+        const char *params[] = { ts, ts, interval_s, NULL };
         int downsampled = 0;
         /* Best-effort downsampling; same reasoning as the delete above. */
         CUTILS_UNUSED(db_execute_non_query(db,

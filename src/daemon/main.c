@@ -225,6 +225,18 @@ int main(int argc, char *argv[])
         int telem_sec = config_get_int(cfg, "monitor.telemetry_interval", 30);
         mon = monitor_create(ups, db, poll_sec, telem_sec);
         if (mon) {
+            /* Telemetry retention: daily sweep on the monitor thread.
+             * Defaults match the retention.h docstring (90d total, 24h full
+             * resolution, then downsample to 15m). Per-phase 0 disables
+             * that phase cleanly so users can keep full-res forever or
+             * only delete without downsampling. */
+            retention_config_t ret_cfg = {
+                .retention_days     = config_get_int(cfg, "monitor.telemetry_retention_days", 90),
+                .full_res_hours     = config_get_int(cfg, "monitor.telemetry_full_res_hours", 24),
+                .downsample_minutes = config_get_int(cfg, "monitor.telemetry_downsample_minutes", 15),
+            };
+            monitor_set_retention(mon, &ret_cfg);
+
             monitor_on_event(mon, on_monitor_event, cfg);
 
             /* Wire alert engine into monitor poll cycle. Seed alert state

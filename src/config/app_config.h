@@ -53,6 +53,15 @@ static const config_key_t app_db_keys[] = {
     { "monitor.telemetry_interval", CFG_INT, "30",
       "Telemetry DB write interval (seconds)",
       CFG_STORE_DB, 0 },
+    { "monitor.telemetry_retention_days",     CFG_INT, "90",
+      "Delete telemetry older than this many days (0=keep forever)",
+      CFG_STORE_DB, 0 },
+    { "monitor.telemetry_full_res_hours",     CFG_INT, "24",
+      "Keep full-resolution telemetry for this many hours before downsampling",
+      CFG_STORE_DB, 0 },
+    { "monitor.telemetry_downsample_minutes", CFG_INT, "15",
+      "Downsample older telemetry to this interval in minutes (0=don't downsample)",
+      CFG_STORE_DB, 0 },
 
     /* Alert thresholds */
     { "alerts.load_high_pct",       CFG_INT, "80",

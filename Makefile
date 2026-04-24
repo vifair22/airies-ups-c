@@ -283,6 +283,10 @@ $(eval $(call build_test,test_config_snapshot,\
   tests/test_config_snapshot.c src/monitor/config_snapshot.c,\
   $(TEST_FULL_LIBS),$(TEST_DIR),))
 
+$(eval $(call build_test,test_retention,\
+  tests/test_retention.c src/monitor/retention.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
 # --- Coverage builds (same definitions, --coverage flag) ---
 
 $(eval $(call build_test,test_ups_strings,\
@@ -325,9 +329,13 @@ $(eval $(call build_test,test_config_snapshot,\
   tests/test_config_snapshot.c src/monitor/config_snapshot.c,\
   $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_retention,\
+  tests/test_retention.c src/monitor/retention.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_retention
 
 # --- Run targets ---
 
