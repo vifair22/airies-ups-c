@@ -334,12 +334,21 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
         json_req_get_str(body, "value", &value) != CUTILS_OK)
         return api_error(400, "missing 'key' and 'value' strings");
 
+    /* config_set is file-backed and doesn't touch DB; config_set_db does.
+     * Wrapping both lets us roll back the DB write if the response-path
+     * fails. Also gives the handler a uniform serialization story. */
+    CUTILS_AUTO_DB_TX cutils_db_tx_t tx = { 0 };
+    if (cutils_db_tx_begin_immediate(ctx->db, &tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
     int rc = config_set(ctx->config, key, value);
     if (rc != CUTILS_OK)
         rc = config_set_db(ctx->config, key, value);
 
     if (rc != CUTILS_OK) return api_error(400, "unknown config key");
 
+    if (db_tx_commit(&tx) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
     return api_ok_msg("updated");
 }
 

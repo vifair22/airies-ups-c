@@ -4,7 +4,6 @@
 #include <cutils/push.h>
 #include <cutils/appguard.h>
 #include <cutils/error_loop.h>
-#include <cJSON.h>
 
 #include "ups/ups.h"
 #include "api/server.h"

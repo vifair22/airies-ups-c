@@ -184,16 +184,22 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
     else
         snprintf(path, sizeof(path), "%s%s", static_dir, url);
 
+    /* f is auto-closed by CUTILS_AUTOCLOSE on every return below; cppcheck
+     * doesn't model the cleanup attribute so it flags each early return as
+     * a resource leak. Suppressions are per-return and narrowly typed. */
     CUTILS_AUTOCLOSE FILE *f = fopen(path, "rb");
+    /* cppcheck-suppress resourceLeak */
     if (!f) return MHD_NO;
 
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
+    /* cppcheck-suppress resourceLeak */
     if (fsize <= 0) return MHD_NO;
 
     char *buf = malloc((size_t)fsize);
+    /* cppcheck-suppress resourceLeak */
     if (!buf) return MHD_NO;
 
     size_t nread = fread(buf, 1, (size_t)fsize, f);
@@ -215,12 +221,14 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
         nread, buf, MHD_RESPMEM_MUST_FREE);
     if (!resp) {
         free(buf);
+        /* cppcheck-suppress resourceLeak */
         return MHD_NO;
     }
 
     MHD_add_response_header(resp, "Content-Type", ct);
     enum MHD_Result ret = MHD_queue_response(conn, 200, resp);
     MHD_destroy_response(resp);
+    /* cppcheck-suppress resourceLeak */
     return ret;
 }
 
