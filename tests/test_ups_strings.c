@@ -28,6 +28,17 @@ static void test_transfer_reason_unknown(void **state)
     assert_string_equal(ups_transfer_reason_str(0xFFFF), "Unknown");
 }
 
+static void test_transfer_reason_known_predicate(void **state)
+{
+    (void)state;
+    assert_int_equal(ups_transfer_reason_known(0), 1);
+    assert_int_equal(ups_transfer_reason_known(8), 1);
+    assert_int_equal(ups_transfer_reason_known(30), 1);
+    assert_int_equal(ups_transfer_reason_known(31), 0);
+    assert_int_equal(ups_transfer_reason_known(999), 0);
+    assert_int_equal(ups_transfer_reason_known(UPS_TRANSFER_REASON_UNKNOWN), 0);
+}
+
 /* --- ups_status_str --- */
 
 static void test_status_str_single_bit(void **state)
@@ -237,6 +248,7 @@ int main(void)
         /* transfer reason */
         cmocka_unit_test(test_transfer_reason_known),
         cmocka_unit_test(test_transfer_reason_unknown),
+        cmocka_unit_test(test_transfer_reason_known_predicate),
         /* status string */
         cmocka_unit_test(test_status_str_single_bit),
         cmocka_unit_test(test_status_str_multiple_bits),

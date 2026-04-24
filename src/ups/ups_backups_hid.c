@@ -565,6 +565,11 @@ static int backups_read_status(void *transport, ups_data_t *data)
     data->general_error = 0;
     data->bat_system_error = 0;
 
+    /* Back-UPS HID has no equivalent of the APC UPSStatusChangeCause
+     * register. Flag the field as unknown so event consumers don't
+     * append a misleading "(reason: SystemInitialization)" suffix. */
+    data->transfer_reason = UPS_TRANSFER_REASON_UNKNOWN;
+
     /* --- Standard HID PDC PresentStatus bits --- */
 
     /* ACPresent (85:D0) → ONLINE */
