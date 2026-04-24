@@ -7,6 +7,7 @@
 #include "hid_parser.h"
 #include "ups.h"
 #include <cutils/log.h>
+#include <cutils/mem.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -245,7 +246,7 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
         snprintf(uevent, sizeof(uevent),
                  "/sys/class/hidraw/%s/device/uevent", ent->d_name);
 
-        FILE *f = fopen(uevent, "r");
+        CUTILS_AUTOCLOSE FILE *f = fopen(uevent, "r");
         if (!f) continue;
 
         char line[256];
@@ -257,7 +258,6 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
                     match = 1;
             }
         }
-        fclose(f);
 
         if (match) {
             snprintf(path, path_sz, "/dev/%s", ent->d_name);
@@ -297,11 +297,10 @@ static void read_sysfs_string(const char *base, const char *attr,
 {
     char path[512];
     snprintf(path, sizeof(path), "%s/%s", base, attr);
-    FILE *f = fopen(path, "r");
+    CUTILS_AUTOCLOSE FILE *f = fopen(path, "r");
     if (!f) { buf[0] = '\0'; return; }
     if (!fgets(buf, (int)bufsz, f))
         buf[0] = '\0';
-    fclose(f);
     size_t len = strlen(buf);
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
         buf[--len] = '\0';

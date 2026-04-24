@@ -1,4 +1,5 @@
 #include "api/routes/routes.h"
+#include <cutils/db.h>
 #include <cutils/error.h>
 #include <cutils/json.h>
 #include <cutils/mem.h>
@@ -30,7 +31,7 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
     (void)req;
     route_ctx_t *ctx = ud;
 
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
@@ -38,18 +39,14 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
-    if (rc != CUTILS_OK || !result || result->nrows == 0) {
-        db_result_free(result);
+    if (rc != CUTILS_OK || !result || result->nrows == 0)
         return api_error(404, "weather not configured");
-    }
 
     char **row = result->rows[0];
 
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
-    if (json_resp_new(&resp) != CUTILS_OK) {
-        db_result_free(result);
+    if (json_resp_new(&resp) != CUTILS_OK)
         return api_error(500, cutils_get_error());
-    }
 
     ADD_OR_FAIL(json_resp_add_bool(resp, "enabled",          atoi(row[0]) != 0));
     ADD_OR_FAIL(json_resp_add_f64 (resp, "latitude",         atof(row[1])));
@@ -64,8 +61,6 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
         ADD_OR_FAIL(json_resp_add_i32(resp, "severe_raw_value", atoi(row[9])));
     if (row[10])
         ADD_OR_FAIL(json_resp_add_i32(resp, "normal_raw_value", atoi(row[10])));
-
-    db_result_free(result);
 
     CUTILS_AUTOFREE char *json = NULL;
     size_t len;
@@ -85,16 +80,14 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
 
     /* Fetch current config so unspecified fields keep their current values
      * (partial-update semantics). */
-    db_result_t *cur = NULL;
+    CUTILS_AUTO_DBRES db_result_t *cur = NULL;
     int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
         "control_register, severe_raw_value, normal_raw_value "
         "FROM weather_config WHERE id = 1", NULL, &cur);
-    if (rc != CUTILS_OK || !cur || cur->nrows == 0) {
-        db_result_free(cur);
+    if (rc != CUTILS_OK || !cur || cur->nrows == 0)
         return api_error(404, "weather config not found");
-    }
     char **row = cur->rows[0];
 
     /* Seed typed locals from DB; each override attempt is a no-op if the
@@ -155,8 +148,6 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
         "severe_keywords=?, poll_interval=?, "
         "control_register=?, severe_raw_value=?, normal_raw_value=? WHERE id = 1",
         params, NULL);
-
-    db_result_free(cur);
 
     if (rc != CUTILS_OK) return api_error(500, "failed to update weather config");
 

@@ -1,6 +1,8 @@
 #include "api/auth.h"
+#include <cutils/db.h>
 #include <cutils/log.h>
 #include <cutils/error.h>
+#include <cutils/mem.h>
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -133,13 +135,11 @@ int auth_init(cutils_db_t *db)
 
 int auth_is_setup(cutils_db_t *db)
 {
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(db, "SELECT id FROM auth WHERE id = 1",
                         NULL, &result);
     if (rc != 0 || !result) return 0;
-    int setup = result->nrows > 0;
-    db_result_free(result);
-    return setup;
+    return result->nrows > 0;
 }
 
 #define AUTH_MIN_PASSWORD_LEN 4
@@ -173,20 +173,26 @@ int auth_set_password(cutils_db_t *db, const char *password)
 
 int auth_verify_password(cutils_db_t *db, const char *password)
 {
-    db_result_t *result = NULL;
-    int rc = db_execute(db,
-        "SELECT password_hash FROM auth WHERE id = 1",
-        NULL, &result);
+    CUTILS_AUTOFREE char *stored_copy = NULL;
+    int valid = 0;
+    int is_legacy = 0;
 
-    if (rc != 0 || !result || result->nrows == 0) {
-        db_result_free(result);
-        return 0;
+    {
+        CUTILS_AUTO_DBRES db_result_t *result = NULL;
+        int rc = db_execute(db,
+            "SELECT password_hash FROM auth WHERE id = 1",
+            NULL, &result);
+
+        if (rc != 0 || !result || result->nrows == 0) return 0;
+
+        /* Copy the hash out of the db_result_t — we release the result
+         * (via AUTO_DBRES block exit) before the auth_set_password call
+         * below, which reads from the DB itself. */
+        stored_copy = strdup(result->rows[0][0]);
+        if (!stored_copy) return 0;
+        valid = verify_password(password, stored_copy);
+        is_legacy = (strncmp(stored_copy, "$pbkdf2$", 8) != 0);
     }
-
-    const char *stored = result->rows[0][0];
-    int valid = verify_password(password, stored);
-    int is_legacy = (strncmp(stored, "$pbkdf2$", 8) != 0);
-    db_result_free(result);
 
     /* Auto-upgrade legacy SHA256 hashes to PBKDF2 on successful login */
     if (valid && is_legacy) {
@@ -227,16 +233,14 @@ int auth_validate_token(cutils_db_t *db, const char *token)
     if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
 
     const char *params[] = { tok, NULL };
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(db,
         "SELECT token FROM sessions WHERE token = ? "
         "AND expires_at > datetime('now')",
         params, &result);
 
     if (rc != 0 || !result) return 0;
-    int valid = result->nrows > 0;
-    db_result_free(result);
-    return valid;
+    return result->nrows > 0;
 }
 
 void auth_cleanup_sessions(cutils_db_t *db)

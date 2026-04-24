@@ -1,5 +1,7 @@
 #include "ups.h"
 #include "ups_format.h"
+#include <cutils/mem.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -307,22 +309,26 @@ static int ups_ensure_transport(ups_t *ups)
 int ups_read_status(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_status) return UPS_ERR_NOT_SUPPORTED;
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
     int rc = ups->driver->read_status(ups->transport, data);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
-    pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
 
 int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
-    int rc = ups->driver->read_dynamic(ups->transport, data);
-    if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
-    pthread_mutex_unlock(&ups->cmd_mutex);
+
+    int rc;
+    {
+        CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+        if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
+        rc = ups->driver->read_dynamic(ups->transport, data);
+        if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
+    }
+    /* Lock released; battery-zero fixup below can run unlocked since
+     * `data` is caller-owned and not shared with other threads. */
 
     /* Zero battery readings when battery is disconnected — the UPS reports
      * stale values and the frontend shouldn't display them */
@@ -338,21 +344,17 @@ int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 int ups_read_inventory(ups_t *ups, ups_inventory_t *inv)
 {
     if (!ups->driver->read_inventory) return UPS_ERR_NOT_SUPPORTED;
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
-    int rc = ups->driver->read_inventory(ups->transport, inv);
-    pthread_mutex_unlock(&ups->cmd_mutex);
-    return rc;
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
+    return ups->driver->read_inventory(ups->transport, inv);
 }
 
 int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_low)
 {
     if (!ups->driver->read_thresholds) return UPS_ERR_NOT_SUPPORTED;
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
-    int rc = ups->driver->read_thresholds(ups->transport, transfer_high, transfer_low);
-    pthread_mutex_unlock(&ups->cmd_mutex);
-    return rc;
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
+    return ups->driver->read_thresholds(ups->transport, transfer_high, transfer_low);
 }
 
 /* --- Command dispatch ---
@@ -409,11 +411,10 @@ int ups_cmd_execute(ups_t *ups, const char *name, int is_off)
     int (*fn)(void *) = is_off ? cmd->execute_off : cmd->execute;
     if (!fn) return UPS_ERR_NOT_SUPPORTED;
 
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
     int rc = fn(ups->transport);
     post_command_settle();
-    pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
 
@@ -453,11 +454,10 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
                     uint16_t *raw_value, char *str_buf, size_t str_bufsz)
 {
     if (!ups->driver->config_read) return UPS_ERR_NOT_SUPPORTED;
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
     int rc = ups->driver->config_read(ups->transport, reg, raw_value, str_buf, str_bufsz);
     if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
-    pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
 
@@ -506,11 +506,10 @@ int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value)
     int vrc = ups_config_validate(reg, value);
     if (vrc != UPS_OK) return vrc;
 
-    pthread_mutex_lock(&ups->cmd_mutex);
-    if (!ups_ensure_transport(ups)) { pthread_mutex_unlock(&ups->cmd_mutex); return UPS_ERR_IO; }
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
     int rc = ups->driver->config_write(ups->transport, reg, value);
     post_command_settle();
-    pthread_mutex_unlock(&ups->cmd_mutex);
     return rc;
 }
 

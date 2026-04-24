@@ -3,6 +3,7 @@
 #include "monitor/config_snapshot.h"
 #include <cutils/log.h>
 #include <cutils/error.h>
+#include <cutils/mem.h>
 
 #include <pthread.h>
 #include <stdio.h>
@@ -259,9 +260,10 @@ static void *monitor_thread(void *arg)
 
     /* Use cached inventory from ups_connect() */
     if (mon->ups->has_inventory) {
-        pthread_mutex_lock(&mon->mutex);
-        mon->inventory = mon->ups->inventory;
-        pthread_mutex_unlock(&mon->mutex);
+        {
+            CUTILS_LOCK_GUARD(&mon->mutex);
+            mon->inventory = mon->ups->inventory;
+        }
         log_info("UPS: %s | Serial: %s | FW: %s | %uVA / %uW | Driver: %s",
                  mon->inventory.model, mon->inventory.serial,
                  mon->inventory.firmware,
@@ -280,12 +282,13 @@ static void *monitor_thread(void *arg)
     /* Initial status read */
     if (ups_read_status(mon->ups, &data) == 0 &&
         ups_read_dynamic(mon->ups, &data) == 0) {
-        pthread_mutex_lock(&mon->mutex);
-        mon->data = data;
-        mon->has_data = 1;
-        mon->connected = 1;
-        mon->prev_sig = status_signature(&data);
-        pthread_mutex_unlock(&mon->mutex);
+        {
+            CUTILS_LOCK_GUARD(&mon->mutex);
+            mon->data = data;
+            mon->has_data = 1;
+            mon->connected = 1;
+            mon->prev_sig = status_signature(&data);
+        }
 
         char line[512];
         format_status_line(&data, line, sizeof(line));
@@ -320,9 +323,10 @@ static void *monitor_thread(void *arg)
             else
                 log_error("UPS connection lost");
 
-            pthread_mutex_lock(&mon->mutex);
-            mon->connected = transport_up;
-            pthread_mutex_unlock(&mon->mutex);
+            {
+                CUTILS_LOCK_GUARD(&mon->mutex);
+                mon->connected = transport_up;
+            }
 
             if (!transport_up && mon->was_connected) {
                 mon->was_connected = 0;
@@ -333,11 +337,12 @@ static void *monitor_thread(void *arg)
             continue;
         }
 
-        pthread_mutex_lock(&mon->mutex);
-        mon->data = data;
-        mon->has_data = 1;
-        mon->connected = 1;
-        pthread_mutex_unlock(&mon->mutex);
+        {
+            CUTILS_LOCK_GUARD(&mon->mutex);
+            mon->data = data;
+            mon->has_data = 1;
+            mon->connected = 1;
+        }
 
         /* Fire reconnect event on transition */
         if (!mon->was_connected && mon->disconnected_at > 0) {
@@ -636,29 +641,23 @@ void monitor_stop(monitor_t *mon)
 
 int monitor_get_status(monitor_t *mon, ups_data_t *out)
 {
-    pthread_mutex_lock(&mon->mutex);
-    if (!mon->has_data) {
-        pthread_mutex_unlock(&mon->mutex);
-        return -1;
-    }
+    CUTILS_LOCK_GUARD(&mon->mutex);
+    if (!mon->has_data) return -1;
     *out = mon->data;
-    pthread_mutex_unlock(&mon->mutex);
     return 0;
 }
 
 int monitor_get_inventory(monitor_t *mon, ups_inventory_t *out)
 {
-    pthread_mutex_lock(&mon->mutex);
+    CUTILS_LOCK_GUARD(&mon->mutex);
     *out = mon->inventory;
-    pthread_mutex_unlock(&mon->mutex);
     return 0;
 }
 
 int monitor_get_snapshot(monitor_t *mon, status_snapshot_t *out)
 {
-    pthread_mutex_lock(&mon->mutex);
+    CUTILS_LOCK_GUARD(&mon->mutex);
     *out = mon->snapshot;
-    pthread_mutex_unlock(&mon->mutex);
     return 0;
 }
 
