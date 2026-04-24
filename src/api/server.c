@@ -184,26 +184,19 @@ static enum MHD_Result try_serve_static(struct MHD_Connection *conn,
     else
         snprintf(path, sizeof(path), "%s%s", static_dir, url);
 
-    FILE *f = fopen(path, "rb");
+    CUTILS_AUTOCLOSE FILE *f = fopen(path, "rb");
     if (!f) return MHD_NO;
 
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if (fsize <= 0) {
-        fclose(f);
-        return MHD_NO;
-    }
+    if (fsize <= 0) return MHD_NO;
 
     char *buf = malloc((size_t)fsize);
-    if (!buf) {
-        fclose(f);
-        return MHD_NO;
-    }
+    if (!buf) return MHD_NO;
 
     size_t nread = fread(buf, 1, (size_t)fsize, f);
-    fclose(f);
 
     /* Guess content type from extension */
     const char *ct = "application/octet-stream";
