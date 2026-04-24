@@ -1,6 +1,17 @@
 #include "weather/weather.h"
 #include "ups/ups.h"
 #include <cutils/log.h>
+#include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
+
+/* weather.c parses NWS responses from api.weather.gov using cJSON and
+ * builds our own outgoing responses using cutils/json. The cJSON side
+ * is confined to the nws_get helper and the parsing functions below —
+ * all string fields extracted from the NWS tree are either used
+ * immediately (strstr/atoi compare) or copied via snprintf / owned
+ * adders before the tree is deleted, so the borrowed-valuestring UAF
+ * class doesn't apply. */
 #include <cJSON.h>
 
 #include <curl/curl.h>
@@ -475,29 +486,34 @@ void weather_stop(weather_t *w)
 
 char *weather_status_json(weather_t *w)
 {
-    cJSON *obj = cJSON_CreateObject();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    CUTILS_AUTOFREE       char               *json = NULL;
+    size_t len;
+
+    if (json_resp_new(&resp) != CUTILS_OK) return NULL;
+
     if (!w) {
-        cJSON_AddBoolToObject(obj, "enabled", 0);
-        char *json = cJSON_PrintUnformatted(obj);
-        cJSON_Delete(obj);
-        return json;
+        if (json_resp_add_bool(resp, "enabled", false) != CUTILS_OK ||
+            json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+            return NULL;
+        return CUTILS_MOVE(json);
     }
 
-    cJSON_AddBoolToObject(obj, "enabled", 1);
-    cJSON_AddBoolToObject(obj, "severe", w->severe);
-    cJSON_AddStringToObject(obj, "reasons", w->reasons);
-    cJSON_AddNumberToObject(obj, "latitude", w->latitude);
-    cJSON_AddNumberToObject(obj, "longitude", w->longitude);
-    cJSON_AddStringToObject(obj, "alert_zones", w->alert_zones);
-    cJSON_AddNumberToObject(obj, "wind_threshold_mph", w->wind_speed_mph);
-    cJSON_AddNumberToObject(obj, "poll_interval", w->poll_interval);
-    cJSON_AddStringToObject(obj, "control_register", w->control_register);
-
-    cJSON_AddBoolToObject(obj, "simulated", w->sim_active);
-
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return json;
+    int rv = CUTILS_OK;
+    if ((rv = json_resp_add_bool(resp, "enabled",            true))                    != CUTILS_OK ||
+        (rv = json_resp_add_bool(resp, "severe",             w->severe != 0))           != CUTILS_OK ||
+        (rv = json_resp_add_str (resp, "reasons",            w->reasons))               != CUTILS_OK ||
+        (rv = json_resp_add_f64 (resp, "latitude",           w->latitude))              != CUTILS_OK ||
+        (rv = json_resp_add_f64 (resp, "longitude",          w->longitude))             != CUTILS_OK ||
+        (rv = json_resp_add_str (resp, "alert_zones",        w->alert_zones))           != CUTILS_OK ||
+        (rv = json_resp_add_i32 (resp, "wind_threshold_mph", w->wind_speed_mph))        != CUTILS_OK ||
+        (rv = json_resp_add_i32 (resp, "poll_interval",      w->poll_interval))         != CUTILS_OK ||
+        (rv = json_resp_add_str (resp, "control_register",   w->control_register))      != CUTILS_OK ||
+        (rv = json_resp_add_bool(resp, "simulated",          w->sim_active != 0))       != CUTILS_OK ||
+        (rv = json_resp_finalize(resp, &json, &len))                                    != CUTILS_OK) {
+        return NULL;
+    }
+    return CUTILS_MOVE(json);
 }
 
 void weather_simulate_severe(weather_t *w, const char *reason)
@@ -516,18 +532,50 @@ void weather_simulate_clear(weather_t *w)
     log_info("weather: simulation cleared, will restore on next cycle");
 }
 
+/* Helper: force-create an empty array at `path`. Same technique as
+ * the routes-layer helpers. */
+static int resp_ensure_array(cutils_json_resp_t *resp, const char *path)
+{
+    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t dummy;
+    return json_resp_array_append_begin(resp, path, &dummy);
+}
+
+/* Copy a cJSON string field (if present and correct type) into the
+ * current element at the given key. Silently skips missing/wrong-type
+ * to preserve the original's best-effort behavior. */
+static int elem_add_str_from_cjson(cutils_json_elem_t *elem,
+                                   const cJSON *src, const char *src_key,
+                                   const char *dst_key)
+{
+    const cJSON *item = cJSON_GetObjectItem(src, src_key);
+    if (item && cJSON_IsString(item))
+        return json_elem_add_str(elem, dst_key, item->valuestring);
+    return CUTILS_OK;
+}
+
 char *weather_report_json(weather_t *w)
 {
-    cJSON *obj = cJSON_CreateObject();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    CUTILS_AUTOFREE       char               *json = NULL;
+    size_t len;
+
+    if (json_resp_new(&resp) != CUTILS_OK) return NULL;
+
     if (!w) {
-        cJSON_AddStringToObject(obj, "error", "weather subsystem not running");
-        char *json = cJSON_PrintUnformatted(obj);
-        cJSON_Delete(obj);
-        return json;
+        if (json_resp_add_str(resp, "error", "weather subsystem not running") != CUTILS_OK ||
+            json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+            return NULL;
+        return CUTILS_MOVE(json);
     }
 
-    /* Fetch active alerts */
-    cJSON *alerts_arr = cJSON_CreateArray();
+    /* Always emit both arrays, even if empty. */
+    if (resp_ensure_array(resp, "alerts")   != CUTILS_OK ||
+        resp_ensure_array(resp, "forecast") != CUTILS_OK)
+        return NULL;
+
+    /* Fetch active alerts — parse NWS with cJSON, build our response
+     * element-by-element via cu_json. Every string adder copies the
+     * source, so the cJSON tree can be freed as soon as we're done. */
     if (w->alert_zones[0]) {
         char url[512];
         snprintf(url, sizeof(url), "%s/alerts/active?zone=%s",
@@ -542,35 +590,29 @@ char *weather_report_json(weather_t *w)
                     cJSON *props = cJSON_GetObjectItem(f, "properties");
                     if (!props) continue;
 
-                    cJSON *alert = cJSON_CreateObject();
-                    cJSON *ev = cJSON_GetObjectItem(props, "event");
-                    cJSON *hl = cJSON_GetObjectItem(props, "headline");
-                    cJSON *sv = cJSON_GetObjectItem(props, "severity");
-                    cJSON *ur = cJSON_GetObjectItem(props, "urgency");
-                    if (ev && cJSON_IsString(ev))
-                        cJSON_AddStringToObject(alert, "event", ev->valuestring);
-                    if (hl && cJSON_IsString(hl))
-                        cJSON_AddStringToObject(alert, "headline", hl->valuestring);
-                    if (sv && cJSON_IsString(sv))
-                        cJSON_AddStringToObject(alert, "severity", sv->valuestring);
-                    if (ur && cJSON_IsString(ur))
-                        cJSON_AddStringToObject(alert, "urgency", ur->valuestring);
+                    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t alert;
+                    if (json_resp_array_append_begin(resp, "alerts", &alert) != CUTILS_OK) {
+                        cJSON_Delete(nws);
+                        return NULL;
+                    }
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&alert, props, "event",    "event"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&alert, props, "headline", "headline"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&alert, props, "severity", "severity"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&alert, props, "urgency",  "urgency"));
 
-                    /* Check if this alert type matches our configured types */
-                    int matched = (ev && cJSON_IsString(ev) &&
-                                   strstr(w->alert_types, ev->valuestring)) ? 1 : 0;
-                    cJSON_AddBoolToObject(alert, "matched", matched);
+                    const cJSON *ev = cJSON_GetObjectItem(props, "event");
+                    bool matched = (ev && cJSON_IsString(ev) &&
+                                    strstr(w->alert_types, ev->valuestring)) ? true : false;
+                    CUTILS_UNUSED(json_elem_add_bool(&alert, "matched", matched));
 
-                    cJSON_AddItemToArray(alerts_arr, alert);
+                    json_elem_commit(&alert);
                 }
             }
             cJSON_Delete(nws);
         }
     }
-    cJSON_AddItemToObject(obj, "alerts", alerts_arr);
 
-    /* Fetch forecast periods */
-    cJSON *forecast_arr = cJSON_CreateArray();
+    /* Fetch forecast periods. */
     if (w->forecast_url[0]) {
         cJSON *nws = nws_get(w->forecast_url);
         if (nws) {
@@ -581,37 +623,30 @@ char *weather_report_json(weather_t *w)
                 int show = n > 6 ? 6 : n;
                 for (int i = 0; i < show; i++) {
                     cJSON *p = cJSON_GetArrayItem(periods, i);
-                    cJSON *period = cJSON_CreateObject();
 
-                    cJSON *name = cJSON_GetObjectItem(p, "name");
-                    cJSON *temp = cJSON_GetObjectItem(p, "temperature");
-                    cJSON *wind = cJSON_GetObjectItem(p, "windSpeed");
-                    cJSON *wdir = cJSON_GetObjectItem(p, "windDirection");
-                    cJSON *sf = cJSON_GetObjectItem(p, "shortForecast");
-                    cJSON *df = cJSON_GetObjectItem(p, "detailedForecast");
+                    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t period;
+                    if (json_resp_array_append_begin(resp, "forecast", &period) != CUTILS_OK) {
+                        cJSON_Delete(nws);
+                        return NULL;
+                    }
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&period, p, "name",             "name"));
 
-                    if (name && cJSON_IsString(name))
-                        cJSON_AddStringToObject(period, "name", name->valuestring);
+                    const cJSON *temp = cJSON_GetObjectItem(p, "temperature");
                     if (temp && cJSON_IsNumber(temp))
-                        cJSON_AddNumberToObject(period, "temperature", temp->valuedouble);
-                    if (wind && cJSON_IsString(wind))
-                        cJSON_AddStringToObject(period, "wind", wind->valuestring);
-                    if (wdir && cJSON_IsString(wdir))
-                        cJSON_AddStringToObject(period, "wind_direction", wdir->valuestring);
-                    if (sf && cJSON_IsString(sf))
-                        cJSON_AddStringToObject(period, "short_forecast", sf->valuestring);
-                    if (df && cJSON_IsString(df))
-                        cJSON_AddStringToObject(period, "detailed_forecast", df->valuestring);
+                        CUTILS_UNUSED(json_elem_add_f64(&period, "temperature", temp->valuedouble));
 
-                    cJSON_AddItemToArray(forecast_arr, period);
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&period, p, "windSpeed",        "wind"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&period, p, "windDirection",    "wind_direction"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&period, p, "shortForecast",    "short_forecast"));
+                    CUTILS_UNUSED(elem_add_str_from_cjson(&period, p, "detailedForecast", "detailed_forecast"));
+
+                    json_elem_commit(&period);
                 }
             }
             cJSON_Delete(nws);
         }
     }
-    cJSON_AddItemToObject(obj, "forecast", forecast_arr);
 
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return json;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK) return NULL;
+    return CUTILS_MOVE(json);
 }
