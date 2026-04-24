@@ -6,7 +6,6 @@ import type { UpsStatus } from '../types/ups'
 const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
   { to: '/events', label: 'Events', icon: '!' },
-  { to: '/telemetry', label: 'Telemetry', icon: '#' },
   { to: '/commands', label: 'Commands', icon: '>' },
 ]
 
