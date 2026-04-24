@@ -46,18 +46,6 @@ static api_response_t finalize_ok(cutils_json_resp_t *resp)
     return api_ok(CUTILS_MOVE(json));
 }
 
-/* Force an empty array to exist at `path` so downstream responses always
- * contain the key — matches the original cJSON code that unconditionally
- * attached the array even when empty. Exploits the fact that
- * json_resp_array_append_begin creates the parent array before the
- * element is built; we let the (empty) element discard on cleanup,
- * leaving the array in place. Will become a public cu_json primitive
- * if other files need it. */
-static int resp_ensure_array(cutils_json_resp_t *resp, const char *path)
-{
-    CUTILS_AUTO_JSON_ELEM cutils_json_elem_t dummy;
-    return json_resp_array_append_begin(resp, path, &dummy);
-}
 
 /* --- Auth endpoints --- */
 
@@ -207,8 +195,8 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
 
     /* Both arrays are always present in the response, even if empty —
      * match the original cJSON behavior. */
-    ADD_OR_FAIL(resp_ensure_array(resp, "serial"));
-    ADD_OR_FAIL(resp_ensure_array(resp, "usb"));
+    ADD_OR_FAIL(json_resp_ensure_array(resp, "serial"));
+    ADD_OR_FAIL(json_resp_ensure_array(resp, "usb"));
 
     /* Scan for serial devices — scalar-append builds the 'serial' array. */
     const char *patterns[] = { "/dev/ttyUSB", "/dev/ttyACM", "/dev/ttyS", NULL };
