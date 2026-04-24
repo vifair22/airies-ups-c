@@ -11,7 +11,11 @@
  * all string fields extracted from the NWS tree are either used
  * immediately (strstr/atoi compare) or copied via snprintf / owned
  * adders before the tree is deleted, so the borrowed-valuestring UAF
- * class doesn't apply. */
+ * class doesn't apply.
+ *
+ * The cu_json fence (c-utils!8) blocks cJSON.h by default; this file
+ * legitimately needs it for the NWS parse helpers above. */
+#define CUTILS_CJSON_ALLOW
 #include <cJSON.h>
 
 #include <curl/curl.h>

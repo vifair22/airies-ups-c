@@ -10,7 +10,11 @@
  * output is either a bare top-level array (frontends consume these
  * directly) or a complex nested builder (reg_to_json, the out_of_range
  * error object) — those shapes don't yet have a clean cu_json
- * equivalent, and they're pure build-side code so no UAF class applies. */
+ * equivalent, and they're pure build-side code so no UAF class applies.
+ *
+ * The cu_json fence (c-utils!8) blocks cJSON.h by default; this file
+ * legitimately needs it for the two builder sites above. */
+#define CUTILS_CJSON_ALLOW
 #include <cJSON.h>
 
 #include <stdio.h>
