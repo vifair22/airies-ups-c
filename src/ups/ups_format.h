@@ -7,8 +7,15 @@
 /* Human-readable strings for UPS status fields.
  * Shared across all APC Modbus models — no driver dependency. */
 
+/* Sentinel for drivers that don't report the APC UPSStatusChangeCause
+ * register (e.g. Back-UPS HID). Any value >= this is treated as unknown. */
+#define UPS_TRANSFER_REASON_UNKNOWN 0xFFFF
+
 /* Transfer reason enum → string. Returns "Unknown" for out-of-range values. */
 const char *ups_transfer_reason_str(uint16_t reason);
+
+/* 1 if reason is a known UPSStatusChangeCause_EN value, 0 otherwise. */
+int ups_transfer_reason_known(uint16_t reason);
 
 /* Status bitfield → space-separated flag names.
  * Writes into caller's buffer, returns buf. */

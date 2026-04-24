@@ -108,6 +108,24 @@ static void fire_event(monitor_t *mon, const char *severity,
     }
 }
 
+/* Same as fire_event, but appends " (reason: <XferReason>)" to the message
+ * when the driver reports a known UPSStatusChangeCause value. Drivers that
+ * don't support the cause register (Back-UPS HID) leave transfer_reason at
+ * UPS_TRANSFER_REASON_UNKNOWN and the suffix is omitted. */
+static void fire_event_xfer(monitor_t *mon, const char *severity,
+                            const char *category, const char *title,
+                            uint16_t transfer_reason, const char *message)
+{
+    if (!ups_transfer_reason_known(transfer_reason)) {
+        fire_event(mon, severity, category, title, message);
+        return;
+    }
+    char buf[640];
+    snprintf(buf, sizeof(buf), "%s (reason: %s)",
+             message, ups_transfer_reason_str(transfer_reason));
+    fire_event(mon, severity, category, title, buf);
+}
+
 static void record_telemetry(monitor_t *mon, const ups_data_t *d)
 {
     char ts[32];
@@ -332,9 +350,9 @@ static void *monitor_thread(void *arg)
                 if (mon->he_reengage_count >= HE_REENGAGE_THRESHOLD) {
                     log_info("UPS stably re-engaged HE mode, clearing inhibit");
                     monitor_he_inhibit_clear(mon);
-                    fire_event(mon, "info", "status",
-                               "HE Mode Restored",
-                               "HE mode re-engaged, inhibit cleared");
+                    fire_event_xfer(mon, "info", "status",
+                                    "HE Mode Restored", data.transfer_reason,
+                                    "HE mode re-engaged, inhibit cleared");
                 }
             } else {
                 if (mon->he_reengage_count > 0)
@@ -360,55 +378,69 @@ static void *monitor_thread(void *arg)
                          "UPS switched to battery — charge %.0f%%, runtime %um%us",
                          data.charge_pct, data.runtime_sec / 60,
                          data.runtime_sec % 60);
-                fire_event(mon, "warning", "power", "On Battery", msg);
+                fire_event_xfer(mon, "warning", "power", "On Battery",
+                                data.transfer_reason, msg);
             }
             if (cleared & UPS_ST_ON_BATTERY)
-                fire_event(mon, "info", "power", "Utility Restored",
-                           "UPS returned to utility power");
+                fire_event_xfer(mon, "info", "power", "Utility Restored",
+                                data.transfer_reason,
+                                "UPS returned to utility power");
             if (set & UPS_ST_OUTPUT_OFF)
-                fire_event(mon, "error", "power", "Output Off",
-                           "UPS output has been turned off");
+                fire_event_xfer(mon, "error", "power", "Output Off",
+                                data.transfer_reason,
+                                "UPS output has been turned off");
             if (cleared & UPS_ST_OUTPUT_OFF)
-                fire_event(mon, "info", "power", "Output Restored",
-                           "UPS output has been restored");
+                fire_event_xfer(mon, "info", "power", "Output Restored",
+                                data.transfer_reason,
+                                "UPS output has been restored");
 
             /* Mode events */
             if (set & UPS_ST_HE_MODE)
-                fire_event(mon, "info", "mode", "HE Mode Entered",
-                           "UPS entered high efficiency mode");
+                fire_event_xfer(mon, "info", "mode", "HE Mode Entered",
+                                data.transfer_reason,
+                                "UPS entered high efficiency mode");
             if (cleared & UPS_ST_HE_MODE)
-                fire_event(mon, "info", "mode", "HE Mode Exited",
-                           "UPS exited high efficiency mode");
+                fire_event_xfer(mon, "info", "mode", "HE Mode Exited",
+                                data.transfer_reason,
+                                "UPS exited high efficiency mode");
             if (set & UPS_ST_BYPASS)
-                fire_event(mon, "warning", "mode", "Bypass Entered",
-                           (data.status & UPS_ST_COMMANDED)
-                               ? "UPS entered commanded bypass — output is unprotected"
-                               : "UPS transferred to bypass due to internal fault");
+                fire_event_xfer(mon, "warning", "mode", "Bypass Entered",
+                                data.transfer_reason,
+                                (data.status & UPS_ST_COMMANDED)
+                                    ? "UPS entered commanded bypass — output is unprotected"
+                                    : "UPS transferred to bypass due to internal fault");
             if (cleared & UPS_ST_BYPASS)
-                fire_event(mon, "info", "mode", "Bypass Exited",
-                           "UPS returned to normal operation from bypass");
+                fire_event_xfer(mon, "info", "mode", "Bypass Exited",
+                                data.transfer_reason,
+                                "UPS returned to normal operation from bypass");
 
             /* Fault events */
             if (set & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
-                fire_event(mon, "error", "fault", "Fault Detected",
-                           "UPS has entered a fault condition");
+                fire_event_xfer(mon, "error", "fault", "Fault Detected",
+                                data.transfer_reason,
+                                "UPS has entered a fault condition");
             if (cleared & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
-                fire_event(mon, "info", "fault", "Fault Cleared",
-                           "UPS fault condition has been cleared");
+                fire_event_xfer(mon, "info", "fault", "Fault Cleared",
+                                data.transfer_reason,
+                                "UPS fault condition has been cleared");
             if (set & UPS_ST_OVERLOAD)
-                fire_event(mon, "error", "fault", "Overload",
-                           "UPS output is overloaded");
+                fire_event_xfer(mon, "error", "fault", "Overload",
+                                data.transfer_reason,
+                                "UPS output is overloaded");
             if (cleared & UPS_ST_OVERLOAD)
-                fire_event(mon, "info", "fault", "Overload Cleared",
-                           "UPS overload condition has cleared");
+                fire_event_xfer(mon, "info", "fault", "Overload Cleared",
+                                data.transfer_reason,
+                                "UPS overload condition has cleared");
 
             /* Test events */
             if (set & UPS_ST_TEST)
-                fire_event(mon, "info", "test", "Self-Test Started",
-                           "UPS self-test is in progress");
+                fire_event_xfer(mon, "info", "test", "Self-Test Started",
+                                data.transfer_reason,
+                                "UPS self-test is in progress");
             if (cleared & UPS_ST_TEST)
-                fire_event(mon, "info", "test", "Self-Test Ended",
-                           "UPS self-test has completed");
+                fire_event_xfer(mon, "info", "test", "Self-Test Ended",
+                                data.transfer_reason,
+                                "UPS self-test has completed");
 
             /* Shutdown trigger: on battery + shutdown imminent */
             if ((data.status & UPS_ST_ON_BATTERY) &&
@@ -421,8 +453,8 @@ static void *monitor_thread(void *arg)
                          data.charge_pct, data.runtime_sec / 60,
                          data.runtime_sec % 60);
                 log_error("SHUTDOWN TRIGGERED: %s", msg);
-                fire_event(mon, "critical", "shutdown",
-                           "Shutdown Triggered", msg);
+                fire_event_xfer(mon, "critical", "shutdown",
+                                "Shutdown Triggered", data.transfer_reason, msg);
             }
 
             mon->prev_status = data.status;
