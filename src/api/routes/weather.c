@@ -1,9 +1,18 @@
 #include "api/routes/routes.h"
-#include <cJSON.h>
+#include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+/* Propagate a JSON builder failure as a 500 with the thread-local
+ * error message. Scoped to this file; undef'd at the end. */
+#define ADD_OR_FAIL(expr) \
+    do { \
+        if ((expr) != CUTILS_OK) return api_error(500, cutils_get_error()); \
+    } while (0)
 
 /* --- Weather endpoints --- */
 
@@ -20,6 +29,7 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
 {
     (void)req;
     route_ctx_t *ctx = ud;
+
     db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
@@ -28,97 +38,118 @@ static api_response_t handle_weather_config_get(const api_request_t *req, void *
         "FROM weather_config WHERE id = 1",
         NULL, &result);
 
-    if (rc != 0 || !result || result->nrows == 0) {
+    if (rc != CUTILS_OK || !result || result->nrows == 0) {
         db_result_free(result);
         return api_error(404, "weather not configured");
     }
 
-    cJSON *obj = cJSON_CreateObject();
-    cJSON_AddBoolToObject(obj, "enabled", atoi(result->rows[0][0]));
-    cJSON_AddNumberToObject(obj, "latitude", atof(result->rows[0][1]));
-    cJSON_AddNumberToObject(obj, "longitude", atof(result->rows[0][2]));
-    cJSON_AddStringToObject(obj, "alert_zones", result->rows[0][3] ? result->rows[0][3] : "");
-    cJSON_AddStringToObject(obj, "alert_types", result->rows[0][4] ? result->rows[0][4] : "");
-    cJSON_AddNumberToObject(obj, "wind_speed_mph", atoi(result->rows[0][5]));
-    cJSON_AddStringToObject(obj, "severe_keywords", result->rows[0][6] ? result->rows[0][6] : "");
-    cJSON_AddNumberToObject(obj, "poll_interval", atoi(result->rows[0][7]));
-    cJSON_AddStringToObject(obj, "control_register", result->rows[0][8] ? result->rows[0][8] : "freq_tolerance");
-    if (result->rows[0][9])
-        cJSON_AddNumberToObject(obj, "severe_raw_value", atoi(result->rows[0][9]));
-    if (result->rows[0][10])
-        cJSON_AddNumberToObject(obj, "normal_raw_value", atoi(result->rows[0][10]));
+    char **row = result->rows[0];
+
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK) {
+        db_result_free(result);
+        return api_error(500, cutils_get_error());
+    }
+
+    ADD_OR_FAIL(json_resp_add_bool(resp, "enabled",          atoi(row[0]) != 0));
+    ADD_OR_FAIL(json_resp_add_f64 (resp, "latitude",         atof(row[1])));
+    ADD_OR_FAIL(json_resp_add_f64 (resp, "longitude",        atof(row[2])));
+    ADD_OR_FAIL(json_resp_add_str (resp, "alert_zones",      row[3] ? row[3] : ""));
+    ADD_OR_FAIL(json_resp_add_str (resp, "alert_types",      row[4] ? row[4] : ""));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "wind_speed_mph",   atoi(row[5])));
+    ADD_OR_FAIL(json_resp_add_str (resp, "severe_keywords",  row[6] ? row[6] : ""));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "poll_interval",    atoi(row[7])));
+    ADD_OR_FAIL(json_resp_add_str (resp, "control_register", row[8] ? row[8] : "freq_tolerance"));
+    if (row[9])
+        ADD_OR_FAIL(json_resp_add_i32(resp, "severe_raw_value", atoi(row[9])));
+    if (row[10])
+        ADD_OR_FAIL(json_resp_add_i32(resp, "normal_raw_value", atoi(row[10])));
 
     db_result_free(result);
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return api_ok(json);
+
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok(CUTILS_MOVE(json));
 }
 
 static api_response_t handle_weather_config_set(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jen  = cJSON_GetObjectItem(body, "enabled");
-    const cJSON *jlat = cJSON_GetObjectItem(body, "latitude");
-    const cJSON *jlon = cJSON_GetObjectItem(body, "longitude");
-    const cJSON *jzn  = cJSON_GetObjectItem(body, "alert_zones");
-    const cJSON *jat  = cJSON_GetObjectItem(body, "alert_types");
-    const cJSON *jws  = cJSON_GetObjectItem(body, "wind_speed_mph");
-    const cJSON *jsk  = cJSON_GetObjectItem(body, "severe_keywords");
-    const cJSON *jpi  = cJSON_GetObjectItem(body, "poll_interval");
-    const cJSON *jcr  = cJSON_GetObjectItem(body, "control_register");
-    const cJSON *jsrv = cJSON_GetObjectItem(body, "severe_raw_value");
-    const cJSON *jnrv = cJSON_GetObjectItem(body, "normal_raw_value");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16], srv_s[16], nrv_s[16];
-
+    /* Fetch current config so unspecified fields keep their current values
+     * (partial-update semantics). */
     db_result_t *cur = NULL;
-    /* Failure manifests as cur == NULL or nrows == 0; the check below
-     * handles both identically (respond 404 weather-not-configured). */
-    CUTILS_UNUSED(db_execute(ctx->db,
+    int rc = db_execute(ctx->db,
         "SELECT enabled, latitude, longitude, alert_zones, alert_types, "
         "wind_speed_mph, severe_keywords, poll_interval, "
         "control_register, severe_raw_value, normal_raw_value "
-        "FROM weather_config WHERE id = 1", NULL, &cur));
-
-    if (!cur || cur->nrows == 0) {
+        "FROM weather_config WHERE id = 1", NULL, &cur);
+    if (rc != CUTILS_OK || !cur || cur->nrows == 0) {
         db_result_free(cur);
-        cJSON_Delete(body);
         return api_error(404, "weather config not found");
     }
+    char **row = cur->rows[0];
 
-    snprintf(en_s, sizeof(en_s), "%d",
-             jen && cJSON_IsBool(jen) ? cJSON_IsTrue(jen) : atoi(cur->rows[0][0]));
-    snprintf(lat_s, sizeof(lat_s), "%.6f",
-             jlat && cJSON_IsNumber(jlat) ? jlat->valuedouble : atof(cur->rows[0][1]));
-    snprintf(lon_s, sizeof(lon_s), "%.6f",
-             jlon && cJSON_IsNumber(jlon) ? jlon->valuedouble : atof(cur->rows[0][2]));
-    const char *zones = jzn && cJSON_IsString(jzn) ? jzn->valuestring : cur->rows[0][3];
-    const char *atypes = jat && cJSON_IsString(jat) ? jat->valuestring : cur->rows[0][4];
-    snprintf(ws_s, sizeof(ws_s), "%d",
-             jws && cJSON_IsNumber(jws) ? jws->valueint : atoi(cur->rows[0][5]));
-    const char *skw = jsk && cJSON_IsString(jsk) ? jsk->valuestring : cur->rows[0][6];
-    snprintf(pi_s, sizeof(pi_s), "%d",
-             jpi && cJSON_IsNumber(jpi) ? jpi->valueint : atoi(cur->rows[0][7]));
-    const char *creg = jcr && cJSON_IsString(jcr) ? jcr->valuestring : cur->rows[0][8];
-    snprintf(srv_s, sizeof(srv_s), "%d",
-             jsrv && cJSON_IsNumber(jsrv) ? jsrv->valueint :
-             (cur->rows[0][9] ? atoi(cur->rows[0][9]) : 0));
-    snprintf(nrv_s, sizeof(nrv_s), "%d",
-             jnrv && cJSON_IsNumber(jnrv) ? jnrv->valueint :
-             (cur->rows[0][10] ? atoi(cur->rows[0][10]) : 0));
+    /* Seed typed locals from DB; each override attempt is a no-op if the
+     * field is missing or wrong type (the out-param isn't written on
+     * failure), preserving the original "silently ignore bad fields"
+     * partial-update behavior. */
+    bool    enabled        = atoi(row[0]) != 0;
+    double  latitude       = atof(row[1]);
+    double  longitude      = atof(row[2]);
+    int32_t wind_speed_mph = atoi(row[5]);
+    int32_t poll_interval  = atoi(row[7]);
+    int32_t severe_raw     = row[9]  ? atoi(row[9])  : 0;
+    int32_t normal_raw     = row[10] ? atoi(row[10]) : 0;
+
+    CUTILS_AUTOFREE char *zones_req  = NULL;
+    CUTILS_AUTOFREE char *atypes_req = NULL;
+    CUTILS_AUTOFREE char *skw_req    = NULL;
+    CUTILS_AUTOFREE char *creg_req   = NULL;
+
+    /* Wide ranges preserve the original "accept anything" semantics;
+     * tightening validation is a separate concern. */
+    CUTILS_UNUSED(json_req_get_bool   (body, "enabled",          &enabled));
+    CUTILS_UNUSED(json_req_get_f64    (body, "latitude",         &latitude,       -1e308, 1e308));
+    CUTILS_UNUSED(json_req_get_f64    (body, "longitude",        &longitude,      -1e308, 1e308));
+    CUTILS_UNUSED(json_req_get_i32    (body, "wind_speed_mph",   &wind_speed_mph, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "poll_interval",    &poll_interval,  INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "severe_raw_value", &severe_raw,     INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "normal_raw_value", &normal_raw,     INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "alert_zones",      &zones_req));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "alert_types",      &atypes_req));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "severe_keywords",  &skw_req));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "control_register", &creg_req));
+
+    const char *zones  = zones_req  ? zones_req  : (row[3] ? row[3] : "");
+    const char *atypes = atypes_req ? atypes_req : (row[4] ? row[4] : "");
+    const char *skw    = skw_req    ? skw_req    : (row[6] ? row[6] : "");
+    const char *creg   = creg_req   ? creg_req   : (row[8] ? row[8] : "freq_tolerance");
+
+    char en_s[4], lat_s[32], lon_s[32], ws_s[16], pi_s[16], srv_s[16], nrv_s[16];
+    snprintf(en_s,  sizeof(en_s),  "%d",    enabled ? 1 : 0);
+    snprintf(lat_s, sizeof(lat_s), "%.6f",  latitude);
+    snprintf(lon_s, sizeof(lon_s), "%.6f",  longitude);
+    snprintf(ws_s,  sizeof(ws_s),  "%d",    wind_speed_mph);
+    snprintf(pi_s,  sizeof(pi_s),  "%d",    poll_interval);
+    snprintf(srv_s, sizeof(srv_s), "%d",    severe_raw);
+    snprintf(nrv_s, sizeof(nrv_s), "%d",    normal_raw);
 
     const char *params[] = {
         en_s, lat_s, lon_s,
-        zones ? zones : "", atypes ? atypes : "",
-        ws_s, skw ? skw : "", pi_s,
-        creg ? creg : "freq_tolerance", srv_s, nrv_s,
+        zones, atypes,
+        ws_s, skw, pi_s,
+        creg, srv_s, nrv_s,
         NULL
     };
-    int rc = db_execute_non_query(ctx->db,
+    rc = db_execute_non_query(ctx->db,
         "UPDATE weather_config SET enabled=?, latitude=?, longitude=?, "
         "alert_zones=?, alert_types=?, wind_speed_mph=?, "
         "severe_keywords=?, poll_interval=?, "
@@ -126,16 +157,20 @@ static api_response_t handle_weather_config_set(const api_request_t *req, void *
         params, NULL);
 
     db_result_free(cur);
-    cJSON_Delete(body);
 
-    if (rc != 0) return api_error(500, "failed to update weather config");
+    if (rc != CUTILS_OK) return api_error(500, "failed to update weather config");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "updated");
-    cJSON_AddStringToObject(resp, "note", "restart daemon to apply changes");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "updated"));
+    ADD_OR_FAIL(json_resp_add_str(resp, "note",   "restart daemon to apply changes"));
+
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok(CUTILS_MOVE(json));
 }
 
 static api_response_t handle_weather_simulate(const api_request_t *req, void *ud)
@@ -144,26 +179,23 @@ static api_response_t handle_weather_simulate(const api_request_t *req, void *ud
     if (!ctx->weather) return api_error(503, "weather subsystem not running");
     if (!req->body) return api_error(400, "request body required");
 
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    const cJSON *jaction = cJSON_GetObjectItem(body, "action");
-    const char *action = (jaction && cJSON_IsString(jaction)) ? jaction->valuestring : "";
+    CUTILS_AUTOFREE char *action = NULL;
+    CUTILS_UNUSED(json_req_get_str_opt(body, "action", &action));
 
-    if (strcmp(action, "severe") == 0) {
-        const cJSON *jreason = cJSON_GetObjectItem(body, "reason");
-        const char *reason = (jreason && cJSON_IsString(jreason))
-            ? jreason->valuestring : "Manual simulation";
-        weather_simulate_severe(ctx->weather, reason);
-        cJSON_Delete(body);
+    if (action && strcmp(action, "severe") == 0) {
+        CUTILS_AUTOFREE char *reason = NULL;
+        CUTILS_UNUSED(json_req_get_str_opt(body, "reason", &reason));
+        weather_simulate_severe(ctx->weather, reason ? reason : "Manual simulation");
         return api_ok_msg("severe weather simulated");
-    } else if (strcmp(action, "clear") == 0) {
+    } else if (action && strcmp(action, "clear") == 0) {
         weather_simulate_clear(ctx->weather);
-        cJSON_Delete(body);
         return api_ok_msg("simulation cleared");
     }
 
-    cJSON_Delete(body);
     return api_error(400, "action must be 'severe' or 'clear'");
 }
 
@@ -174,6 +206,8 @@ static api_response_t handle_weather_report(const api_request_t *req, void *ud)
     char *json = weather_report_json(ctx->weather);
     return api_ok(json);
 }
+
+#undef ADD_OR_FAIL
 
 /* --- Registration --- */
 
