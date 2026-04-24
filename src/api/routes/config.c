@@ -1,5 +1,15 @@
 #include "api/routes/routes.h"
 #include "config/app_config.h"
+#include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
+
+/* config.c is a mixed file. Request parsing (the UAF-prone side) goes
+ * through cutils/json. Response building stays on cJSON where the
+ * output is either a bare top-level array (frontends consume these
+ * directly) or a complex nested builder (reg_to_json, the out_of_range
+ * error object) — those shapes don't yet have a clean cu_json
+ * equivalent, and they're pure build-side code so no UAF class applies. */
 #include <cJSON.h>
 
 #include <stdio.h>
@@ -168,22 +178,21 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     if (!ctx->ups) return api_error(503, "no UPS connected");
     if (!req->body) return api_error(400, "request body required");
 
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    const cJSON *jname = cJSON_GetObjectItem(body, "name");
-    const cJSON *jval  = cJSON_GetObjectItem(body, "value");
-    if (!jname || !cJSON_IsString(jname) || !jval || !cJSON_IsNumber(jval)) {
-        cJSON_Delete(body);
-        return api_error(400, "missing 'name' (string) and 'value' (number)");
-    }
+    CUTILS_AUTOFREE char *name = NULL;
+    int32_t val32;
+    if (json_req_get_str(body, "name",  &name)  != CUTILS_OK ||
+        json_req_get_i32(body, "value", &val32, 0, 65535) != CUTILS_OK)
+        return api_error(400, "missing 'name' (string) and 'value' (number in [0,65535])");
 
-    const ups_config_reg_t *reg = ups_find_config_reg(ctx->ups, jname->valuestring);
-    if (!reg) { cJSON_Delete(body); return api_error(404, "register not found"); }
-    if (!reg->writable) { cJSON_Delete(body); return api_error(400, "register is read-only"); }
+    const ups_config_reg_t *reg = ups_find_config_reg(ctx->ups, name);
+    if (!reg)           return api_error(404, "register not found");
+    if (!reg->writable) return api_error(400, "register is read-only");
 
-    uint16_t val = (uint16_t)jval->valueint;
-    cJSON_Delete(body);
+    uint16_t val = (uint16_t)val32;
 
     int rc = ups_config_write(ctx->ups, reg, val);
 
@@ -215,7 +224,9 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
     }
 
     uint16_t readback = 0;
-    ups_config_read(ctx->ups, reg, &readback, NULL, 0);
+    /* Best-effort readback for the snapshot insert below; a failure here
+     * just means the "display_value" will reflect 0 in the audit trail. */
+    CUTILS_UNUSED(ups_config_read(ctx->ups, reg, &readback, NULL, 0));
 
     /* Snapshot the new value to ups_config table */
     {
@@ -309,28 +320,24 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jkey = cJSON_GetObjectItem(body, "key");
-    const cJSON *jval = cJSON_GetObjectItem(body, "value");
-    if (!jkey || !cJSON_IsString(jkey) || !jval || !cJSON_IsString(jval)) {
-        cJSON_Delete(body);
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    CUTILS_AUTOFREE char *key   = NULL;
+    CUTILS_AUTOFREE char *value = NULL;
+    if (json_req_get_str(body, "key",   &key)   != CUTILS_OK ||
+        json_req_get_str(body, "value", &value) != CUTILS_OK)
         return api_error(400, "missing 'key' and 'value' strings");
-    }
 
-    int rc = config_set(ctx->config, jkey->valuestring, jval->valuestring);
-    if (rc != 0)
-        rc = config_set_db(ctx->config, jkey->valuestring, jval->valuestring);
-    cJSON_Delete(body);
+    int rc = config_set(ctx->config, key, value);
+    if (rc != CUTILS_OK)
+        rc = config_set_db(ctx->config, key, value);
 
-    if (rc != 0) return api_error(400, "unknown config key");
+    if (rc != CUTILS_OK) return api_error(400, "unknown config key");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "updated");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok(json);
+    return api_ok_msg("updated");
 }
 
 /* --- Registration --- */

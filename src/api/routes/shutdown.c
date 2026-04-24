@@ -1,10 +1,39 @@
 #include "api/routes/routes.h"
-#include <cJSON.h>
 #include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
+
+/* Top-level bare-array responses (handle_shutdown_groups_get and
+ * handle_shutdown_targets_get) stay on cJSON — cu_json roots are
+ * objects only. Those two handlers are build-side code, no UAF
+ * class applies. */
+#include <cJSON.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+/* Propagate a JSON builder failure as 500 + cutils_get_error(). */
+#define ADD_OR_FAIL(expr) \
+    do { \
+        if ((expr) != CUTILS_OK) return api_error(500, cutils_get_error()); \
+    } while (0)
+
+/* Write a config value, returning 500 on failure. */
+#define CFG_SET_OR_FAIL(key, val) \
+    do { \
+        if (config_set_db(ctx->config, (key), (val)) != CUTILS_OK) \
+            return api_error(500, cutils_get_error()); \
+    } while (0)
+
+static api_response_t finalize_ok(cutils_json_resp_t *resp)
+{
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok(CUTILS_MOVE(json));
+}
 
 /* --- Shutdown group CRUD --- */
 
@@ -12,25 +41,25 @@ static api_response_t handle_shutdown_groups_get(const api_request_t *req, void 
 {
     (void)req;
     route_ctx_t *ctx = ud;
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT id, name, execution_order, parallel, max_timeout_sec, post_group_delay "
         "FROM shutdown_groups ORDER BY execution_order",
         NULL, &result);
-    if (rc != 0 || !result) return api_error(500, "failed to query groups");
+    if (rc != CUTILS_OK || !result) return api_error(500, "failed to query groups");
 
+    /* Top-level array — see file-head note. */
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < result->nrows; i++) {
         cJSON *g = cJSON_CreateObject();
-        cJSON_AddNumberToObject(g, "id", atoi(result->rows[i][0]));
-        cJSON_AddStringToObject(g, "name", result->rows[i][1]);
-        cJSON_AddNumberToObject(g, "execution_order", atoi(result->rows[i][2]));
-        cJSON_AddBoolToObject(g, "parallel", atoi(result->rows[i][3]));
-        cJSON_AddNumberToObject(g, "max_timeout_sec", atoi(result->rows[i][4]));
+        cJSON_AddNumberToObject(g, "id",               atoi(result->rows[i][0]));
+        cJSON_AddStringToObject(g, "name",             result->rows[i][1]);
+        cJSON_AddNumberToObject(g, "execution_order",  atoi(result->rows[i][2]));
+        cJSON_AddBoolToObject  (g, "parallel",         atoi(result->rows[i][3]));
+        cJSON_AddNumberToObject(g, "max_timeout_sec",  atoi(result->rows[i][4]));
         cJSON_AddNumberToObject(g, "post_group_delay", atoi(result->rows[i][5]));
         cJSON_AddItemToArray(arr, g);
     }
-    db_result_free(result);
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return api_ok(json);
@@ -40,72 +69,84 @@ static api_response_t handle_shutdown_groups_post(const api_request_t *req, void
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jname  = cJSON_GetObjectItem(body, "name");
-    const cJSON *jorder = cJSON_GetObjectItem(body, "execution_order");
-    const cJSON *jpar   = cJSON_GetObjectItem(body, "parallel");
-    const cJSON *jmtmo  = cJSON_GetObjectItem(body, "max_timeout_sec");
-    const cJSON *jpgd   = cJSON_GetObjectItem(body, "post_group_delay");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    if (!jname || !cJSON_IsString(jname)) {
-        cJSON_Delete(body); return api_error(400, "missing 'name'");
-    }
+    CUTILS_AUTOFREE char *name = NULL;
+    if (json_req_get_str(body, "name", &name) != CUTILS_OK)
+        return api_error(400, "missing 'name'");
 
-    char order_s[16] = "0", par_s[4] = "1", mtmo_s[16] = "0", pgd_s[16] = "0";
-    if (jorder && cJSON_IsNumber(jorder)) snprintf(order_s, sizeof(order_s), "%d", jorder->valueint);
-    if (jpar && cJSON_IsBool(jpar)) snprintf(par_s, sizeof(par_s), "%d", cJSON_IsTrue(jpar));
-    if (jmtmo && cJSON_IsNumber(jmtmo)) snprintf(mtmo_s, sizeof(mtmo_s), "%d", jmtmo->valueint);
-    if (jpgd && cJSON_IsNumber(jpgd)) snprintf(pgd_s, sizeof(pgd_s), "%d", jpgd->valueint);
+    int32_t order = 0, mtmo = 0, pgd = 0;
+    bool par = true;
+    CUTILS_UNUSED(json_req_get_i32 (body, "execution_order",  &order, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_bool(body, "parallel",         &par));
+    CUTILS_UNUSED(json_req_get_i32 (body, "max_timeout_sec",  &mtmo,  INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32 (body, "post_group_delay", &pgd,   INT32_MIN, INT32_MAX));
 
-    const char *params[] = { jname->valuestring, order_s, par_s, mtmo_s, pgd_s, NULL };
+    char order_s[16], par_s[4], mtmo_s[16], pgd_s[16];
+    snprintf(order_s, sizeof(order_s), "%d", order);
+    snprintf(par_s,   sizeof(par_s),   "%d", par ? 1 : 0);
+    snprintf(mtmo_s,  sizeof(mtmo_s),  "%d", mtmo);
+    snprintf(pgd_s,   sizeof(pgd_s),   "%d", pgd);
+
+    const char *params[] = { name, order_s, par_s, mtmo_s, pgd_s, NULL };
     int rc = db_execute_non_query(ctx->db,
         "INSERT INTO shutdown_groups (name, execution_order, parallel, "
         "max_timeout_sec, post_group_delay) VALUES (?, ?, ?, ?, ?)",
         params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to create group");
+    if (rc != CUTILS_OK) return api_error(500, "failed to create group");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "created");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok_status(201, json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "created"));
+
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok_status(201, CUTILS_MOVE(json));
 }
 
 static api_response_t handle_shutdown_groups_put(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jid = cJSON_GetObjectItem(body, "id");
-    if (!jid || !cJSON_IsNumber(jid)) { cJSON_Delete(body); return api_error(400, "missing 'id'"); }
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    const cJSON *jname  = cJSON_GetObjectItem(body, "name");
-    const cJSON *jorder = cJSON_GetObjectItem(body, "execution_order");
-    const cJSON *jpar   = cJSON_GetObjectItem(body, "parallel");
-    const cJSON *jmtmo  = cJSON_GetObjectItem(body, "max_timeout_sec");
-    const cJSON *jpgd   = cJSON_GetObjectItem(body, "post_group_delay");
+    int32_t id;
+    if (json_req_get_i32(body, "id", &id, INT32_MIN, INT32_MAX) != CUTILS_OK)
+        return api_error(400, "missing 'id'");
+
+    CUTILS_AUTOFREE char *name = NULL;
+    if (json_req_get_str(body, "name", &name) != CUTILS_OK)
+        return api_error(400, "missing 'name'");
+
+    int32_t order = 0, mtmo = 0, pgd = 0;
+    bool par = true;
+    CUTILS_UNUSED(json_req_get_i32 (body, "execution_order",  &order, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_bool(body, "parallel",         &par));
+    CUTILS_UNUSED(json_req_get_i32 (body, "max_timeout_sec",  &mtmo,  INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32 (body, "post_group_delay", &pgd,   INT32_MIN, INT32_MAX));
 
     char id_s[16], order_s[16], par_s[4], mtmo_s[16], pgd_s[16];
-    snprintf(id_s, sizeof(id_s), "%d", jid->valueint);
+    snprintf(id_s,    sizeof(id_s),    "%d", id);
+    snprintf(order_s, sizeof(order_s), "%d", order);
+    snprintf(par_s,   sizeof(par_s),   "%d", par ? 1 : 0);
+    snprintf(mtmo_s,  sizeof(mtmo_s),  "%d", mtmo);
+    snprintf(pgd_s,   sizeof(pgd_s),   "%d", pgd);
 
-    if (!jname || !cJSON_IsString(jname)) { cJSON_Delete(body); return api_error(400, "missing 'name'"); }
-    snprintf(order_s, sizeof(order_s), "%d", jorder && cJSON_IsNumber(jorder) ? jorder->valueint : 0);
-    snprintf(par_s, sizeof(par_s), "%d", jpar && cJSON_IsBool(jpar) ? cJSON_IsTrue(jpar) : 1);
-    snprintf(mtmo_s, sizeof(mtmo_s), "%d", jmtmo && cJSON_IsNumber(jmtmo) ? jmtmo->valueint : 0);
-    snprintf(pgd_s, sizeof(pgd_s), "%d", jpgd && cJSON_IsNumber(jpgd) ? jpgd->valueint : 0);
-
-    const char *params[] = { jname->valuestring, order_s, par_s, mtmo_s, pgd_s, id_s, NULL };
+    const char *params[] = { name, order_s, par_s, mtmo_s, pgd_s, id_s, NULL };
     int rc = db_execute_non_query(ctx->db,
         "UPDATE shutdown_groups SET name=?, execution_order=?, parallel=?, "
         "max_timeout_sec=?, post_group_delay=? WHERE id=?",
         params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to update group");
+    if (rc != CUTILS_OK) return api_error(500, "failed to update group");
     return api_ok_msg("updated");
 }
 
@@ -113,20 +154,22 @@ static api_response_t handle_shutdown_groups_delete(const api_request_t *req, vo
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jid = cJSON_GetObjectItem(body, "id");
-    if (!jid || !cJSON_IsNumber(jid)) { cJSON_Delete(body); return api_error(400, "missing 'id'"); }
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    int32_t id;
+    if (json_req_get_i32(body, "id", &id, INT32_MIN, INT32_MAX) != CUTILS_OK)
+        return api_error(400, "missing 'id'");
 
     char id_s[16];
-    snprintf(id_s, sizeof(id_s), "%d", jid->valueint);
+    snprintf(id_s, sizeof(id_s), "%d", id);
 
     const char *params[] = { id_s, NULL };
     int rc = db_execute_non_query(ctx->db,
         "DELETE FROM shutdown_groups WHERE id=?", params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to delete group");
+    if (rc != CUTILS_OK) return api_error(500, "failed to delete group");
     return api_ok_msg("deleted");
 }
 
@@ -136,7 +179,7 @@ static api_response_t handle_shutdown_targets_get(const api_request_t *req, void
 {
     (void)req;
     route_ctx_t *ctx = ud;
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(ctx->db,
         "SELECT t.id, t.name, t.method, t.host, t.username, t.command, "
         "t.timeout_sec, t.order_in_group, g.name AS group_name, "
@@ -145,28 +188,28 @@ static api_response_t handle_shutdown_targets_get(const api_request_t *req, void
         "FROM shutdown_targets t JOIN shutdown_groups g ON t.group_id = g.id "
         "ORDER BY g.execution_order, t.order_in_group",
         NULL, &result);
-    if (rc != 0 || !result) return api_error(500, "failed to query targets");
+    if (rc != CUTILS_OK || !result) return api_error(500, "failed to query targets");
 
+    /* Top-level array — see file-head note. */
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < result->nrows; i++) {
         cJSON *t = cJSON_CreateObject();
-        cJSON_AddNumberToObject(t, "id", atoi(result->rows[i][0]));
-        cJSON_AddStringToObject(t, "name", result->rows[i][1]);
-        cJSON_AddStringToObject(t, "method", result->rows[i][2]);
-        cJSON_AddStringToObject(t, "host", result->rows[i][3] ? result->rows[i][3] : "");
-        cJSON_AddStringToObject(t, "username", result->rows[i][4] ? result->rows[i][4] : "");
-        cJSON_AddStringToObject(t, "command", result->rows[i][5]);
-        cJSON_AddNumberToObject(t, "timeout_sec", atoi(result->rows[i][6]));
-        cJSON_AddNumberToObject(t, "order_in_group", atoi(result->rows[i][7]));
-        cJSON_AddStringToObject(t, "group", result->rows[i][8]);
-        cJSON_AddStringToObject(t, "confirm_method", result->rows[i][9] ? result->rows[i][9] : "ping");
-        cJSON_AddNumberToObject(t, "confirm_port", result->rows[i][10] ? atoi(result->rows[i][10]) : 0);
-        cJSON_AddStringToObject(t, "confirm_command", result->rows[i][11] ? result->rows[i][11] : "");
+        cJSON_AddNumberToObject(t, "id",                 atoi(result->rows[i][0]));
+        cJSON_AddStringToObject(t, "name",               result->rows[i][1]);
+        cJSON_AddStringToObject(t, "method",             result->rows[i][2]);
+        cJSON_AddStringToObject(t, "host",               result->rows[i][3] ? result->rows[i][3] : "");
+        cJSON_AddStringToObject(t, "username",           result->rows[i][4] ? result->rows[i][4] : "");
+        cJSON_AddStringToObject(t, "command",            result->rows[i][5]);
+        cJSON_AddNumberToObject(t, "timeout_sec",        atoi(result->rows[i][6]));
+        cJSON_AddNumberToObject(t, "order_in_group",     atoi(result->rows[i][7]));
+        cJSON_AddStringToObject(t, "group",              result->rows[i][8]);
+        cJSON_AddStringToObject(t, "confirm_method",     result->rows[i][9] ? result->rows[i][9] : "ping");
+        cJSON_AddNumberToObject(t, "confirm_port",       result->rows[i][10] ? atoi(result->rows[i][10]) : 0);
+        cJSON_AddStringToObject(t, "confirm_command",    result->rows[i][11] ? result->rows[i][11] : "");
         cJSON_AddNumberToObject(t, "post_confirm_delay", atoi(result->rows[i][12]));
-        cJSON_AddNumberToObject(t, "group_id", atoi(result->rows[i][13]));
+        cJSON_AddNumberToObject(t, "group_id",           atoi(result->rows[i][13]));
         cJSON_AddItemToArray(arr, t);
     }
-    db_result_free(result);
     char *json = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
     return api_ok(json);
@@ -176,49 +219,55 @@ static api_response_t handle_shutdown_targets_post(const api_request_t *req, voi
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jgid  = cJSON_GetObjectItem(body, "group_id");
-    const cJSON *jname = cJSON_GetObjectItem(body, "name");
-    const cJSON *jmeth = cJSON_GetObjectItem(body, "method");
-    const cJSON *jhost = cJSON_GetObjectItem(body, "host");
-    const cJSON *juser = cJSON_GetObjectItem(body, "username");
-    const cJSON *jcred = cJSON_GetObjectItem(body, "credential");
-    const cJSON *jcmd  = cJSON_GetObjectItem(body, "command");
-    const cJSON *jtmo  = cJSON_GetObjectItem(body, "timeout_sec");
-    const cJSON *jcm   = cJSON_GetObjectItem(body, "confirm_method");
-    const cJSON *jcp   = cJSON_GetObjectItem(body, "confirm_port");
-    const cJSON *jcc   = cJSON_GetObjectItem(body, "confirm_command");
-    const cJSON *jpcd  = cJSON_GetObjectItem(body, "post_confirm_delay");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    if (!jgid || !cJSON_IsNumber(jgid) ||
-        !jname || !cJSON_IsString(jname) ||
-        !jcmd || !cJSON_IsString(jcmd)) {
-        cJSON_Delete(body);
+    int32_t gid;
+    CUTILS_AUTOFREE char *name = NULL;
+    CUTILS_AUTOFREE char *cmd  = NULL;
+    if (json_req_get_i32(body, "group_id", &gid, INT32_MIN, INT32_MAX) != CUTILS_OK ||
+        json_req_get_str(body, "name",    &name) != CUTILS_OK ||
+        json_req_get_str(body, "command", &cmd)  != CUTILS_OK)
         return api_error(400, "missing required fields: group_id, name, command");
-    }
 
-    char gid_s[16], tmo_s[16] = "180", order_s[16] = "0";
-    char cp_s[16] = "", pcd_s[16] = "15";
-    snprintf(gid_s, sizeof(gid_s), "%d", jgid->valueint);
-    if (jtmo && cJSON_IsNumber(jtmo)) snprintf(tmo_s, sizeof(tmo_s), "%d", jtmo->valueint);
-    if (jcp && cJSON_IsNumber(jcp)) snprintf(cp_s, sizeof(cp_s), "%d", jcp->valueint);
-    if (jpcd && cJSON_IsNumber(jpcd)) snprintf(pcd_s, sizeof(pcd_s), "%d", jpcd->valueint);
+    CUTILS_AUTOFREE char *method = NULL;
+    CUTILS_AUTOFREE char *host   = NULL;
+    CUTILS_AUTOFREE char *user   = NULL;
+    CUTILS_AUTOFREE char *cred   = NULL;
+    CUTILS_AUTOFREE char *confm  = NULL;
+    CUTILS_AUTOFREE char *confc  = NULL;
+    int32_t tmo = 180, cp = 0, pcd = 15;
+    CUTILS_UNUSED(json_req_get_str_opt(body, "method",             &method));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "host",               &host));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "username",           &user));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "credential",         &cred));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "confirm_method",     &confm));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "confirm_command",    &confc));
+    CUTILS_UNUSED(json_req_get_i32    (body, "timeout_sec",        &tmo, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "confirm_port",       &cp,  INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "post_confirm_delay", &pcd, INT32_MIN, INT32_MAX));
+
+    char gid_s[16], tmo_s[16], cp_s[16], pcd_s[16];
+    snprintf(gid_s, sizeof(gid_s), "%d", gid);
+    snprintf(tmo_s, sizeof(tmo_s), "%d", tmo);
+    snprintf(cp_s,  sizeof(cp_s),  "%d", cp);
+    snprintf(pcd_s, sizeof(pcd_s), "%d", pcd);
 
     const char *params[] = {
         gid_s,
-        jname->valuestring,
-        jmeth && cJSON_IsString(jmeth) ? jmeth->valuestring : "ssh_password",
-        jhost && cJSON_IsString(jhost) ? jhost->valuestring : "",
-        juser && cJSON_IsString(juser) ? juser->valuestring : "",
-        jcred && cJSON_IsString(jcred) ? jcred->valuestring : "",
-        jcmd->valuestring,
+        name,
+        method ? method : "ssh_password",
+        host   ? host   : "",
+        user   ? user   : "",
+        cred   ? cred   : "",
+        cmd,
         tmo_s,
-        order_s,
-        jcm && cJSON_IsString(jcm) ? jcm->valuestring : "ping",
-        cp_s[0] ? cp_s : "",
-        jcc && cJSON_IsString(jcc) ? jcc->valuestring : "",
+        "0",   /* order_in_group — not accepted via POST */
+        confm ? confm : "ping",
+        cp ? cp_s : "",
+        confc ? confc : "",
         pcd_s,
         NULL
     };
@@ -228,65 +277,76 @@ static api_response_t handle_shutdown_targets_post(const api_request_t *req, voi
         "confirm_method, confirm_port, confirm_command, post_confirm_delay) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to create target");
+    if (rc != CUTILS_OK) return api_error(500, "failed to create target");
 
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "result", "created");
-    char *json = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    return api_ok_status(201, json);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "created"));
+
+    CUTILS_AUTOFREE char *json = NULL;
+    size_t len;
+    if (json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    return api_ok_status(201, CUTILS_MOVE(json));
 }
 
 static api_response_t handle_shutdown_targets_put(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jid   = cJSON_GetObjectItem(body, "id");
-    const cJSON *jgid  = cJSON_GetObjectItem(body, "group_id");
-    const cJSON *jname = cJSON_GetObjectItem(body, "name");
-    const cJSON *jmeth = cJSON_GetObjectItem(body, "method");
-    const cJSON *jhost = cJSON_GetObjectItem(body, "host");
-    const cJSON *juser = cJSON_GetObjectItem(body, "username");
-    const cJSON *jcred = cJSON_GetObjectItem(body, "credential");
-    const cJSON *jcmd  = cJSON_GetObjectItem(body, "command");
-    const cJSON *jtmo  = cJSON_GetObjectItem(body, "timeout_sec");
-    const cJSON *jord  = cJSON_GetObjectItem(body, "order_in_group");
-    const cJSON *jcm   = cJSON_GetObjectItem(body, "confirm_method");
-    const cJSON *jcp   = cJSON_GetObjectItem(body, "confirm_port");
-    const cJSON *jcc   = cJSON_GetObjectItem(body, "confirm_command");
-    const cJSON *jpcd  = cJSON_GetObjectItem(body, "post_confirm_delay");
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    if (!jid || !cJSON_IsNumber(jid) ||
-        !jname || !cJSON_IsString(jname) ||
-        !jcmd || !cJSON_IsString(jcmd)) {
-        cJSON_Delete(body);
+    int32_t id;
+    CUTILS_AUTOFREE char *name = NULL;
+    CUTILS_AUTOFREE char *cmd  = NULL;
+    if (json_req_get_i32(body, "id",      &id, INT32_MIN, INT32_MAX) != CUTILS_OK ||
+        json_req_get_str(body, "name",    &name) != CUTILS_OK ||
+        json_req_get_str(body, "command", &cmd)  != CUTILS_OK)
         return api_error(400, "missing required fields: id, name, command");
-    }
+
+    CUTILS_AUTOFREE char *method = NULL;
+    CUTILS_AUTOFREE char *host   = NULL;
+    CUTILS_AUTOFREE char *user   = NULL;
+    CUTILS_AUTOFREE char *cred   = NULL;
+    CUTILS_AUTOFREE char *confm  = NULL;
+    CUTILS_AUTOFREE char *confc  = NULL;
+    int32_t gid = 0, tmo = 180, ord = 0, cp = 0, pcd = 15;
+    CUTILS_UNUSED(json_req_get_i32    (body, "group_id",           &gid, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "method",             &method));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "host",               &host));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "username",           &user));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "credential",         &cred));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "confirm_method",     &confm));
+    CUTILS_UNUSED(json_req_get_str_opt(body, "confirm_command",    &confc));
+    CUTILS_UNUSED(json_req_get_i32    (body, "timeout_sec",        &tmo, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "order_in_group",     &ord, INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "confirm_port",       &cp,  INT32_MIN, INT32_MAX));
+    CUTILS_UNUSED(json_req_get_i32    (body, "post_confirm_delay", &pcd, INT32_MIN, INT32_MAX));
 
     char id_s[16], gid_s[16], tmo_s[16], ord_s[16], cp_s[16], pcd_s[16];
-    snprintf(id_s, sizeof(id_s), "%d", jid->valueint);
-    snprintf(gid_s, sizeof(gid_s), "%d", jgid && cJSON_IsNumber(jgid) ? jgid->valueint : 0);
-    snprintf(tmo_s, sizeof(tmo_s), "%d", jtmo && cJSON_IsNumber(jtmo) ? jtmo->valueint : 180);
-    snprintf(ord_s, sizeof(ord_s), "%d", jord && cJSON_IsNumber(jord) ? jord->valueint : 0);
-    snprintf(cp_s, sizeof(cp_s), "%d", jcp && cJSON_IsNumber(jcp) ? jcp->valueint : 0);
-    snprintf(pcd_s, sizeof(pcd_s), "%d", jpcd && cJSON_IsNumber(jpcd) ? jpcd->valueint : 15);
+    snprintf(id_s,  sizeof(id_s),  "%d", id);
+    snprintf(gid_s, sizeof(gid_s), "%d", gid);
+    snprintf(tmo_s, sizeof(tmo_s), "%d", tmo);
+    snprintf(ord_s, sizeof(ord_s), "%d", ord);
+    snprintf(cp_s,  sizeof(cp_s),  "%d", cp);
+    snprintf(pcd_s, sizeof(pcd_s), "%d", pcd);
 
     const char *params[] = {
         gid_s,
-        jname->valuestring,
-        jmeth && cJSON_IsString(jmeth) ? jmeth->valuestring : "ssh_password",
-        jhost && cJSON_IsString(jhost) ? jhost->valuestring : "",
-        juser && cJSON_IsString(juser) ? juser->valuestring : "",
-        jcred && cJSON_IsString(jcred) ? jcred->valuestring : "",
-        jcmd->valuestring,
+        name,
+        method ? method : "ssh_password",
+        host   ? host   : "",
+        user   ? user   : "",
+        cred   ? cred   : "",
+        cmd,
         tmo_s, ord_s,
-        jcm && cJSON_IsString(jcm) ? jcm->valuestring : "ping",
+        confm ? confm : "ping",
         cp_s,
-        jcc && cJSON_IsString(jcc) ? jcc->valuestring : "",
+        confc ? confc : "",
         pcd_s,
         id_s,
         NULL
@@ -297,8 +357,7 @@ static api_response_t handle_shutdown_targets_put(const api_request_t *req, void
         "confirm_method=?, confirm_port=?, confirm_command=?, post_confirm_delay=? "
         "WHERE id=?",
         params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to update target");
+    if (rc != CUTILS_OK) return api_error(500, "failed to update target");
     return api_ok_msg("updated");
 }
 
@@ -306,20 +365,22 @@ static api_response_t handle_shutdown_targets_delete(const api_request_t *req, v
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *jid = cJSON_GetObjectItem(body, "id");
-    if (!jid || !cJSON_IsNumber(jid)) { cJSON_Delete(body); return api_error(400, "missing 'id'"); }
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    int32_t id;
+    if (json_req_get_i32(body, "id", &id, INT32_MIN, INT32_MAX) != CUTILS_OK)
+        return api_error(400, "missing 'id'");
 
     char id_s[16];
-    snprintf(id_s, sizeof(id_s), "%d", jid->valueint);
+    snprintf(id_s, sizeof(id_s), "%d", id);
 
     const char *params[] = { id_s, NULL };
     int rc = db_execute_non_query(ctx->db,
         "DELETE FROM shutdown_targets WHERE id=?", params, NULL);
-    cJSON_Delete(body);
-    if (rc != 0) return api_error(500, "failed to delete target");
+    if (rc != CUTILS_OK) return api_error(500, "failed to delete target");
     return api_ok_msg("deleted");
 }
 
@@ -330,49 +391,72 @@ static api_response_t handle_shutdown_settings_get(const api_request_t *req, voi
     (void)req;
     route_ctx_t *ctx = ud;
 
-    cJSON *obj = cJSON_CreateObject();
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
 
-    cJSON *trig = cJSON_CreateObject();
-    const char *tmode = config_get_str(ctx->config, "shutdown.trigger");
-    cJSON_AddStringToObject(trig, "mode", tmode ? tmode : "software");
+    const char *tmode   = config_get_str(ctx->config, "shutdown.trigger");
     const char *tsource = config_get_str(ctx->config, "shutdown.trigger_source");
-    cJSON_AddStringToObject(trig, "source", tsource ? tsource : "runtime");
-    cJSON_AddNumberToObject(trig, "runtime_sec", config_get_int(ctx->config, "shutdown.trigger_runtime_sec", 300));
-    cJSON_AddNumberToObject(trig, "battery_pct", config_get_int(ctx->config, "shutdown.trigger_battery_pct", 0));
-    cJSON_AddBoolToObject(trig, "on_battery", config_get_int(ctx->config, "shutdown.trigger_on_battery", 1));
-    cJSON_AddNumberToObject(trig, "delay_sec", config_get_int(ctx->config, "shutdown.trigger_delay_sec", 30));
-    const char *tfield = config_get_str(ctx->config, "shutdown.trigger_field");
-    cJSON_AddStringToObject(trig, "field", tfield ? tfield : "");
-    const char *tfop = config_get_str(ctx->config, "shutdown.trigger_field_op");
-    cJSON_AddStringToObject(trig, "field_op", tfop ? tfop : "lt");
-    cJSON_AddNumberToObject(trig, "field_value", config_get_int(ctx->config, "shutdown.trigger_field_value", 0));
-    cJSON_AddItemToObject(obj, "trigger", trig);
+    const char *tfield  = config_get_str(ctx->config, "shutdown.trigger_field");
+    const char *tfop    = config_get_str(ctx->config, "shutdown.trigger_field_op");
 
-    cJSON *ups = cJSON_CreateObject();
+    ADD_OR_FAIL(json_resp_add_str (resp, "trigger.mode",        tmode   ? tmode   : "software"));
+    ADD_OR_FAIL(json_resp_add_str (resp, "trigger.source",      tsource ? tsource : "runtime"));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "trigger.runtime_sec",
+        config_get_int(ctx->config, "shutdown.trigger_runtime_sec", 300)));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "trigger.battery_pct",
+        config_get_int(ctx->config, "shutdown.trigger_battery_pct", 0)));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "trigger.on_battery",
+        config_get_int(ctx->config, "shutdown.trigger_on_battery", 1) != 0));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "trigger.delay_sec",
+        config_get_int(ctx->config, "shutdown.trigger_delay_sec", 30)));
+    ADD_OR_FAIL(json_resp_add_str (resp, "trigger.field",       tfield  ? tfield  : ""));
+    ADD_OR_FAIL(json_resp_add_str (resp, "trigger.field_op",    tfop    ? tfop    : "lt"));
+    ADD_OR_FAIL(json_resp_add_i32 (resp, "trigger.field_value",
+        config_get_int(ctx->config, "shutdown.trigger_field_value", 0)));
+
     const char *mode = config_get_str(ctx->config, "shutdown.ups_mode");
-    cJSON_AddStringToObject(ups, "mode", mode ? mode : "command");
-    const char *reg = config_get_str(ctx->config, "shutdown.ups_register");
-    cJSON_AddStringToObject(ups, "register", reg ? reg : "");
-    cJSON_AddNumberToObject(ups, "value", config_get_int(ctx->config, "shutdown.ups_value", 0));
-    cJSON_AddNumberToObject(ups, "delay", config_get_int(ctx->config, "shutdown.ups_delay", 5));
-    cJSON_AddItemToObject(obj, "ups_action", ups);
+    const char *reg  = config_get_str(ctx->config, "shutdown.ups_register");
+    ADD_OR_FAIL(json_resp_add_str(resp, "ups_action.mode",     mode ? mode : "command"));
+    ADD_OR_FAIL(json_resp_add_str(resp, "ups_action.register", reg  ? reg  : ""));
+    ADD_OR_FAIL(json_resp_add_i32(resp, "ups_action.value",
+        config_get_int(ctx->config, "shutdown.ups_value", 0)));
+    ADD_OR_FAIL(json_resp_add_i32(resp, "ups_action.delay",
+        config_get_int(ctx->config, "shutdown.ups_delay", 5)));
 
-    cJSON *ctrl = cJSON_CreateObject();
-    cJSON_AddBoolToObject(ctrl, "enabled", config_get_int(ctx->config, "shutdown.controller_enabled", 1));
-    cJSON_AddItemToObject(obj, "controller", ctrl);
+    ADD_OR_FAIL(json_resp_add_bool(resp, "controller.enabled",
+        config_get_int(ctx->config, "shutdown.controller_enabled", 1) != 0));
 
-    char *json = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
-    return api_ok(json);
+    return finalize_ok(resp);
 }
 
-/* Wrap config_set_db with JSON-body cleanup and API-error propagation.
- * Uses ctx->config and body from the enclosing function scope. */
-#define SET_OR_FAIL(key, val) \
+/* Partial-update field helpers, scoped to handle_shutdown_settings_set.
+ * Each macro: if the JSON field is present (and right type for opt),
+ * write it to the named config key, propagating any write failure as 500. */
+#define SET_STR_IF(json_path, cfg_key) \
     do { \
-        if (config_set_db(ctx->config, (key), (val)) != CUTILS_OK) { \
-            cJSON_Delete(body); \
-            return api_error(500, cutils_get_error()); \
+        CUTILS_AUTOFREE char *_v = NULL; \
+        CUTILS_UNUSED(json_req_get_str_opt(body, json_path, &_v)); \
+        if (_v) CFG_SET_OR_FAIL(cfg_key, _v); \
+    } while (0)
+
+#define SET_I32_IF(json_path, cfg_key) \
+    do { \
+        if (json_req_has(body, json_path)) { \
+            int32_t _v; \
+            if (json_req_get_i32(body, json_path, &_v, INT32_MIN, INT32_MAX) == CUTILS_OK) { \
+                char _s[16]; snprintf(_s, sizeof(_s), "%d", _v); \
+                CFG_SET_OR_FAIL(cfg_key, _s); \
+            } \
+        } \
+    } while (0)
+
+#define SET_BOOL_IF(json_path, cfg_key) \
+    do { \
+        if (json_req_has(body, json_path)) { \
+            bool _v; \
+            if (json_req_get_bool(body, json_path, &_v) == CUTILS_OK) \
+                CFG_SET_OR_FAIL(cfg_key, _v ? "1" : "0"); \
         } \
     } while (0)
 
@@ -380,83 +464,36 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
-    cJSON *body = cJSON_Parse(req->body);
-    if (!body) return api_error(400, "invalid JSON");
 
-    const cJSON *trigger = cJSON_GetObjectItem(body, "trigger");
-    if (trigger) {
-        const cJSON *jm = cJSON_GetObjectItem(trigger, "mode");
-        if (jm && cJSON_IsString(jm))
-            SET_OR_FAIL("shutdown.trigger", jm->valuestring);
-        const cJSON *jsrc = cJSON_GetObjectItem(trigger, "source");
-        if (jsrc && cJSON_IsString(jsrc))
-            SET_OR_FAIL("shutdown.trigger_source", jsrc->valuestring);
-        const cJSON *jrt = cJSON_GetObjectItem(trigger, "runtime_sec");
-        if (jrt && cJSON_IsNumber(jrt)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jrt->valueint);
-            SET_OR_FAIL("shutdown.trigger_runtime_sec", v);
-        }
-        const cJSON *jbp = cJSON_GetObjectItem(trigger, "battery_pct");
-        if (jbp && cJSON_IsNumber(jbp)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jbp->valueint);
-            SET_OR_FAIL("shutdown.trigger_battery_pct", v);
-        }
-        const cJSON *job = cJSON_GetObjectItem(trigger, "on_battery");
-        if (job && cJSON_IsBool(job))
-            SET_OR_FAIL("shutdown.trigger_on_battery",
-                        cJSON_IsTrue(job) ? "1" : "0");
-        const cJSON *jds = cJSON_GetObjectItem(trigger, "delay_sec");
-        if (jds && cJSON_IsNumber(jds)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jds->valueint);
-            SET_OR_FAIL("shutdown.trigger_delay_sec", v);
-        }
-        const cJSON *jf = cJSON_GetObjectItem(trigger, "field");
-        if (jf && cJSON_IsString(jf))
-            SET_OR_FAIL("shutdown.trigger_field", jf->valuestring);
-        const cJSON *jfo = cJSON_GetObjectItem(trigger, "field_op");
-        if (jfo && cJSON_IsString(jfo))
-            SET_OR_FAIL("shutdown.trigger_field_op", jfo->valuestring);
-        const cJSON *jfv = cJSON_GetObjectItem(trigger, "field_value");
-        if (jfv && cJSON_IsNumber(jfv)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jfv->valueint);
-            SET_OR_FAIL("shutdown.trigger_field_value", v);
-        }
-    }
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
 
-    const cJSON *ups_action = cJSON_GetObjectItem(body, "ups_action");
-    if (ups_action) {
-        const cJSON *jmode = cJSON_GetObjectItem(ups_action, "mode");
-        const cJSON *jreg  = cJSON_GetObjectItem(ups_action, "register");
-        const cJSON *jval  = cJSON_GetObjectItem(ups_action, "value");
-        const cJSON *jdly  = cJSON_GetObjectItem(ups_action, "delay");
+    SET_STR_IF ("trigger.mode",        "shutdown.trigger");
+    SET_STR_IF ("trigger.source",      "shutdown.trigger_source");
+    SET_I32_IF ("trigger.runtime_sec", "shutdown.trigger_runtime_sec");
+    SET_I32_IF ("trigger.battery_pct", "shutdown.trigger_battery_pct");
+    SET_BOOL_IF("trigger.on_battery",  "shutdown.trigger_on_battery");
+    SET_I32_IF ("trigger.delay_sec",   "shutdown.trigger_delay_sec");
+    SET_STR_IF ("trigger.field",       "shutdown.trigger_field");
+    SET_STR_IF ("trigger.field_op",    "shutdown.trigger_field_op");
+    SET_I32_IF ("trigger.field_value", "shutdown.trigger_field_value");
 
-        if (jmode && cJSON_IsString(jmode))
-            SET_OR_FAIL("shutdown.ups_mode", jmode->valuestring);
-        if (jreg && cJSON_IsString(jreg))
-            SET_OR_FAIL("shutdown.ups_register", jreg->valuestring);
-        if (jval && cJSON_IsNumber(jval)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jval->valueint);
-            SET_OR_FAIL("shutdown.ups_value", v);
-        }
-        if (jdly && cJSON_IsNumber(jdly)) {
-            char v[16]; snprintf(v, sizeof(v), "%d", jdly->valueint);
-            SET_OR_FAIL("shutdown.ups_delay", v);
-        }
-    }
+    SET_STR_IF ("ups_action.mode",     "shutdown.ups_mode");
+    SET_STR_IF ("ups_action.register", "shutdown.ups_register");
+    SET_I32_IF ("ups_action.value",    "shutdown.ups_value");
+    SET_I32_IF ("ups_action.delay",    "shutdown.ups_delay");
 
-    const cJSON *controller = cJSON_GetObjectItem(body, "controller");
-    if (controller) {
-        const cJSON *jen = cJSON_GetObjectItem(controller, "enabled");
-        if (jen && cJSON_IsBool(jen))
-            SET_OR_FAIL("shutdown.controller_enabled",
-                        cJSON_IsTrue(jen) ? "1" : "0");
-    }
+    SET_BOOL_IF("controller.enabled",  "shutdown.controller_enabled");
 
-    cJSON_Delete(body);
     return api_ok_msg("updated");
 }
 
-#undef SET_OR_FAIL
+#undef SET_STR_IF
+#undef SET_I32_IF
+#undef SET_BOOL_IF
+#undef ADD_OR_FAIL
+#undef CFG_SET_OR_FAIL
 
 /* --- Registration --- */
 

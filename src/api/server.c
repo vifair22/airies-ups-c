@@ -4,7 +4,8 @@
 #endif
 #include <cutils/log.h>
 #include <cutils/error.h>
-#include <cJSON.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
 
 #include <microhttpd.h>
 #include <stdio.h>
@@ -529,14 +530,21 @@ api_response_t api_ok_status(int status, char *json_body)
 
 api_response_t api_error(int status, const char *message)
 {
-    cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "error", message);
-    char *body = cJSON_PrintUnformatted(obj);
-    cJSON_Delete(obj);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    CUTILS_AUTOFREE       char               *body = NULL;
+    size_t len;
+
+    if (json_resp_new(&resp) != CUTILS_OK ||
+        json_resp_add_str(resp, "error", message ? message : "") != CUTILS_OK ||
+        json_resp_finalize(resp, &body, &len) != CUTILS_OK) {
+        /* Fall back to a plain string on allocation failure so we still
+         * return something intelligible to the client. */
+        body = strdup(message ? message : "error");
+    }
 
     return (api_response_t){
         .status = status,
-        .body = body,
+        .body = CUTILS_MOVE(body),
         .content_type = "application/json",
     };
 }
