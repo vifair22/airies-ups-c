@@ -1,6 +1,8 @@
 #include "shutdown/shutdown.h"
+#include <cutils/db.h>
 #include <cutils/log.h>
 #include <cutils/error.h>
+#include <cutils/mem.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -364,7 +366,7 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
 
     /* --- Phase 1: User-defined groups --- */
 
-    db_result_t *groups = NULL;
+    CUTILS_AUTO_DBRES db_result_t *groups = NULL;
     int rc = db_execute(mgr->db,
         "SELECT id, name, parallel, max_timeout_sec, post_group_delay "
         "FROM shutdown_groups ORDER BY execution_order",
@@ -385,7 +387,7 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
                      max_timeout, post_group_delay);
 
             const char *tparams[] = { group_id, NULL };
-            db_result_t *targets = NULL;
+            CUTILS_AUTO_DBRES db_result_t *targets = NULL;
             rc = db_execute(mgr->db,
                 "SELECT name, method, host, username, credential, command, "
                 "timeout_sec, confirm_method, confirm_port, confirm_command, "
@@ -393,10 +395,7 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
                 "FROM shutdown_targets WHERE group_id = ? ORDER BY order_in_group",
                 tparams, &targets);
 
-            if (rc != CUTILS_OK || !targets || targets->nrows == 0) {
-                db_result_free(targets);
-                continue;
-            }
+            if (rc != CUTILS_OK || !targets || targets->nrows == 0) continue;
 
             if (dry_run) {
                 for (int t = 0; t < targets->nrows; t++)
@@ -407,15 +406,12 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
                 execute_group_sequential(mgr, group_name, targets, max_timeout);
             }
 
-            db_result_free(targets);
-
             if (post_group_delay > 0 && !dry_run) {
                 log_info("Group '%s' complete, waiting %ds", group_name, post_group_delay);
                 sleep((unsigned)post_group_delay);
             }
         }
     }
-    db_result_free(groups);
 
     /* --- Phase 2: UPS action --- */
 
@@ -602,16 +598,14 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
 int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name)
 {
     const char *params[] = { target_name, NULL };
-    db_result_t *result = NULL;
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
 
     int rc = db_execute(mgr->db,
         "SELECT method, host, username, credential FROM shutdown_targets WHERE name = ?",
         params, &result);
 
-    if (rc != CUTILS_OK || !result || result->nrows == 0) {
-        db_result_free(result);
+    if (rc != CUTILS_OK || !result || result->nrows == 0)
         return set_error(CUTILS_ERR_NOT_FOUND, "target '%s' not found", target_name);
-    }
 
     const char *method     = result->rows[0][0];
     const char *host       = result->rows[0][1];
@@ -626,6 +620,5 @@ int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name)
     else
         log_error("target '%s': connectivity FAILED", target_name);
 
-    db_result_free(result);
     return rc;
 }
