@@ -1,5 +1,16 @@
 #include "cli/cli.h"
 #include "cli/commands.h"
+#include <cutils/error.h>
+#include <cutils/json.h>
+#include <cutils/mem.h>
+
+/* cli/commands.c uses cJSON for two things where cu_json doesn't help:
+ *   - print_json: needs cJSON_Print for pretty-printing CLI output
+ *     (cu_json_resp_finalize only emits compact form)
+ *   - parsing the /api/commands response, which is a top-level array
+ *     (cu_json parse roots are objects only)
+ * Outgoing request body construction (send_action and the two
+ * body-build sites in cmd_cmd) is ported to cu_json. */
 #include <cJSON.h>
 
 #include <stdio.h>
@@ -108,17 +119,19 @@ static int api_get_print(const char *sock, const char *path)
 static int send_action(const char *sock, const char *action,
                        const char *extra_key, const char *extra_val)
 {
-    cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "action", action);
-    if (extra_key && extra_val)
-        cJSON_AddStringToObject(body, extra_key, extra_val);
-    char *json = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *body_builder = NULL;
+    CUTILS_AUTOFREE       char               *json         = NULL;
+    size_t len;
+
+    if (json_resp_new(&body_builder) != CUTILS_OK) return 1;
+    if (json_resp_add_str(body_builder, "action", action) != CUTILS_OK) return 1;
+    if (extra_key && extra_val &&
+        json_resp_add_str(body_builder, extra_key, extra_val) != CUTILS_OK) return 1;
+    if (json_resp_finalize(body_builder, &json, &len) != CUTILS_OK) return 1;
 
     char *resp = malloc(BUF_SIZE);
-    if (!resp) { free(json); return 1; }
+    if (!resp) return 1;
     int rc = http_request(sock, "POST", "/api/cmd", json, resp, BUF_SIZE);
-    free(json);
     if (rc != 0) { free(resp); return 1; }
     print_json(resp);
     free(resp);
@@ -200,15 +213,16 @@ int cmd_cmd(const char *sock, int argc, char **argv)
     if (strcmp(sub, "shutdown") == 0) {
         cJSON_Delete(cmds);
         if (opt_has(argc, argv, 3, "--dry-run")) {
-            cJSON *body = cJSON_CreateObject();
-            cJSON_AddStringToObject(body, "action", "shutdown_workflow");
-            cJSON_AddBoolToObject(body, "dry_run", 1);
-            char *json = cJSON_PrintUnformatted(body);
-            cJSON_Delete(body);
+            CUTILS_AUTO_JSON_RESP cutils_json_resp_t *body = NULL;
+            CUTILS_AUTOFREE       char               *json = NULL;
+            size_t len;
+            if (json_resp_new(&body) != CUTILS_OK) return 1;
+            if (json_resp_add_str (body, "action",  "shutdown_workflow") != CUTILS_OK) return 1;
+            if (json_resp_add_bool(body, "dry_run", true) != CUTILS_OK) return 1;
+            if (json_resp_finalize(body, &json, &len) != CUTILS_OK) return 1;
             char *r = malloc(BUF_SIZE);
-            if (!r) { free(json); return 1; }
+            if (!r) return 1;
             int rc = http_request(sock, "POST", "/api/cmd", json, r, BUF_SIZE);
-            free(json);
             if (rc != 0) { free(r); return 1; }
             print_json(r);
             free(r);
@@ -237,15 +251,16 @@ int cmd_cmd(const char *sock, int argc, char **argv)
                         fprintf(stderr, "error: %s requires 'on' or 'off'\n", sub);
                         return 1;
                     }
-                    cJSON *body = cJSON_CreateObject();
-                    cJSON_AddStringToObject(body, "action", sub);
-                    cJSON_AddBoolToObject(body, "off", strcmp(dir, "off") == 0);
-                    char *json = cJSON_PrintUnformatted(body);
-                    cJSON_Delete(body);
+                    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *body = NULL;
+                    CUTILS_AUTOFREE       char               *json = NULL;
+                    size_t len;
+                    if (json_resp_new(&body) != CUTILS_OK) return 1;
+                    if (json_resp_add_str (body, "action", sub) != CUTILS_OK) return 1;
+                    if (json_resp_add_bool(body, "off", strcmp(dir, "off") == 0) != CUTILS_OK) return 1;
+                    if (json_resp_finalize(body, &json, &len) != CUTILS_OK) return 1;
                     char *r = malloc(BUF_SIZE);
-                    if (!r) { free(json); return 1; }
+                    if (!r) return 1;
                     int rc = http_request(sock, "POST", "/api/cmd", json, r, BUF_SIZE);
-                    free(json);
                     if (rc != 0) { free(r); return 1; }
                     print_json(r);
                     free(r);
