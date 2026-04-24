@@ -271,6 +271,10 @@ $(eval $(call build_test,test_config_validation,\
   tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS),$(TEST_DIR),))
 
+$(eval $(call build_test,test_ups,\
+  tests/test_ups.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS),$(TEST_DIR),))
+
 $(eval $(call build_test,test_status_snapshot,\
   tests/test_status_snapshot.c src/monitor/status_snapshot.c,\
   $(TEST_FULL_LIBS),$(TEST_DIR),))
@@ -309,6 +313,10 @@ $(eval $(call build_test,test_config_validation,\
   tests/test_config_validation.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
   $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_ups,\
+  tests/test_ups.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
+  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+
 $(eval $(call build_test,test_status_snapshot,\
   tests/test_status_snapshot.c src/monitor/status_snapshot.c,\
   $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
@@ -319,7 +327,7 @@ $(eval $(call build_test,test_config_snapshot,\
 
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_status_snapshot test_config_snapshot
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot
 
 # --- Run targets ---
 
