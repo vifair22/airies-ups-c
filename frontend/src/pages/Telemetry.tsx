@@ -1,6 +1,8 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
+import type uPlot from 'uplot'
 import { useApi } from '../hooks/useApi'
 import { WideModal } from '../components/Modal'
+import { UPlotChart } from '../components/UPlotChart'
 import type { TelemetryPoint, MetricDef } from '../types/telemetry'
 
 const metrics: MetricDef[] = [
@@ -128,7 +130,7 @@ export default function Telemetry() {
         </div>
       )}
 
-      {!loading && (
+      {!loading && points.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {metrics.map((m) => (
             <Chart
@@ -178,54 +180,50 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
   expanded?: boolean
   onClick?: () => void
 }) {
-  const getValue = (p: TelemetryPoint) => {
+  const getValue = useCallback((p: TelemetryPoint) => {
     const v = p[metric.key] as number
     if (metric.key === 'runtime_sec') return v / 60
     return v
-  }
+  }, [metric.key])
 
-  if (points.length === 0) {
-    return (
-      <div className={`rounded-lg bg-panel border border-edge p-4 ${!expanded ? 'cursor-pointer hover:border-edge-strong transition-colors' : ''}`}
-        onClick={!expanded ? onClick : undefined}>
-        <div className="flex items-baseline justify-between mb-2">
-          <h3 className="text-sm text-muted">{metric.label}</h3>
-          <span className="text-xs text-faint">No data</span>
-        </div>
-        <svg viewBox={`0 0 400 80`} className="w-full h-20" preserveAspectRatio="none">
-          <line x1="0" y1="40" x2="400" y2="40" stroke="#374151" strokeWidth="0.5" strokeDasharray="4" />
-        </svg>
-        <div className="flex justify-between mt-2">
-          <span className="text-[10px] text-faint font-mono">{fmtTimeLabel(windowStartMs, windowMs)}</span>
-          <span className="text-[10px] text-faint font-mono">{fmtTimeLabel(windowStartMs + windowMs, windowMs)}</span>
-        </div>
-      </div>
-    )
-  }
+  /* uPlot wants ascending epoch-seconds for the x axis and an aligned y
+   * series of the same length. Caller already normalizes ordering. */
+  const data: uPlot.AlignedData = useMemo(() => {
+    const xs: number[] = new Array(points.length)
+    const ys: number[] = new Array(points.length)
+    for (let i = 0; i < points.length; i++) {
+      xs[i] = tsToMs(points[i].timestamp) / 1000
+      ys[i] = getValue(points[i])
+    }
+    return [xs, ys]
+  }, [points, getValue])
+
+  /* Stable across data-only refreshes so the plot isn't recreated every
+   * poll. Dependencies are visual-only (color + stroke width). */
+  const opts: Omit<uPlot.Options, 'width' | 'height'> = useMemo(() => ({
+    scales: { x: { time: true } },
+    axes:   [{ show: false }, { show: false }],
+    legend: { show: false },
+    series: [
+      {},
+      {
+        stroke: metric.color,
+        width:  expanded ? 1.5 : 1,
+        fill:   `${metric.color}15`,
+        points: { show: false },
+      },
+    ],
+    cursor: { points: { show: true, size: 6 } },
+  }), [metric.color, expanded])
 
   const values = points.map(getValue)
-  const timestamps = points.map(p => tsToMs(p.timestamp))
   const min = Math.min(...values)
   const max = Math.max(...values)
   const current = values[values.length - 1]
   const avg = values.reduce((a, b) => a + b, 0) / values.length
-  const vRange = max - min || 1
-
-  const w = expanded ? 800 : 400
-  const h = expanded ? 200 : 80
-  const pad = 4
-
-  /* Absolute time scale: X position based on timestamp within window */
-  const pathPoints = timestamps.map((ts, i) => {
-    const x = ((ts - windowStartMs) / windowMs) * w
-    const y = h - pad - ((values[i] - min) / vRange) * (h - pad * 2)
-    return `${x},${y}`
-  })
-
-  const areaD = `M ${pathPoints[0].split(',')[0]},${h} L ${pathPoints.join(' L ')} L ${pathPoints[pathPoints.length-1].split(',')[0]},${h} Z`
-  const lineD = `M ${pathPoints.join(' L ')}`
 
   const fmtVal = metric.format || ((v: number) => v.toFixed(1))
+  const chartHeight = expanded ? 200 : 80
 
   return (
     <div
@@ -242,11 +240,7 @@ function Chart({ metric, points, windowStartMs, windowMs, expanded, onClick }: {
         </div>
       </div>
 
-      <svg viewBox={`0 0 ${w} ${h}`} className={expanded ? 'w-full h-52' : 'w-full h-20'}
-        preserveAspectRatio="none">
-        <path d={areaD} fill={metric.color} opacity="0.08" />
-        <path d={lineD} fill="none" stroke={metric.color} strokeWidth={expanded ? '0.8' : '1'} />
-      </svg>
+      <UPlotChart opts={opts} data={data} height={chartHeight} className="w-full" />
 
       <div className="flex justify-between items-center mt-2">
         <span className="text-[10px] text-faint font-mono">
