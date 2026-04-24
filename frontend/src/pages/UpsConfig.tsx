@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
-import type { ConfigReg, ConfigWriteError } from '../types/config'
+import type { ConfigReg, ConfigWriteError, ConfigHistoryEntry } from '../types/config'
 
 export default function UpsConfig() {
   const { data: regs, error, loading, refetch } = useApi<ConfigReg[]>('/api/config/ups')
   const [saving, setSaving] = useState<string | null>(null)
   const [writeResult, setWriteResult] = useState<{ name: string; result: string; detail?: string } | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   if (loading) return (
     <div>
@@ -145,6 +146,10 @@ export default function UpsConfig() {
                       onWrite={handleWrite}
                       feedback={writeResult?.name === reg.name ? writeResult.result : null}
                       feedbackDetail={writeResult?.name === reg.name ? writeResult.detail : undefined}
+                      expanded={expanded === reg.name}
+                      onToggleExpand={() =>
+                        setExpanded(expanded === reg.name ? null : reg.name)
+                      }
                     />
                   ))}
               </>
@@ -156,13 +161,15 @@ export default function UpsConfig() {
   )
 }
 
-function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail }: {
+function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail, expanded, onToggleExpand }: {
   reg: ConfigReg
   displayValue: string
   saving: string | null
   onWrite: (name: string, value: number) => void
   feedback: string | null
   feedbackDetail?: string
+  expanded: boolean
+  onToggleExpand: () => void
 }) {
   const [editVal, setEditVal] = useState<string>('')
   const [editing, setEditing] = useState(false)
@@ -177,10 +184,23 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail }
           ? 'bg-red-900/20 border-t border-edge'
           : saving === reg.name
             ? 'bg-blue-900/10 border-t border-edge'
-            : 'border-t border-edge hover:bg-panel/30'
+            : expanded
+              ? 'bg-panel/30 border-t border-edge'
+              : 'border-t border-edge hover:bg-panel/30 cursor-pointer'
 
   return (
-    <tr className={`transition-colors duration-300 ${rowBg}`}>
+    <>
+    <tr
+      className={`transition-colors duration-300 ${rowBg}`}
+      onClick={(e) => {
+        /* Clicks inside the Action cell (Edit/Save/Cancel/inputs) must not
+         * toggle expansion, otherwise starting an edit collapses history. */
+        if (editing) return
+        const target = e.target as HTMLElement
+        if (target.closest('[data-no-toggle]')) return
+        onToggleExpand()
+      }}
+    >
       <td className="px-4 py-2">
         <p className="text-primary text-sm">{reg.display_name}</p>
         <p className="text-[11px] text-faint font-mono">{reg.name}</p>
@@ -193,7 +213,7 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail }
         )}
       </td>
       <td className="px-4 py-2 text-right text-faint font-mono text-xs">{reg.raw_value}</td>
-      <td className="px-4 py-2 text-right">
+      <td className="px-4 py-2 text-right" data-no-toggle>
         {feedback && (
           <span
             title={feedbackDetail}
@@ -272,5 +292,80 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail }
         )}
       </td>
     </tr>
+    {expanded && (
+      <tr className="border-t border-edge bg-panel/20">
+        <td colSpan={4} className="px-4 py-3">
+          <HistoryPanel registerName={reg.name} />
+        </td>
+      </tr>
+    )}
+    </>
+  )
+}
+
+function HistoryPanel({ registerName }: { registerName: string }) {
+  const [rows, setRows] = useState<ConfigHistoryEntry[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const token = localStorage.getItem('auth_token')
+    fetch(`/api/config/ups/history?name=${encodeURIComponent(registerName)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
+      .then((data: ConfigHistoryEntry[]) => { if (!cancelled) setRows(data) })
+      .catch((e) => { if (!cancelled) setErr(e.message) })
+    return () => { cancelled = true }
+  }, [registerName])
+
+  if (err) return <p className="text-xs text-red-400">history unavailable: {err}</p>
+  if (!rows) return <p className="text-xs text-muted animate-pulse">loading history...</p>
+  if (rows.length === 0)
+    return <p className="text-xs text-muted">no history recorded yet</p>
+
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-widest text-muted mb-2">Change history</p>
+      <table className="w-full text-xs">
+        <thead className="text-faint">
+          <tr>
+            <th className="text-left font-normal py-1">When</th>
+            <th className="text-left font-normal py-1">Value</th>
+            <th className="text-right font-normal py-1">Raw</th>
+            <th className="text-right font-normal py-1">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-edge/50">
+              <td className="py-1 text-muted font-mono">{r.timestamp}</td>
+              <td className="py-1 text-primary">{r.display_value}</td>
+              <td className="py-1 text-right text-faint font-mono">{r.raw_value}</td>
+              <td className="py-1 text-right"><SourceBadge source={r.source} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SourceBadge({ source }: { source: ConfigHistoryEntry['source'] }) {
+  if (source === null) return <span className="text-[10px] text-faint">—</span>
+  const styles: Record<Exclude<ConfigHistoryEntry['source'], null>, string> = {
+    api:      'bg-blue-900/40 text-blue-300',
+    external: 'bg-amber-900/40 text-amber-300',
+    baseline: 'bg-panel text-muted',
+  }
+  const labels: Record<Exclude<ConfigHistoryEntry['source'], null>, string> = {
+    api:      'UI',
+    external: 'LCD / external',
+    baseline: 'baseline',
+  }
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${styles[source]}`}>
+      {labels[source]}
+    </span>
   )
 }

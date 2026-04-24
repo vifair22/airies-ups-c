@@ -121,6 +121,47 @@ static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
     return api_ok(json);
 }
 
+static api_response_t handle_config_ups_history(const api_request_t *req, void *ud)
+{
+    route_ctx_t *ctx = ud;
+    const char *name = api_query_param(req, "name");
+    if (!name || !name[0])
+        return api_error(400, "missing 'name' query parameter");
+
+    /* Validate against the driver's register set — keeps the endpoint honest
+     * (no arbitrary SQL injection via register_name) and gives a clean 404
+     * when a stale frontend asks about a register that no longer exists. */
+    if (ctx->ups && !ups_find_config_reg(ctx->ups, name))
+        return api_error(404, "register not found");
+
+    const char *params[] = { name, NULL };
+    db_result_t *res = NULL;
+    int rc = db_execute(ctx->db,
+        "SELECT timestamp, raw_value, display_value, source FROM ups_config "
+        "WHERE register_name = ? ORDER BY id DESC",
+        params, &res);
+
+    cJSON *arr = cJSON_CreateArray();
+    if (rc == 0 && res) {
+        for (int i = 0; i < res->nrows; i++) {
+            cJSON *row = cJSON_CreateObject();
+            cJSON_AddStringToObject(row, "timestamp",     res->rows[i][0]);
+            cJSON_AddNumberToObject(row, "raw_value",     (double)strtol(res->rows[i][1], NULL, 10));
+            cJSON_AddStringToObject(row, "display_value", res->rows[i][2] ? res->rows[i][2] : "");
+            if (res->rows[i][3])
+                cJSON_AddStringToObject(row, "source",    res->rows[i][3]);
+            else
+                cJSON_AddNullToObject(row, "source");
+            cJSON_AddItemToArray(arr, row);
+        }
+    }
+    db_result_free(res);
+
+    char *json = cJSON_PrintUnformatted(arr);
+    cJSON_Delete(arr);
+    return api_ok(json);
+}
+
 static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
@@ -192,10 +233,11 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
             snprintf(display_s, sizeof(display_s), "%u%s%s",
                      readback,
                      reg->unit ? " " : "", reg->unit ? reg->unit : "");
-        const char *snap_params[] = { reg->name, raw_s, display_s, ts, NULL };
+        const char *snap_params[] = { reg->name, raw_s, display_s, ts, "api", NULL };
         db_execute_non_query(ctx->db,
-            "INSERT INTO ups_config (register_name, raw_value, display_value, timestamp) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO ups_config "
+            "(register_name, raw_value, display_value, timestamp, source) "
+            "VALUES (?, ?, ?, ?, ?)",
             snap_params, NULL);
     }
 
@@ -293,6 +335,9 @@ static api_response_t handle_app_config_set(const api_request_t *req, void *ud)
 
 void api_register_config_routes(api_server_t *srv, route_ctx_t *ctx)
 {
+    /* Registered before the /api/config/ups* wildcard — the router matches
+     * in registration order, so this exact path wins over the prefix. */
+    api_server_route(srv, "/api/config/ups/history", API_GET, handle_config_ups_history, ctx);
     api_server_route(srv, "/api/config/ups*",  API_GET,  handle_config_ups_get, ctx);
     api_server_route(srv, "/api/config/ups",   API_POST, handle_config_ups_set, ctx);
     api_server_route(srv, "/api/config/app",   API_GET,  handle_app_config_get, ctx);

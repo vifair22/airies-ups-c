@@ -1,0 +1,12 @@
+-- Attribution for ups_config history rows.
+--
+-- Values:
+--   'api'       — written via POST /api/config/ups (operator changed it from the UI)
+--   'external'  — daily diff detected a value change the daemon didn't make
+--                 (i.e. someone turned a knob on the LCD / front panel)
+--   'baseline'  — first-ever reading of this register; no prior row to diff against
+--   NULL        — legacy row written before this migration (pre-diff-aware snapshot)
+--
+-- The diff-aware snapshot is what makes 'external' useful: every row after
+-- migration represents an actual change, not a daily dump of unchanged values.
+ALTER TABLE ups_config ADD COLUMN source TEXT;
