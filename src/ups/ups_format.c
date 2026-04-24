@@ -26,6 +26,11 @@ const char *ups_transfer_reason_str(uint16_t reason)
     return "Unknown";
 }
 
+int ups_transfer_reason_known(uint16_t reason)
+{
+    return reason < sizeof(transfer_reasons) / sizeof(transfer_reasons[0]);
+}
+
 /* --- Status string --- */
 
 const char *ups_status_str(uint32_t status, char *buf, size_t len)
