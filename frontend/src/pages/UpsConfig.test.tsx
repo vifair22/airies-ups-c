@@ -166,4 +166,51 @@ describe('UpsConfig', () => {
     })
     expect(screen.getByText('battery')).toBeInTheDocument()
   })
+
+  it('expands a register row to show change history', async () => {
+    /* History-route key comes first so url.includes() matches it before the
+     * more general '/api/config/ups' entry — helpers use insertion order. */
+    mockApiResponses({
+      '/api/config/ups/history': [
+        { timestamp: '2026-04-20 09:00:00', raw_value: 110, display_value: '110 V', source: 'external' },
+        { timestamp: '2026-04-15 12:00:00', raw_value: 103, display_value: '103 V', source: 'api' },
+        { timestamp: '2026-04-01 00:00:00', raw_value: 103, display_value: '103 V', source: 'baseline' },
+      ],
+      '/api/config/ups': mockRegs,
+    })
+    renderWithRouter(<UpsConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('UPS Sensitivity')).toBeInTheDocument()
+    })
+
+    /* Click anywhere on the display portion of the row (not the Action cell) */
+    await userEvent.click(screen.getByText('UPS Sensitivity'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Change history')).toBeInTheDocument()
+    })
+    expect(screen.getByText('2026-04-20 09:00:00')).toBeInTheDocument()
+    expect(screen.getByText('LCD / external')).toBeInTheDocument()
+    expect(screen.getByText('UI')).toBeInTheDocument()
+    expect(screen.getByText('baseline')).toBeInTheDocument()
+  })
+
+  it('starting an edit does not collapse history or toggle expansion', async () => {
+    mockApiResponses({
+      '/api/config/ups/history': [],
+      '/api/config/ups': mockRegs,
+    })
+    renderWithRouter(<UpsConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Edit')).toBeInTheDocument()
+    })
+
+    /* Clicking the Edit button inside the Action cell must not trigger the
+     * row-level expansion handler (marked data-no-toggle). */
+    await userEvent.click(screen.getByText('Edit'))
+    expect(screen.getByText('Save')).toBeInTheDocument()
+    expect(screen.queryByText('Change history')).not.toBeInTheDocument()
+  })
 })

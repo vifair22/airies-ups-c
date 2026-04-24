@@ -40,3 +40,16 @@ export interface ConfigEntry {
   default_value: string
   description: string
 }
+
+/* One historical value of a single register, returned by
+ * GET /api/config/ups/history?name=<register>. Reverse-chronological.
+ *  - 'api'      — written by the operator via the UI
+ *  - 'external' — value changed without going through our API (LCD/front panel)
+ *  - 'baseline' — first-ever reading, no prior value to diff against
+ *  - null       — legacy row written before diff-aware snapshots existed */
+export interface ConfigHistoryEntry {
+  timestamp: string
+  raw_value: number
+  display_value: string
+  source: 'api' | 'external' | 'baseline' | null
+}
