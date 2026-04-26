@@ -80,6 +80,7 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
 
     if (monitor_get_inventory(ctx->monitor, &inv) == 0) {
         CHECK_ADD(json_resp_add_str(resp, "inventory.model",         inv.model));
+        CHECK_ADD(json_resp_add_str(resp, "inventory.sku",           inv.sku));
         CHECK_ADD(json_resp_add_str(resp, "inventory.serial",        inv.serial));
         CHECK_ADD(json_resp_add_str(resp, "inventory.firmware",      inv.firmware));
         CHECK_ADD(json_resp_add_u32(resp, "inventory.nominal_va",    inv.nominal_va));

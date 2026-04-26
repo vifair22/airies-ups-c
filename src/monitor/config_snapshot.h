@@ -16,6 +16,6 @@ typedef enum {
 config_snapshot_decision_t
 monitor_config_snapshot_decide(cutils_db_t *db,
                                const char *register_name,
-                               uint16_t current_raw);
+                               uint32_t current_raw);
 
 #endif

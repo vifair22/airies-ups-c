@@ -214,7 +214,13 @@ static void snapshot_config_registers(monitor_t *mon)
 
     int snapped = 0;
     for (size_t i = 0; i < count; i++) {
-        uint16_t raw = 0;
+        /* Snapshot diff system is for tracking operator-relevant settings
+         * (config category). MEASUREMENT/IDENTITY/DIAGNOSTIC values change
+         * frequently or never and would either flood the ups_config table
+         * or contribute nothing — skip them. */
+        if (regs[i].category != UPS_REG_CATEGORY_CONFIG) continue;
+
+        uint32_t raw = 0;
         if (ups_config_read(mon->ups, &regs[i], &raw, NULL, 0) != 0)
             continue;
 

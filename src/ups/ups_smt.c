@@ -208,6 +208,7 @@ static int smt_read_inventory(void *transport, ups_inventory_t *inv)
 
     smt_str_decode(regs +  0,  8, inv->firmware, sizeof(inv->firmware));
     smt_str_decode(regs + 16, 16, inv->model,    sizeof(inv->model));
+    smt_str_decode(regs + 32, 16, inv->sku,      sizeof(inv->sku));
     smt_str_decode(regs + 48,  8, inv->serial,   sizeof(inv->serial));
 
     inv->nominal_va    = regs[72];
@@ -231,7 +232,7 @@ static int smt_read_thresholds(void *transport, uint16_t *transfer_high, uint16_
 /* --- Config register I/O --- */
 
 static int smt_config_read(void *transport, const ups_config_reg_t *reg,
-                           uint16_t *raw_value, char *str_buf, size_t str_bufsz)
+                           uint32_t *raw_value, char *str_buf, size_t str_bufsz)
 {
     uint16_t regs[32];
     int n = reg->reg_count > 0 ? reg->reg_count : 1;
@@ -244,8 +245,13 @@ static int smt_config_read(void *transport, const ups_config_reg_t *reg,
         smt_str_decode(regs, n, str_buf, str_bufsz);
     }
 
-    if (raw_value)
-        *raw_value = regs[0];
+    if (raw_value) {
+        /* APC convention: 32-bit values span two registers, MSB first. */
+        if (n >= 2 && reg->type != UPS_CFG_STRING)
+            *raw_value = ((uint32_t)regs[0] << 16) | (uint32_t)regs[1];
+        else
+            *raw_value = regs[0];
+    }
 
     return UPS_OK;
 }
@@ -366,6 +372,73 @@ enum {
     CFG_SOG2_LOADSHED_RUNTIME,
     CFG_SOG2_LOADSHED_TIME_ON_BAT,
 
+    /* === Comprehensive register dump descriptors (Phase 3) === */
+
+    /* Status block (regs 0-26) — DIAGNOSTIC */
+    CFG_UPS_STATUS,
+    CFG_TRANSFER_REASON,
+    CFG_MOG_STATUS,
+    CFG_SOG0_STATUS,
+    CFG_SOG1_STATUS,
+    CFG_SOG2_STATUS,
+    CFG_SIGNALING_STATUS,
+    CFG_GENERAL_ERROR,
+    CFG_POWER_SYSTEM_ERROR,
+    CFG_BATTERY_SYSTEM_ERROR,
+    CFG_REPLACE_BATTERY_TEST_STATUS,
+    CFG_RUNTIME_CALIBRATION_STATUS,
+    CFG_BATTERY_LIFETIME_STATUS,
+    CFG_UI_STATUS,
+
+    /* Dynamic block (regs 128-171) — MEASUREMENT */
+    CFG_BATTERY_RUNTIME,
+    CFG_BATTERY_CHARGE_PCT,
+    CFG_BATTERY_VOLTAGE_POS,
+    CFG_BATTERY_VOLTAGE_NEG,
+    CFG_BATTERY_INTERNAL_DATE,
+    CFG_BATTERY_TEMPERATURE,
+    CFG_OUTPUT_LOAD_PCT,
+    CFG_OUTPUT_APPARENT_POWER_PCT,
+    CFG_OUTPUT_CURRENT,
+    CFG_OUTPUT_VOLTAGE,
+    CFG_OUTPUT_FREQUENCY,
+    CFG_OUTPUT_ENERGY,
+    CFG_BYPASS_INPUT_STATUS,
+    CFG_BYPASS_VOLTAGE,
+    CFG_BYPASS_FREQUENCY,
+    CFG_INPUT_STATUS,
+    CFG_INPUT_VOLTAGE,
+    CFG_EFFICIENCY,
+    CFG_MOG_OFF_COUNTDOWN,
+    CFG_MOG_ON_COUNTDOWN,
+    CFG_MOG_STAYOFF_COUNTDOWN,
+    CFG_SOG0_OFF_COUNTDOWN,
+    CFG_SOG0_ON_COUNTDOWN,
+    CFG_SOG0_STAYOFF_COUNTDOWN,
+    CFG_SOG1_OFF_COUNTDOWN,
+    CFG_SOG1_ON_COUNTDOWN,
+    CFG_SOG1_STAYOFF_COUNTDOWN,
+    CFG_SOG2_OFF_COUNTDOWN,
+    CFG_SOG2_ON_COUNTDOWN,
+    CFG_SOG2_STAYOFF_COUNTDOWN,
+
+    /* Inventory block (regs 516-595) — IDENTITY */
+    CFG_FIRMWARE_VERSION,
+    CFG_MODEL_NAME,
+    CFG_SKU,
+    CFG_SERIAL_NUMBER,
+    CFG_BATTERY_SKU,
+    CFG_NOMINAL_APPARENT_POWER,
+    CFG_NOMINAL_REAL_POWER,
+    CFG_SOG_RELAY_CONFIG,
+
+    /* Names block (regs 596-635) — CONFIG, writable */
+    CFG_UPS_NAME,
+    CFG_MOG_NAME,
+    CFG_SOG0_NAME,
+    CFG_SOG1_NAME,
+    CFG_SOG2_NAME,
+
     CFG_COUNT
 };
 
@@ -404,6 +477,206 @@ static const ups_bitfield_opt_t smt_voltage_opts[] = {
     { 32,   "vac230", "230 VAC" },
     { 64,   "vac240", "240 VAC" },
     { 2048, "vac110", "110 VAC" },
+};
+
+/* --- FLAGS / BITFIELD options arrays for the comprehensive register dump.
+ * Bit definitions transcribed from APC_SMT_MODBUS_REFERENCE.md (verified
+ * against APC SMT1500RM2UC, FW UPS 04.1). Strict=0 throughout — these are
+ * read-only diagnostics, not validation targets.
+ *
+ * SMT-specific differences from the SRT bit catalog:
+ *   - ups_status: bits 10/19/20/21 are *declared* in AN-176 but never
+ *     toggled by SMT firmware. Kept here so the bit catalog reflects
+ *     the doc; the active_flags renderer just won't ever emit them.
+ *   - general_error: bits 6, 9-15 are SRT/SURTD-only — omitted here.
+ *   - power_system_error: bit 3 (TransformerDCImbalance), bit 9
+ *     (BypassRelay), bit 12 (DCBusOvervoltage), bit 14 (OverCurrent)
+ *     are SRT-only — omitted here.
+ *   - outlet_status: SMT bit set differs from SRT (no PendingLoadShed
+ *     bit 7, no PendingOnDelay bit 8/9 in the SRT shape; instead has
+ *     MemberGroupProcess1/2 at bits 10/11 and LowRuntime at bit 12).
+ *   - input_status: full bit catalog kept identical to SRT — used by
+ *     both reg 150 and reg 147 even though 147 is sentinel on SMT. */
+
+static const ups_bitfield_opt_t smt_ups_status_opts[] = {
+    { 0x00000002, "online",                "Online" },
+    { 0x00000004, "on_battery",            "On Battery" },
+    { 0x00000008, "output_on_bypass",      "Output on Bypass" },
+    { 0x00000010, "output_off",            "Output Off" },
+    { 0x00000020, "general_fault",         "General Fault" },
+    { 0x00000040, "input_not_acceptable",  "Input Not Acceptable" },
+    { 0x00000080, "self_test_in_progress", "Self Test in Progress" },
+    { 0x00000100, "pending_output_on",     "Pending Output On" },
+    { 0x00000200, "shutdown_pending",      "Shutdown Pending" },
+    { 0x00000400, "commanded_bypass",      "Commanded Bypass" },
+    { 0x00002000, "high_efficiency",       "High Efficiency Mode" },
+    { 0x00004000, "informational_alert",   "Informational Alert" },
+    { 0x00008000, "fault_state",           "Fault State" },
+    { 0x00080000, "mains_bad_state",       "Mains Bad State" },
+    { 0x00100000, "fault_recovery",        "Fault Recovery" },
+    { 0x00200000, "overload",              "Overload" },
+};
+
+static const ups_bitfield_opt_t smt_transfer_reason_opts[] = {
+    { 0,  "system_initialization",       "System Initialization" },
+    { 1,  "high_input_voltage",          "High Input Voltage" },
+    { 2,  "low_input_voltage",           "Low Input Voltage" },
+    { 3,  "distorted_input",             "Distorted Input" },
+    { 4,  "rapid_change_input_voltage",  "Rapid Change of Input Voltage" },
+    { 5,  "high_input_frequency",        "High Input Frequency" },
+    { 6,  "low_input_frequency",         "Low Input Frequency" },
+    { 7,  "freq_or_phase_difference",    "Frequency and/or Phase Difference" },
+    { 8,  "acceptable_input",            "Acceptable Input" },
+    { 9,  "automatic_test",              "Automatic Test" },
+    { 10, "test_ended",                  "Test Ended" },
+    { 11, "local_ui_command",            "Local UI Command" },
+    { 12, "protocol_command",            "Protocol Command" },
+    { 13, "low_battery_voltage",         "Low Battery Voltage" },
+    { 14, "general_error",               "General Error" },
+    { 15, "power_system_error",          "Power System Error" },
+    { 16, "battery_system_error",        "Battery System Error" },
+    { 17, "error_cleared",               "Error Cleared" },
+    { 18, "automatic_restart",           "Automatic Restart" },
+    { 19, "distorted_inverter_output",   "Distorted Inverter Output" },
+    { 20, "inverter_output_acceptable",  "Inverter Output Acceptable" },
+    { 21, "epo_interface",               "EPO Interface" },
+    { 22, "input_phase_delta_oor",       "Input Phase Delta Out of Range" },
+    { 23, "input_neutral_not_connected", "Input Neutral Not Connected" },
+    { 24, "ats_transfer",                "ATS Transfer" },
+    { 25, "configuration_change",        "Configuration Change" },
+    { 26, "alert_asserted",              "Alert Asserted" },
+    { 27, "alert_cleared",               "Alert Cleared" },
+    { 28, "plug_rating_exceeded",        "Plug Rating Exceeded" },
+    { 29, "outlet_group_state_change",   "Outlet Group State Change" },
+    { 30, "failure_bypass_expired",      "Failure Bypass Expired" },
+};
+
+/* SMT outlet status bits per APC_SMT_MODBUS_REFERENCE.md table at line
+ * 140-152 — differs from the SRT layout. */
+static const ups_bitfield_opt_t smt_outlet_status_opts[] = {
+    { 0x00000001, "state_on",                "State: ON" },
+    { 0x00000002, "state_off",               "State: OFF" },
+    { 0x00000004, "processing_reboot",       "Processing Reboot" },
+    { 0x00000008, "processing_shutdown",     "Processing Shutdown" },
+    { 0x00000010, "processing_sleep",        "Processing Sleep" },
+    { 0x00000080, "pending_off_delay",       "Pending Off Delay" },
+    { 0x00000100, "pending_on_ac_presence",  "Pending On AC Presence" },
+    { 0x00000200, "pending_on_min_runtime",  "Pending On Min Runtime" },
+    { 0x00000400, "member_group_process_1",  "Member Group Process 1" },
+    { 0x00000800, "member_group_process_2",  "Member Group Process 2" },
+    { 0x00001000, "low_runtime",             "Low Runtime" },
+};
+
+static const ups_bitfield_opt_t smt_signaling_status_opts[] = {
+    { 0x0001, "power_failure",     "Power Failure" },
+    { 0x0002, "shutdown_imminent", "Shutdown Imminent" },
+};
+
+/* SMT general_error: bits 0-5, 7, 8 only per APC_SMT_MODBUS_REFERENCE.md
+ * line 169-179. Bits 6 and 9-15 are SRT/SURTD-only and omitted here. */
+static const ups_bitfield_opt_t smt_general_error_opts[] = {
+    { 0x0001, "site_wiring",            "Site Wiring" },
+    { 0x0002, "eeprom",                 "EEPROM" },
+    { 0x0004, "ad_converter",           "A/D Converter" },
+    { 0x0008, "logic_power_supply",     "Logic Power Supply" },
+    { 0x0010, "internal_communication", "Internal Communication" },
+    { 0x0020, "ui_button",              "UI Button" },
+    { 0x0080, "epo_active",             "EPO Active" },
+    { 0x0100, "firmware_mismatch",      "Firmware Mismatch" },
+};
+
+/* SMT power_system_error: SRT-only bits omitted (bit 3 TransformerDCImbalance,
+ * bit 9 BypassRelay, bit 12 DCBusOvervoltage, bit 14 OverCurrent). */
+static const ups_bitfield_opt_t smt_power_system_error_opts[] = {
+    { 0x00000001, "output_overload",      "Output Overload" },
+    { 0x00000002, "output_short_circuit", "Output Short Circuit" },
+    { 0x00000004, "output_overvoltage",   "Output Overvoltage" },
+    { 0x00000010, "overtemperature",      "Overtemperature" },
+    { 0x00000020, "backfeed_relay",       "Backfeed Relay" },
+    { 0x00000040, "avr_relay",            "AVR Relay" },
+    { 0x00000080, "pfc_input_relay",      "PFC Input Relay" },
+    { 0x00000100, "output_relay",         "Output Relay" },
+    { 0x00000400, "fan",                  "Fan" },
+    { 0x00000800, "pfc",                  "PFC" },
+    { 0x00002000, "inverter",             "Inverter" },
+};
+
+static const ups_bitfield_opt_t smt_battery_system_error_opts[] = {
+    { 0x0001, "disconnected",       "Disconnected" },
+    { 0x0002, "overvoltage",        "Overvoltage" },
+    { 0x0004, "needs_replacement",  "Needs Replacement" },
+    { 0x0008, "overtemp_critical",  "Overtemperature Critical" },
+    { 0x0010, "charger",            "Charger" },
+    { 0x0020, "temperature_sensor", "Temperature Sensor" },
+    { 0x0080, "overtemp_warning",   "Overtemperature Warning" },
+    { 0x0100, "general_error",      "General Error" },
+    { 0x0200, "communication",      "Communication" },
+};
+
+static const ups_bitfield_opt_t smt_replace_battery_test_status_opts[] = {
+    { 0x0001, "pending",         "Pending" },
+    { 0x0002, "in_progress",     "In Progress" },
+    { 0x0004, "passed",          "Passed" },
+    { 0x0008, "failed",          "Failed" },
+    { 0x0010, "refused",         "Refused" },
+    { 0x0020, "aborted",         "Aborted" },
+    { 0x0040, "source_protocol", "Source: Protocol" },
+    { 0x0080, "source_local_ui", "Source: Local UI" },
+    { 0x0100, "source_internal", "Source: Internal" },
+};
+
+static const ups_bitfield_opt_t smt_runtime_calibration_status_opts[] = {
+    { 0x0001, "pending",                 "Pending" },
+    { 0x0002, "in_progress",             "In Progress" },
+    { 0x0004, "passed",                  "Passed" },
+    { 0x0008, "failed",                  "Failed" },
+    { 0x0010, "refused",                 "Refused" },
+    { 0x0020, "aborted",                 "Aborted" },
+    { 0x0040, "source_protocol",         "Source: Protocol" },
+    { 0x0080, "source_local_ui",         "Source: Local UI" },
+    { 0x1000, "load_change",             "Load Change" },
+    { 0x2000, "ac_input_not_acceptable", "AC Input Not Acceptable" },
+    { 0x4000, "load_too_low",            "Load Too Low" },
+};
+
+static const ups_bitfield_opt_t smt_battery_lifetime_status_opts[] = {
+    { 0x0001, "ok",                    "Lifetime OK" },
+    { 0x0002, "near_end",              "Lifetime Near End" },
+    { 0x0004, "exceeded",              "Lifetime Exceeded" },
+    { 0x0008, "near_end_acknowledged", "Lifetime Near End Acknowledged" },
+    { 0x0010, "exceeded_acknowledged", "Lifetime Exceeded Acknowledged" },
+};
+
+static const ups_bitfield_opt_t smt_ui_status_opts[] = {
+    { 0x0001, "continuous_test_in_progress", "Continuous Test in Progress" },
+    { 0x0002, "audible_alarm_in_progress",   "Audible Alarm in Progress" },
+    { 0x0004, "audible_alarm_muted",         "Audible Alarm Muted" },
+    { 0x0008, "any_button_pressed_recently", "Any Button Pressed Recently" },
+};
+
+/* Input status bits — full catalog. Used by both reg 150 (real input)
+ * and reg 147 (bypass input, sentinel on SMT). */
+static const ups_bitfield_opt_t smt_input_status_opts[] = {
+    { 0x0001, "acceptable",            "Acceptable" },
+    { 0x0002, "pending_acceptable",    "Pending Acceptable" },
+    { 0x0004, "voltage_too_low",       "Voltage Too Low" },
+    { 0x0008, "voltage_too_high",      "Voltage Too High" },
+    { 0x0010, "distorted",             "Distorted" },
+    { 0x0020, "boost",                 "Boost" },
+    { 0x0040, "trim",                  "Trim" },
+    { 0x0080, "frequency_too_low",     "Frequency Too Low" },
+    { 0x0100, "frequency_too_high",    "Frequency Too High" },
+    { 0x0200, "freq_phase_not_locked", "Frequency and Phase Not Locked" },
+    { 0x0400, "phase_delta_oor",       "Phase Delta Out of Range" },
+    { 0x0800, "neutral_not_connected", "Neutral Not Connected" },
+    { 0x8000, "powering_load",         "Powering Load" },
+};
+
+static const ups_bitfield_opt_t smt_sog_relay_config_opts[] = {
+    { 0x0001, "mog_present",  "MOG Present" },
+    { 0x0002, "sog0_present", "SOG0 Present" },
+    { 0x0004, "sog1_present", "SOG1 Present" },
+    { 0x0008, "sog2_present", "SOG2 Present" },
 };
 
 static const ups_config_reg_t smt_config_regs[] = {
@@ -537,6 +810,330 @@ static const ups_config_reg_t smt_config_regs[] = {
     [CFG_SOG2_LOADSHED_TIME_ON_BAT] = {
         "sog2_loadshed_time_on_bat", "SOG2 Load Shed Time on Battery", "s", "load_shed",
         1070, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 32767 } },
+
+    /* === Comprehensive register dump descriptors (Phase 3) ===
+     * Added 2026-04-25 to surface every documented Modbus register on
+     * /api/about. Coverage is per APC_SMT_MODBUS_REFERENCE.md. Existing
+     * entries above (transfer_*, bat_test_interval, sensitivity, outlet
+     * timings, load_shed*, output_voltage_setting, dates) cover the
+     * operator-tunable settings; the entries below cover the read-only
+     * diagnostic / measurement / identity surface plus the writable
+     * Names block.
+     *
+     * SMT-specific sentinels (per APC_SMT_MODBUS_REFERENCE.md):
+     *   - reg 132 (Battery.Negative.VoltageDC) — 0xFFFF
+     *   - reg 147 (Bypass.InputStatus_BF) — 0x0000
+     *   - reg 148/149 (Bypass voltage/freq) — 0xFFFF
+     *   - reg 151 (Input.VoltageAC) — 0xFFFF when unmeasurable
+     *   - reg 154 (Efficiency_EN) — 0xFFFF as N/A
+     *   - regs 155-170 (outlet countdowns) — 0xFFFF (int16) /
+     *     0xFFFFFFFF (int32) means "no countdown active"
+     *
+     * SRT-only registers omitted: reg 580-587 (External Battery SKU),
+     * reg 593 (AcceptableFrequencySetting_BF). */
+
+    /* Status block (registers 0-26) — DIAGNOSTIC */
+    [CFG_UPS_STATUS] = {
+        "ups_status", "UPS Status", NULL, "status",
+        0, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_ups_status_opts,
+                           sizeof(smt_ups_status_opts)/sizeof(smt_ups_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_TRANSFER_REASON] = {
+        "transfer_reason", "Last Transfer Reason", NULL, "status",
+        2, 1, UPS_CFG_BITFIELD, 1, 0,
+        .meta.bitfield = { smt_transfer_reason_opts,
+                           sizeof(smt_transfer_reason_opts)/sizeof(smt_transfer_reason_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_MOG_STATUS] = {
+        "mog_status", "MOG Status", NULL, "status",
+        3, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_outlet_status_opts,
+                           sizeof(smt_outlet_status_opts)/sizeof(smt_outlet_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_SOG0_STATUS] = {
+        "sog0_status", "SOG0 Status", NULL, "status",
+        6, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_outlet_status_opts,
+                           sizeof(smt_outlet_status_opts)/sizeof(smt_outlet_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_SOG1_STATUS] = {
+        "sog1_status", "SOG1 Status", NULL, "status",
+        9, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_outlet_status_opts,
+                           sizeof(smt_outlet_status_opts)/sizeof(smt_outlet_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_SOG2_STATUS] = {
+        "sog2_status", "SOG2 Status", NULL, "status",
+        12, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_outlet_status_opts,
+                           sizeof(smt_outlet_status_opts)/sizeof(smt_outlet_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_SIGNALING_STATUS] = {
+        "signaling_status", "Simple Signaling Status", NULL, "status",
+        18, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_signaling_status_opts,
+                           sizeof(smt_signaling_status_opts)/sizeof(smt_signaling_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_GENERAL_ERROR] = {
+        "general_error", "General Error", NULL, "errors",
+        19, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_general_error_opts,
+                           sizeof(smt_general_error_opts)/sizeof(smt_general_error_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_POWER_SYSTEM_ERROR] = {
+        "power_system_error", "Power System Error", NULL, "errors",
+        20, 2, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_power_system_error_opts,
+                           sizeof(smt_power_system_error_opts)/sizeof(smt_power_system_error_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_BATTERY_SYSTEM_ERROR] = {
+        "battery_system_error", "Battery System Error", NULL, "errors",
+        22, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_battery_system_error_opts,
+                           sizeof(smt_battery_system_error_opts)/sizeof(smt_battery_system_error_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_REPLACE_BATTERY_TEST_STATUS] = {
+        "replace_battery_test_status", "Replace Battery Test Status", NULL, "status",
+        23, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_replace_battery_test_status_opts,
+                           sizeof(smt_replace_battery_test_status_opts)/sizeof(smt_replace_battery_test_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_RUNTIME_CALIBRATION_STATUS] = {
+        "runtime_calibration_status", "Runtime Calibration Status", NULL, "status",
+        24, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_runtime_calibration_status_opts,
+                           sizeof(smt_runtime_calibration_status_opts)/sizeof(smt_runtime_calibration_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_BATTERY_LIFETIME_STATUS] = {
+        "battery_lifetime_status", "Battery Lifetime Status", NULL, "status",
+        25, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_battery_lifetime_status_opts,
+                           sizeof(smt_battery_lifetime_status_opts)/sizeof(smt_battery_lifetime_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    [CFG_UI_STATUS] = {
+        "ui_status", "UI Status", NULL, "status",
+        26, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_ui_status_opts,
+                           sizeof(smt_ui_status_opts)/sizeof(smt_ui_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+
+    /* Dynamic block (registers 128-171) — MEASUREMENT */
+    [CFG_BATTERY_RUNTIME] = {
+        "battery_runtime", "Battery Runtime", "s", "battery",
+        128, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_BATTERY_CHARGE_PCT] = {
+        "battery_charge_pct", "Battery Charge", "%", "battery",
+        130, 1, UPS_CFG_SCALAR, 512, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_BATTERY_VOLTAGE_POS] = {
+        "battery_voltage_pos", "Battery Positive Voltage", "V", "battery",
+        131, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_BATTERY_VOLTAGE_NEG] = {
+        "battery_voltage_neg", "Battery Negative Voltage", "V", "battery",
+        132, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_BATTERY_INTERNAL_DATE] = {
+        "battery_internal_date", "Battery Internal Date", "days since 2000-01-01", "battery",
+        133, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_BATTERY_TEMPERATURE] = {
+        "battery_temperature", "Battery Temperature", "\xC2\xB0""C", "battery",
+        135, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_LOAD_PCT] = {
+        "output_load_pct", "Output Load", "%", "output",
+        136, 1, UPS_CFG_SCALAR, 256, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_APPARENT_POWER_PCT] = {
+        "output_apparent_power_pct", "Output Apparent Power", "%", "output",
+        138, 1, UPS_CFG_SCALAR, 256, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_CURRENT] = {
+        "output_current", "Output Current", "A", "output",
+        140, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_VOLTAGE] = {
+        "output_voltage", "Output Voltage", "V", "output",
+        142, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_FREQUENCY] = {
+        "output_frequency", "Output Frequency", "Hz", "output",
+        144, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_OUTPUT_ENERGY] = {
+        "output_energy", "Output Energy", "Wh", "output",
+        145, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_BYPASS_INPUT_STATUS] = {
+        "bypass_input_status", "Bypass Input Status", NULL, "bypass",
+        147, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_input_status_opts,
+                           sizeof(smt_input_status_opts)/sizeof(smt_input_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0x0000 },
+    [CFG_BYPASS_VOLTAGE] = {
+        "bypass_voltage", "Bypass Voltage", "V", "bypass",
+        148, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_BYPASS_FREQUENCY] = {
+        "bypass_frequency", "Bypass Frequency", "Hz", "bypass",
+        149, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_INPUT_STATUS] = {
+        "input_status", "Input Status", NULL, "input",
+        150, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_input_status_opts,
+                           sizeof(smt_input_status_opts)/sizeof(smt_input_status_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT },
+    [CFG_INPUT_VOLTAGE] = {
+        "input_voltage", "Input Voltage", "V", "input",
+        151, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_EFFICIENCY] = {
+        "efficiency", "Efficiency", "%", "ups",
+        154, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_MOG_OFF_COUNTDOWN] = {
+        "mog_off_countdown", "MOG Turn Off Countdown", "s", "outlet_countdowns",
+        155, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_MOG_ON_COUNTDOWN] = {
+        "mog_on_countdown", "MOG Turn On Countdown", "s", "outlet_countdowns",
+        156, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_MOG_STAYOFF_COUNTDOWN] = {
+        "mog_stayoff_countdown", "MOG Stay Off Countdown", "s", "outlet_countdowns",
+        157, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFFFFFF },
+    [CFG_SOG0_OFF_COUNTDOWN] = {
+        "sog0_off_countdown", "SOG0 Turn Off Countdown", "s", "outlet_countdowns",
+        159, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG0_ON_COUNTDOWN] = {
+        "sog0_on_countdown", "SOG0 Turn On Countdown", "s", "outlet_countdowns",
+        160, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG0_STAYOFF_COUNTDOWN] = {
+        "sog0_stayoff_countdown", "SOG0 Stay Off Countdown", "s", "outlet_countdowns",
+        161, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFFFFFF },
+    [CFG_SOG1_OFF_COUNTDOWN] = {
+        "sog1_off_countdown", "SOG1 Turn Off Countdown", "s", "outlet_countdowns",
+        163, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG1_ON_COUNTDOWN] = {
+        "sog1_on_countdown", "SOG1 Turn On Countdown", "s", "outlet_countdowns",
+        164, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG1_STAYOFF_COUNTDOWN] = {
+        "sog1_stayoff_countdown", "SOG1 Stay Off Countdown", "s", "outlet_countdowns",
+        165, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFFFFFF },
+    [CFG_SOG2_OFF_COUNTDOWN] = {
+        "sog2_off_countdown", "SOG2 Turn Off Countdown", "s", "outlet_countdowns",
+        167, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG2_ON_COUNTDOWN] = {
+        "sog2_on_countdown", "SOG2 Turn On Countdown", "s", "outlet_countdowns",
+        168, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    [CFG_SOG2_STAYOFF_COUNTDOWN] = {
+        "sog2_stayoff_countdown", "SOG2 Stay Off Countdown", "s", "outlet_countdowns",
+        169, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_MEASUREMENT,
+        .has_sentinel = 1, .sentinel_value = 0xFFFFFFFF },
+
+    /* Inventory block (registers 516-595) — IDENTITY.
+     * No external_battery_sku descriptor: regs 580-587 are SRT-only.
+     * No freq_tolerance descriptor: reg 593 reads 0x0000 on SMT.
+     * manufacture_date (reg 591) is in the operator config block above. */
+    [CFG_FIRMWARE_VERSION] = {
+        "firmware_version", "Firmware Version", NULL, "identity",
+        516, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_MODEL_NAME] = {
+        "model_name", "Model Name", NULL, "identity",
+        532, 16, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 32 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_SKU] = {
+        "sku", "SKU", NULL, "identity",
+        548, 16, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 32 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_SERIAL_NUMBER] = {
+        "serial_number", "Serial Number", NULL, "identity",
+        564, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_BATTERY_SKU] = {
+        "battery_sku", "Battery SKU", NULL, "identity",
+        572, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_NOMINAL_APPARENT_POWER] = {
+        "nominal_apparent_power", "Nominal Apparent Power", "VA", "identity",
+        588, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_NOMINAL_REAL_POWER] = {
+        "nominal_real_power", "Nominal Real Power", "W", "identity",
+        589, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+    [CFG_SOG_RELAY_CONFIG] = {
+        "sog_relay_config", "Outlet Group Relay Configuration", NULL, "identity",
+        590, 1, UPS_CFG_FLAGS, 1, 0,
+        .meta.bitfield = { smt_sog_relay_config_opts,
+                           sizeof(smt_sog_relay_config_opts)/sizeof(smt_sog_relay_config_opts[0]),
+                           0 },
+        .category = UPS_REG_CATEGORY_IDENTITY },
+
+    /* Names block (registers 596-635) — CONFIG, writable */
+    [CFG_UPS_NAME] = {
+        "ups_name", "UPS Name", NULL, "names",
+        596, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    [CFG_MOG_NAME] = {
+        "mog_name", "MOG Name", NULL, "names",
+        604, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    [CFG_SOG0_NAME] = {
+        "sog0_name", "SOG0 Name", NULL, "names",
+        612, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    [CFG_SOG1_NAME] = {
+        "sog1_name", "SOG1 Name", NULL, "names",
+        620, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    [CFG_SOG2_NAME] = {
+        "sog2_name", "SOG2 Name", NULL, "names",
+        628, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
 };
 
 _Static_assert(sizeof(smt_config_regs) / sizeof(smt_config_regs[0]) == CFG_COUNT,
@@ -602,6 +1199,77 @@ static size_t smt_resolve_config_regs(void *transport,
     KEEP_IF(CFG_SOG2_LOADSHED_CONFIG,        has_sog2);
     KEEP_IF(CFG_SOG2_LOADSHED_RUNTIME,       has_sog2);
     KEEP_IF(CFG_SOG2_LOADSHED_TIME_ON_BAT,   has_sog2);
+
+    /* === Comprehensive register dump descriptors (Phase 3) ===
+     * Status / dynamic / inventory / names — same SOG-presence narrowing
+     * applies to anything tied to a specific outlet group. Always-present
+     * descriptors (status block bitfields, identity, MOG-only, input,
+     * battery, output) are kept unconditionally. */
+
+    /* Status block — always present except SOG-specific status registers */
+    KEEP(CFG_UPS_STATUS);
+    KEEP(CFG_TRANSFER_REASON);
+    KEEP(CFG_MOG_STATUS);
+    KEEP_IF(CFG_SOG0_STATUS,                 has_sog0);
+    KEEP_IF(CFG_SOG1_STATUS,                 has_sog1);
+    KEEP_IF(CFG_SOG2_STATUS,                 has_sog2);
+    KEEP(CFG_SIGNALING_STATUS);
+    KEEP(CFG_GENERAL_ERROR);
+    KEEP(CFG_POWER_SYSTEM_ERROR);
+    KEEP(CFG_BATTERY_SYSTEM_ERROR);
+    KEEP(CFG_REPLACE_BATTERY_TEST_STATUS);
+    KEEP(CFG_RUNTIME_CALIBRATION_STATUS);
+    KEEP(CFG_BATTERY_LIFETIME_STATUS);
+    KEEP(CFG_UI_STATUS);
+
+    /* Dynamic block — always present except SOG-specific countdowns */
+    KEEP(CFG_BATTERY_RUNTIME);
+    KEEP(CFG_BATTERY_CHARGE_PCT);
+    KEEP(CFG_BATTERY_VOLTAGE_POS);
+    KEEP(CFG_BATTERY_VOLTAGE_NEG);
+    KEEP(CFG_BATTERY_INTERNAL_DATE);
+    KEEP(CFG_BATTERY_TEMPERATURE);
+    KEEP(CFG_OUTPUT_LOAD_PCT);
+    KEEP(CFG_OUTPUT_APPARENT_POWER_PCT);
+    KEEP(CFG_OUTPUT_CURRENT);
+    KEEP(CFG_OUTPUT_VOLTAGE);
+    KEEP(CFG_OUTPUT_FREQUENCY);
+    KEEP(CFG_OUTPUT_ENERGY);
+    KEEP(CFG_BYPASS_INPUT_STATUS);
+    KEEP(CFG_BYPASS_VOLTAGE);
+    KEEP(CFG_BYPASS_FREQUENCY);
+    KEEP(CFG_INPUT_STATUS);
+    KEEP(CFG_INPUT_VOLTAGE);
+    KEEP(CFG_EFFICIENCY);
+    KEEP(CFG_MOG_OFF_COUNTDOWN);
+    KEEP(CFG_MOG_ON_COUNTDOWN);
+    KEEP(CFG_MOG_STAYOFF_COUNTDOWN);
+    KEEP_IF(CFG_SOG0_OFF_COUNTDOWN,          has_sog0);
+    KEEP_IF(CFG_SOG0_ON_COUNTDOWN,           has_sog0);
+    KEEP_IF(CFG_SOG0_STAYOFF_COUNTDOWN,      has_sog0);
+    KEEP_IF(CFG_SOG1_OFF_COUNTDOWN,          has_sog1);
+    KEEP_IF(CFG_SOG1_ON_COUNTDOWN,           has_sog1);
+    KEEP_IF(CFG_SOG1_STAYOFF_COUNTDOWN,      has_sog1);
+    KEEP_IF(CFG_SOG2_OFF_COUNTDOWN,          has_sog2);
+    KEEP_IF(CFG_SOG2_ON_COUNTDOWN,           has_sog2);
+    KEEP_IF(CFG_SOG2_STAYOFF_COUNTDOWN,      has_sog2);
+
+    /* Inventory block — always present */
+    KEEP(CFG_FIRMWARE_VERSION);
+    KEEP(CFG_MODEL_NAME);
+    KEEP(CFG_SKU);
+    KEEP(CFG_SERIAL_NUMBER);
+    KEEP(CFG_BATTERY_SKU);
+    KEEP(CFG_NOMINAL_APPARENT_POWER);
+    KEEP(CFG_NOMINAL_REAL_POWER);
+    KEEP(CFG_SOG_RELAY_CONFIG);
+
+    /* Names block — UPS and MOG always present, SOG names gated */
+    KEEP(CFG_UPS_NAME);
+    KEEP(CFG_MOG_NAME);
+    KEEP_IF(CFG_SOG0_NAME,                   has_sog0);
+    KEEP_IF(CFG_SOG1_NAME,                   has_sog1);
+    KEEP_IF(CFG_SOG2_NAME,                   has_sog2);
 
     #undef KEEP
     #undef KEEP_IF

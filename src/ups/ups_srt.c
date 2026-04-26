@@ -33,6 +33,32 @@
 
 static modbus_t *mb(void *transport) { return (modbus_t *)transport; }
 
+/* Decode an APC string register block: 2 chars per register, big-endian
+ * within each register. Strings are not NUL-terminated and may pad with
+ * 0x20 (per AN-176 §1.3.3) or 0x00 (observed in practice). Strip leading
+ * NULs and trailing space/NUL. Mirrors smt_str_decode in ups_smt.c. */
+static void srt_str_decode(const uint16_t *regs, int n, char *out, size_t outsz)
+{
+    size_t max = outsz - 1;
+    if (max > (size_t)n * 2) max = (size_t)n * 2;
+    size_t k = 0;
+    for (int i = 0; i < n && k < max; i++) {
+        char hi = (char)((regs[i] >> 8) & 0xFF);
+        char lo = (char)(regs[i] & 0xFF);
+        /* skip leading NULs only (some APC firmwares zero-pad the front
+         * of a string field when the value is shorter than the slot) */
+        if (k == 0) {
+            if (hi) out[k++] = hi;
+            if (lo && k < max) out[k++] = lo;
+        } else {
+            out[k++] = hi;
+            if (k < max) out[k++] = lo;
+        }
+    }
+    out[k] = '\0';
+    while (k > 0 && (out[k-1] == ' ' || out[k-1] == '\0')) out[--k] = '\0';
+}
+
 /* --- Connection lifecycle --- */
 
 static void *srt_connect(const ups_conn_params_t *params)
@@ -148,18 +174,16 @@ static int srt_read_inventory(void *transport, ups_inventory_t *inv)
 
     memset(inv, 0, sizeof(*inv));
 
-    for (int i = 0; i < 8; i++) {
-        inv->firmware[i * 2]     = (char)((regs[i] >> 8) & 0xFF);
-        inv->firmware[i * 2 + 1] = (char)(regs[i] & 0xFF);
-    }
-    for (int i = 0; i < 16; i++) {
-        inv->model[i * 2]     = (char)((regs[16 + i] >> 8) & 0xFF);
-        inv->model[i * 2 + 1] = (char)(regs[16 + i] & 0xFF);
-    }
-    for (int i = 0; i < 8; i++) {
-        inv->serial[i * 2]     = (char)((regs[48 + i] >> 8) & 0xFF);
-        inv->serial[i * 2 + 1] = (char)(regs[48 + i] & 0xFF);
-    }
+    /* Block layout (offsets from base 516, per APC_SRT_MODBUS_REFERENCE.md):
+     *   regs[ 0.. 7] firmware version (8 regs, 16 chars)
+     *   regs[16..31] model name       (16 regs, 32 chars)
+     *   regs[32..47] SKU              (16 regs, 32 chars)
+     *   regs[48..55] serial number    (8 regs, 16 chars)
+     *   regs[72]    nominal VA, [73] nominal W, [74] SOG relay config */
+    srt_str_decode(regs +  0,  8, inv->firmware, sizeof(inv->firmware));
+    srt_str_decode(regs + 16, 16, inv->model,    sizeof(inv->model));
+    srt_str_decode(regs + 32, 16, inv->sku,      sizeof(inv->sku));
+    srt_str_decode(regs + 48,  8, inv->serial,   sizeof(inv->serial));
 
     inv->nominal_va     = regs[72];
     inv->nominal_watts  = regs[73];
@@ -181,7 +205,7 @@ static int srt_read_thresholds(void *transport, uint16_t *transfer_high, uint16_
 /* --- Config register I/O --- */
 
 static int srt_config_read(void *transport, const ups_config_reg_t *reg,
-                           uint16_t *raw_value, char *str_buf, size_t str_bufsz)
+                           uint32_t *raw_value, char *str_buf, size_t str_bufsz)
 {
     uint16_t regs[32];
     int n = reg->reg_count > 0 ? reg->reg_count : 1;
@@ -191,17 +215,16 @@ static int srt_config_read(void *transport, const ups_config_reg_t *reg,
         return UPS_ERR_IO;
 
     if (reg->type == UPS_CFG_STRING && str_buf) {
-        size_t max = str_bufsz - 1;
-        if (max > (size_t)n * 2) max = (size_t)n * 2;
-        for (size_t i = 0; i < max / 2 && i < (size_t)n; i++) {
-            str_buf[i * 2]     = (char)((regs[i] >> 8) & 0xFF);
-            str_buf[i * 2 + 1] = (char)(regs[i] & 0xFF);
-        }
-        str_buf[max] = '\0';
+        srt_str_decode(regs, n, str_buf, str_bufsz);
     }
 
-    if (raw_value)
-        *raw_value = regs[0];
+    if (raw_value) {
+        /* APC convention: 32-bit values span two registers, MSB first. */
+        if (n >= 2 && reg->type != UPS_CFG_STRING)
+            *raw_value = ((uint32_t)regs[0] << 16) | (uint32_t)regs[1];
+        else
+            *raw_value = regs[0];
+    }
 
     return UPS_OK;
 }
@@ -343,6 +366,193 @@ static const ups_bitfield_opt_t srt_freq_tol_opts[] = {
     { 64, "hz60_3_0", "60 Hz +/- 3.0 Hz" },
 };
 
+/* --- FLAGS / BITFIELD options arrays for the comprehensive register dump.
+ * Bit definitions transcribed from APC_SRT_MODBUS_REFERENCE.md (verified
+ * against APC SRT1000XLA, FW UPS 16.5). Strict=0 throughout — these are
+ * read-only diagnostics, not validation targets. */
+
+static const ups_bitfield_opt_t srt_ups_status_opts[] = {
+    { 0x00000002, "online",                "Online" },
+    { 0x00000004, "on_battery",            "On Battery" },
+    { 0x00000008, "output_on_bypass",      "Output on Bypass" },
+    { 0x00000010, "output_off",            "Output Off" },
+    { 0x00000020, "general_fault",         "General Fault" },
+    { 0x00000040, "input_not_acceptable",  "Input Not Acceptable" },
+    { 0x00000080, "self_test_in_progress", "Self Test in Progress" },
+    { 0x00000100, "pending_output_on",     "Pending Output On" },
+    { 0x00000200, "shutdown_pending",      "Shutdown Pending" },
+    { 0x00000400, "commanded_bypass",      "Commanded Bypass" },
+    { 0x00002000, "high_efficiency",       "High Efficiency Mode" },
+    { 0x00004000, "informational_alert",   "Informational Alert" },
+    { 0x00008000, "fault_state",           "Fault State" },
+    { 0x00080000, "mains_bad_state",       "Mains Bad State" },
+    { 0x00100000, "fault_recovery",        "Fault Recovery" },
+    { 0x00200000, "overload",              "Overload" },
+};
+
+static const ups_bitfield_opt_t srt_transfer_reason_opts[] = {
+    { 0,  "system_initialization",       "System Initialization" },
+    { 1,  "high_input_voltage",          "High Input Voltage" },
+    { 2,  "low_input_voltage",           "Low Input Voltage" },
+    { 3,  "distorted_input",             "Distorted Input" },
+    { 4,  "rapid_change_input_voltage",  "Rapid Change of Input Voltage" },
+    { 5,  "high_input_frequency",        "High Input Frequency" },
+    { 6,  "low_input_frequency",         "Low Input Frequency" },
+    { 7,  "freq_or_phase_difference",    "Frequency and/or Phase Difference" },
+    { 8,  "acceptable_input",            "Acceptable Input" },
+    { 9,  "automatic_test",              "Automatic Test" },
+    { 10, "test_ended",                  "Test Ended" },
+    { 11, "local_ui_command",            "Local UI Command" },
+    { 12, "protocol_command",            "Protocol Command" },
+    { 13, "low_battery_voltage",         "Low Battery Voltage" },
+    { 14, "general_error",               "General Error" },
+    { 15, "power_system_error",          "Power System Error" },
+    { 16, "battery_system_error",        "Battery System Error" },
+    { 17, "error_cleared",               "Error Cleared" },
+    { 18, "automatic_restart",           "Automatic Restart" },
+    { 19, "distorted_inverter_output",   "Distorted Inverter Output" },
+    { 20, "inverter_output_acceptable",  "Inverter Output Acceptable" },
+    { 21, "epo_interface",               "EPO Interface" },
+    { 22, "input_phase_delta_oor",       "Input Phase Delta Out of Range" },
+    { 23, "input_neutral_not_connected", "Input Neutral Not Connected" },
+    { 24, "ats_transfer",                "ATS Transfer" },
+    { 25, "configuration_change",        "Configuration Change" },
+    { 26, "alert_asserted",              "Alert Asserted" },
+    { 27, "alert_cleared",               "Alert Cleared" },
+    { 28, "plug_rating_exceeded",        "Plug Rating Exceeded" },
+    { 29, "outlet_group_state_change",   "Outlet Group State Change" },
+    { 30, "failure_bypass_expired",      "Failure Bypass Expired" },
+};
+
+static const ups_bitfield_opt_t srt_outlet_status_opts[] = {
+    { 0x00000001, "state_on",                "State: ON" },
+    { 0x00000002, "state_off",               "State: OFF" },
+    { 0x00000004, "processing_reboot",       "Processing Reboot" },
+    { 0x00000008, "processing_shutdown",     "Processing Shutdown" },
+    { 0x00000010, "processing_sleep",        "Processing Sleep" },
+    { 0x00000080, "pending_load_shed",       "Pending Load Shed" },
+    { 0x00000100, "pending_on_delay",        "Pending On Delay" },
+    { 0x00000200, "pending_off_delay",       "Pending Off Delay" },
+    { 0x00000400, "pending_on_ac_presence",  "Pending On AC Presence" },
+    { 0x00000800, "pending_on_min_runtime",  "Pending On Min Runtime" },
+    { 0x00004000, "low_runtime",             "Low Runtime" },
+};
+
+static const ups_bitfield_opt_t srt_signaling_status_opts[] = {
+    { 0x0001, "power_failure",     "Power Failure" },
+    { 0x0002, "shutdown_imminent", "Shutdown Imminent" },
+};
+
+static const ups_bitfield_opt_t srt_general_error_opts[] = {
+    { 0x0001, "site_wiring",            "Site Wiring" },
+    { 0x0002, "eeprom",                 "EEPROM" },
+    { 0x0004, "ad_converter",           "A/D Converter" },
+    { 0x0008, "logic_power_supply",     "Logic Power Supply" },
+    { 0x0010, "internal_communication", "Internal Communication" },
+    { 0x0020, "ui_button",              "UI Button" },
+    { 0x0080, "epo_active",             "EPO Active" },
+    { 0x0100, "firmware_mismatch",      "Firmware Mismatch" },
+    { 0x0200, "oscillator",             "Oscillator" },
+    { 0x0400, "measurement_mismatch",   "Measurement Mismatch" },
+    { 0x0800, "subsystem",              "Subsystem" },
+};
+
+static const ups_bitfield_opt_t srt_power_system_error_opts[] = {
+    { 0x00000001, "output_overload",          "Output Overload" },
+    { 0x00000002, "output_short_circuit",     "Output Short Circuit" },
+    { 0x00000004, "output_overvoltage",       "Output Overvoltage" },
+    { 0x00000008, "transformer_dc_imbalance", "Transformer DC Imbalance" },
+    { 0x00000010, "overtemperature",          "Overtemperature" },
+    { 0x00000020, "backfeed_relay",           "Backfeed Relay" },
+    { 0x00000040, "avr_relay",                "AVR Relay" },
+    { 0x00000080, "pfc_input_relay",          "PFC Input Relay" },
+    { 0x00000100, "output_relay",             "Output Relay" },
+    { 0x00000200, "bypass_relay",             "Bypass Relay" },
+    { 0x00000400, "fan",                      "Fan" },
+    { 0x00000800, "pfc",                      "PFC" },
+    { 0x00001000, "dc_bus_overvoltage",       "DC Bus Overvoltage" },
+    { 0x00002000, "inverter",                 "Inverter" },
+    { 0x00004000, "over_current",             "Over Current" },
+};
+
+static const ups_bitfield_opt_t srt_battery_system_error_opts[] = {
+    { 0x0001, "disconnected",       "Disconnected" },
+    { 0x0002, "overvoltage",        "Overvoltage" },
+    { 0x0004, "needs_replacement",  "Needs Replacement" },
+    { 0x0008, "overtemp_critical",  "Overtemperature Critical" },
+    { 0x0010, "charger",            "Charger" },
+    { 0x0020, "temperature_sensor", "Temperature Sensor" },
+    { 0x0040, "bus_soft_start",     "Bus Soft Start" },
+    { 0x0080, "overtemp_warning",   "Overtemperature Warning" },
+    { 0x0100, "general_error",      "General Error" },
+    { 0x0200, "communication",      "Communication" },
+};
+
+static const ups_bitfield_opt_t srt_replace_battery_test_status_opts[] = {
+    { 0x0001, "pending",         "Pending" },
+    { 0x0002, "in_progress",     "In Progress" },
+    { 0x0004, "passed",          "Passed" },
+    { 0x0008, "failed",          "Failed" },
+    { 0x0010, "refused",         "Refused" },
+    { 0x0020, "aborted",         "Aborted" },
+    { 0x0040, "source_protocol", "Source: Protocol" },
+    { 0x0080, "source_local_ui", "Source: Local UI" },
+    { 0x0100, "source_internal", "Source: Internal" },
+};
+
+static const ups_bitfield_opt_t srt_runtime_calibration_status_opts[] = {
+    { 0x0001, "pending",                 "Pending" },
+    { 0x0002, "in_progress",             "In Progress" },
+    { 0x0004, "passed",                  "Passed" },
+    { 0x0008, "failed",                  "Failed" },
+    { 0x0010, "refused",                 "Refused" },
+    { 0x0020, "aborted",                 "Aborted" },
+    { 0x0040, "source_protocol",         "Source: Protocol" },
+    { 0x0080, "source_local_ui",         "Source: Local UI" },
+    { 0x1000, "load_change",             "Load Change" },
+    { 0x2000, "ac_input_not_acceptable", "AC Input Not Acceptable" },
+    { 0x4000, "load_too_low",            "Load Too Low" },
+};
+
+static const ups_bitfield_opt_t srt_battery_lifetime_status_opts[] = {
+    { 0x0001, "ok",                    "Lifetime OK" },
+    { 0x0002, "near_end",              "Lifetime Near End" },
+    { 0x0004, "exceeded",              "Lifetime Exceeded" },
+    { 0x0008, "near_end_acknowledged", "Lifetime Near End Acknowledged" },
+    { 0x0010, "exceeded_acknowledged", "Lifetime Exceeded Acknowledged" },
+};
+
+static const ups_bitfield_opt_t srt_ui_status_opts[] = {
+    { 0x0001, "continuous_test_in_progress", "Continuous Test in Progress" },
+    { 0x0002, "audible_alarm_in_progress",   "Audible Alarm in Progress" },
+    { 0x0004, "audible_alarm_muted",         "Audible Alarm Muted" },
+    { 0x0008, "any_button_pressed_recently", "Any Button Pressed Recently" },
+};
+
+static const ups_bitfield_opt_t srt_input_status_opts[] = {
+    { 0x0001, "acceptable",            "Acceptable" },
+    { 0x0002, "pending_acceptable",    "Pending Acceptable" },
+    { 0x0004, "voltage_too_low",       "Voltage Too Low" },
+    { 0x0008, "voltage_too_high",      "Voltage Too High" },
+    { 0x0010, "distorted",             "Distorted" },
+    { 0x0020, "boost",                 "Boost" },
+    { 0x0040, "trim",                  "Trim" },
+    { 0x0080, "frequency_too_low",     "Frequency Too Low" },
+    { 0x0100, "frequency_too_high",    "Frequency Too High" },
+    { 0x0200, "freq_phase_not_locked", "Frequency and Phase Not Locked" },
+    { 0x0400, "phase_delta_oor",       "Phase Delta Out of Range" },
+    { 0x0800, "neutral_not_connected", "Neutral Not Connected" },
+    { 0x8000, "powering_load",         "Powering Load" },
+};
+
+static const ups_bitfield_opt_t srt_sog_relay_config_opts[] = {
+    { 0x0001, "mog_present",  "MOG Present" },
+    { 0x0002, "sog0_present", "SOG0 Present" },
+    { 0x0004, "sog1_present", "SOG1 Present" },
+    { 0x0008, "sog2_present", "SOG2 Present" },
+    { 0x0010, "sog3_present", "SOG3 Present" },
+};
+
 static const ups_config_reg_t srt_config_regs[] = {
     { "transfer_high", "Upper Acceptable Input Voltage", "V", "transfer",
       1026, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 110, 150 } },
@@ -400,9 +610,225 @@ static const ups_config_reg_t srt_config_regs[] = {
                          sizeof(srt_freq_tol_opts) / sizeof(srt_freq_tol_opts[0]),
                          1 /* strict */ } },
     { "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
-      591, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 } },
+      591, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 65535 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
     { "battery_date", "Battery Install Date", "days since 2000-01-01", "info",
       595, 1, UPS_CFG_SCALAR, 1, 1, .meta.scalar = { 0, 65535 } },
+
+    /* === Comprehensive register dump descriptors ===
+     * Added 2026-04-25 to surface every documented Modbus register on
+     * /api/about. Coverage is per APC_SRT_MODBUS_REFERENCE.md. Existing
+     * entries above (transfer_*, bat_test_interval, outlet timings,
+     * load_shed*, output_voltage_setting, freq_tolerance, dates) cover
+     * the operator-tunable settings; the entries below cover the
+     * read-only diagnostic / measurement / identity surface plus the
+     * writable Names block. */
+
+    /* Status block (registers 0-26) — DIAGNOSTIC */
+    { "ups_status", "UPS Status", NULL, "status",
+      0, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_ups_status_opts,
+                         sizeof(srt_ups_status_opts) / sizeof(srt_ups_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "transfer_reason", "Last Transfer Reason", NULL, "status",
+      2, 1, UPS_CFG_BITFIELD, 1, 0,
+      .meta.bitfield = { srt_transfer_reason_opts,
+                         sizeof(srt_transfer_reason_opts) / sizeof(srt_transfer_reason_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "mog_status", "MOG Status", NULL, "status",
+      3, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_outlet_status_opts,
+                         sizeof(srt_outlet_status_opts) / sizeof(srt_outlet_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "sog0_status", "SOG0 Status", NULL, "status",
+      6, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_outlet_status_opts,
+                         sizeof(srt_outlet_status_opts) / sizeof(srt_outlet_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "sog1_status", "SOG1 Status", NULL, "status",
+      9, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_outlet_status_opts,
+                         sizeof(srt_outlet_status_opts) / sizeof(srt_outlet_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "sog2_status", "SOG2 Status", NULL, "status",
+      12, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_outlet_status_opts,
+                         sizeof(srt_outlet_status_opts) / sizeof(srt_outlet_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "signaling_status", "Simple Signaling Status", NULL, "status",
+      18, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_signaling_status_opts,
+                         sizeof(srt_signaling_status_opts) / sizeof(srt_signaling_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "general_error", "General Error", NULL, "errors",
+      19, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_general_error_opts,
+                         sizeof(srt_general_error_opts) / sizeof(srt_general_error_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "power_system_error", "Power System Error", NULL, "errors",
+      20, 2, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_power_system_error_opts,
+                         sizeof(srt_power_system_error_opts) / sizeof(srt_power_system_error_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "battery_system_error", "Battery System Error", NULL, "errors",
+      22, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_battery_system_error_opts,
+                         sizeof(srt_battery_system_error_opts) / sizeof(srt_battery_system_error_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "replace_battery_test_status", "Replace Battery Test Status", NULL, "status",
+      23, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_replace_battery_test_status_opts,
+                         sizeof(srt_replace_battery_test_status_opts) / sizeof(srt_replace_battery_test_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "runtime_calibration_status", "Runtime Calibration Status", NULL, "status",
+      24, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_runtime_calibration_status_opts,
+                         sizeof(srt_runtime_calibration_status_opts) / sizeof(srt_runtime_calibration_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "battery_lifetime_status", "Battery Lifetime Status", NULL, "status",
+      25, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_battery_lifetime_status_opts,
+                         sizeof(srt_battery_lifetime_status_opts) / sizeof(srt_battery_lifetime_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+    { "ui_status", "UI Status", NULL, "status",
+      26, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_ui_status_opts,
+                         sizeof(srt_ui_status_opts) / sizeof(srt_ui_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_DIAGNOSTIC },
+
+    /* Dynamic block (registers 128-171) — MEASUREMENT */
+    { "battery_runtime", "Battery Runtime", "s", "battery",
+      128, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_charge_pct", "Battery Charge", "%", "battery",
+      130, 1, UPS_CFG_SCALAR, 512, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_voltage_pos", "Battery Positive Voltage", "V", "battery",
+      131, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_voltage_neg", "Battery Negative Voltage", "V", "battery",
+      132, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_internal_date", "Battery Internal Date", "days since 2000-01-01", "battery",
+      133, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_temperature", "Battery Temperature", "\xC2\xB0""C", "battery",
+      135, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_load_pct", "Output Load", "%", "output",
+      136, 1, UPS_CFG_SCALAR, 256, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_apparent_power_pct", "Output Apparent Power", "%", "output",
+      138, 1, UPS_CFG_SCALAR, 256, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_current", "Output Current", "A", "output",
+      140, 1, UPS_CFG_SCALAR, 32, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_voltage", "Output Voltage", "V", "output",
+      142, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_frequency", "Output Frequency", "Hz", "output",
+      144, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_energy", "Output Energy", "Wh", "output",
+      145, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "bypass_input_status", "Bypass Input Status", NULL, "bypass",
+      147, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_input_status_opts,
+                         sizeof(srt_input_status_opts) / sizeof(srt_input_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "bypass_voltage", "Bypass Voltage", "V", "bypass",
+      148, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "bypass_frequency", "Bypass Frequency", "Hz", "bypass",
+      149, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "input_status", "Input Status", NULL, "input",
+      150, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_input_status_opts,
+                         sizeof(srt_input_status_opts) / sizeof(srt_input_status_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "input_voltage", "Input Voltage", "V", "input",
+      151, 1, UPS_CFG_SCALAR, 64, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT,
+      .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    { "efficiency", "Efficiency", "%", "ups",
+      154, 1, UPS_CFG_SCALAR, 128, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT,
+      .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    { "shutdown_timer", "Shutdown Timer", "s", "timers",
+      155, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT,
+      .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    { "start_timer", "Start Timer", "s", "timers",
+      156, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT,
+      .has_sentinel = 1, .sentinel_value = 0xFFFF },
+    { "reboot_timer", "Reboot Timer", "s", "timers",
+      157, 2, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT,
+      .has_sentinel = 1, .sentinel_value = 0xFFFFFFFF },
+
+    /* Inventory block (registers 516-595) — IDENTITY */
+    { "firmware_version", "Firmware Version", NULL, "identity",
+      516, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "model_name", "Model Name", NULL, "identity",
+      532, 16, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 32 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "sku", "SKU", NULL, "identity",
+      548, 16, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 32 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "serial_number", "Serial Number", NULL, "identity",
+      564, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "battery_sku", "Battery SKU", NULL, "identity",
+      572, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "external_battery_sku", "External Battery SKU", NULL, "identity",
+      580, 8, UPS_CFG_STRING, 1, 0, .meta.string = { .max_chars = 16 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "nominal_apparent_power", "Nominal Apparent Power", "VA", "identity",
+      588, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "nominal_real_power", "Nominal Real Power", "W", "identity",
+      589, 1, UPS_CFG_SCALAR, 1, 0, .meta.scalar = { 0, 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+    { "sog_relay_config", "Outlet Group Relay Configuration", NULL, "identity",
+      590, 1, UPS_CFG_FLAGS, 1, 0,
+      .meta.bitfield = { srt_sog_relay_config_opts,
+                         sizeof(srt_sog_relay_config_opts) / sizeof(srt_sog_relay_config_opts[0]),
+                         0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+
+    /* Names block (registers 596-635) — CONFIG, writable */
+    { "ups_name", "UPS Name", NULL, "names",
+      596, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    { "mog_name", "MOG Name", NULL, "names",
+      604, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    { "sog0_name", "SOG0 Name", NULL, "names",
+      612, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    { "sog1_name", "SOG1 Name", NULL, "names",
+      620, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
+    { "sog2_name", "SOG2 Name", NULL, "names",
+      628, 8, UPS_CFG_STRING, 1, 1, .meta.string = { .max_chars = 16 } },
 };
 
 /* --- Command descriptors --- */
