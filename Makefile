@@ -359,6 +359,24 @@ endef
 test: $(addprefix $(TEST_DIR)/,$(TEST_NAMES))
 	$(call run_tests,$(TEST_DIR))
 
+# Same as `test`, but each binary writes a JUnit XML report to
+# build/tests/<name>.junit.xml for CI to pick up. cmocka's XML output
+# replaces stdout output, so the human-readable per-case PASSED/FAILED
+# lines are not visible in this run — use plain `make test` locally.
+.PHONY: test-junit
+test-junit: $(addprefix $(TEST_DIR)/,$(TEST_NAMES))
+	@pass=0; fail=0; \
+	for name in $(TEST_NAMES); do \
+	    echo "=== $$name ==="; \
+	    if CMOCKA_MESSAGE_OUTPUT=xml \
+	       CMOCKA_XML_FILE=$(TEST_DIR)/$$name.junit.xml \
+	       $(TEST_DIR)/$$name; then pass=$$((pass + 1)); \
+	    else fail=$$((fail + 1)); fi; \
+	done; \
+	echo ""; \
+	echo "$$pass passed, $$fail failed"; \
+	[ $$fail -eq 0 ]
+
 coverage: $(addprefix $(COV_TEST)/,$(TEST_NAMES))
 	@for name in $(TEST_NAMES); do \
 	    echo "=== $$name ==="; \
