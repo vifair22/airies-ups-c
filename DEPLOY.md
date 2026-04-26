@@ -96,6 +96,8 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 ./deploy.sh full upspi3  # deploy to upspi3 only
 ```
 
+Master commits also auto-deploy via GitLab CI — see [CI/CD pipeline](#cicd-pipeline) below.
+
 ## Deploy script modes
 
 | Command | What it does |
@@ -333,3 +335,46 @@ pkill -f airies-upsd
 **UPS not connecting (USB HID)**: Verify the device is visible with `lsusb | grep 051d` and that `/dev/hidraw0` is accessible by `sysadmin` (check the udev rule above).
 
 **Service crash-loops**: Check `journalctl -u airies-ups -n 50` for the error. Common causes: wrong device path, port conflict, missing `config.yaml`.
+
+## CI/CD pipeline
+
+`.gitlab-ci.yml` runs on every push to `git.airies.net/vifair22/airies-ups-c`. Master pushes auto-deploy to all three Pis.
+
+### Stages
+
+```mermaid
+flowchart LR
+  test --> analyze
+  test --> coverage
+  test --> build
+  analyze --> build
+  build -->|master only| deploy
+```
+
+| Stage | Job | What it does |
+|-------|-----|--------------|
+| test | `test` | Builds c-utils + airies-ups natively, runs all C cmocka suites and frontend Vitest |
+| analyze | `analyze` | `make analyze` (cppcheck, stack-usage, gcc-fanalyzer) and `make lint` (clang-tidy) |
+| analyze | `coverage` | `make coverage`, gates on **75%** line coverage (`gcovr --fail-under-line 75`) — ratchet up toward 80% as new tests land |
+| build | `build` | Cross-compiles to aarch64 against Debian multi-arch arm64 libs, asserts `file` reports ARM aarch64, publishes binaries as artifacts |
+| deploy | `deploy` | Master only. SSH/rsync binaries to each host in `$UPS_DEPLOY_HOSTS`, `systemctl restart airies-ups.service`, verify active. Sequential — a failed restart on host N stops host N+1 |
+
+### Required CI/CD variables
+
+Both are set on `vifair22/airies-ups-c` and **protected** (only available to jobs on protected branches like `master`):
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `DEPLOY_SSH_KEY` | File | ed25519 private key for `sysadmin@upspi*.internal.airies.net`. Public side lives in each Pi's `~sysadmin/.ssh/authorized_keys` |
+| `UPS_DEPLOY_HOSTS` | Variable (raw) | Newline-separated list of hostnames, e.g. `upspi.internal.airies.net\nupspi2.internal.airies.net\nupspi3.internal.airies.net` |
+
+Edit a host out of `UPS_DEPLOY_HOSTS` to skip it on the next deploy without changing the pipeline.
+
+### Base image and toolchain
+
+Both Pis run **Debian 13 (trixie)**. The CI base image is `debian:trixie` to keep the cross-compiled binary's libc/libssl ABI in lockstep with what's installed on the Pis. Cross-compilation uses Debian's `gcc-aarch64-linux-gnu` (triplet `aarch64-linux-gnu-`, distinct from the local Gentoo crossdev's `aarch64-unknown-linux-gnu-`). The Makefile honours `CROSS_PREFIX`, `CROSS_SYSROOT_INCLUDES`, and `CROSS_SYSROOT_LIBS` env overrides so CI and the local sysroot layout coexist without duplicate logic.
+
+### Runner tags
+
+- `test`, `analyze`, `coverage`, `build` → `tags: [docker]` — any docker-tagged runner.
+- `deploy` → `tags: [docker, unraid]` — needs reach into `*.internal.airies.net`.

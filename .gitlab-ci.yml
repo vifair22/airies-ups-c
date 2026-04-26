@@ -1,0 +1,180 @@
+stages:
+  - test
+  - analyze
+  - build
+  - deploy
+
+variables:
+  C_UTILS_REPO: "https://git.airies.net/vifair22/c-utils.git"
+  # Pi runtime libs are pinned to Debian trixie (Debian 13). The CI base image
+  # must match so the cross-compiled binary's libc/libssl ABI lines up with
+  # what's actually installed on upspi/upspi2/upspi3.
+  DEBIAN_FRONTEND: noninteractive
+
+# Native build + run all tests (C cmocka suite + frontend Vitest).
+test:
+  stage: test
+  image: debian:trixie
+  tags:
+    - docker
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        build-essential pkg-config git curl unzip ca-certificates
+        libcmocka-dev libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
+        libmicrohttpd-dev libssl-dev
+    - curl -fsSL https://bun.sh/install | bash
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - git clone --depth 1 "$C_UTILS_REPO" /tmp/c-utils
+    - make -C /tmp/c-utils
+  script:
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - make CUTILS_DIR=/tmp/c-utils test
+    - cd frontend && bun install --frozen-lockfile && bun run test
+
+# Static analysis: cppcheck + stack-usage + gcc-fanalyzer + clang-tidy.
+analyze:
+  stage: analyze
+  image: debian:trixie
+  tags:
+    - docker
+  needs:
+    - test
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        build-essential pkg-config git ca-certificates
+        libcmocka-dev libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
+        libmicrohttpd-dev libssl-dev
+        cppcheck clang-tidy
+    - git clone --depth 1 "$C_UTILS_REPO" /tmp/c-utils
+    - make -C /tmp/c-utils
+  script:
+    - make CUTILS_DIR=/tmp/c-utils analyze
+    - make CUTILS_DIR=/tmp/c-utils lint
+
+# Coverage report + threshold gate. Threshold is currently 75% (matches the
+# present baseline); ratchet up toward the global 80% standard as new tests
+# land. The gcovr line-coverage percentage is exposed to GitLab via the
+# `coverage:` regex below so it shows up on MRs and the project dashboard.
+coverage:
+  stage: analyze
+  image: debian:trixie
+  tags:
+    - docker
+  needs:
+    - test
+  variables:
+    COVERAGE_LINE_THRESHOLD: "75"
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        build-essential pkg-config git ca-certificates
+        libcmocka-dev libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
+        libmicrohttpd-dev libssl-dev
+        gcovr
+    - git clone --depth 1 "$C_UTILS_REPO" /tmp/c-utils
+    - make -C /tmp/c-utils
+  script:
+    - make CUTILS_DIR=/tmp/c-utils coverage
+    - gcovr --root . --filter 'src/' --exclude 'src/daemon/'
+        --fail-under-line "$COVERAGE_LINE_THRESHOLD"
+        --print-summary
+  coverage: '/^lines: (\d+\.\d+)%/'
+  artifacts:
+    when: always
+    paths:
+      - build/coverage/
+    expire_in: 1 week
+
+# Cross-compile to aarch64 against Debian multi-arch arm64 runtime libs. The
+# native pass inside `make cross` (which runs the C test suite again) is what
+# guarantees the cross step never starts with a broken tree.
+build:
+  stage: build
+  image: debian:trixie
+  tags:
+    - docker
+  needs:
+    - test
+    - analyze
+  before_script:
+    - dpkg --add-architecture arm64
+    - apt-get update -qq
+    # --force-overwrite works around a Debian trixie packaging bug where
+    # libpsl-dev:amd64 and libpsl-dev:arm64 each ship /usr/share/man/man3/
+    # libpsl.3.gz with non-identical file metadata, causing dpkg to refuse
+    # the multi-arch coinstall. The man-page content is the same; the
+    # overwrite is harmless.
+    - apt-get install -y --no-install-recommends
+        -o Dpkg::Options::=--force-overwrite
+        build-essential gcc-aarch64-linux-gnu pkg-config git curl unzip ca-certificates
+        xxd brotli
+        libcmocka-dev
+        libmodbus-dev libsqlite3-dev libcurl4-openssl-dev libmicrohttpd-dev libssl-dev
+        libmodbus-dev:arm64 libsqlite3-dev:arm64 libcurl4-openssl-dev:arm64
+        libmicrohttpd-dev:arm64 libssl-dev:arm64
+        file
+    - curl -fsSL https://bun.sh/install | bash
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - git clone --depth 1 "$C_UTILS_REPO" /tmp/c-utils
+  script:
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - make cross
+        CUTILS_DIR=/tmp/c-utils
+        CROSS_PREFIX=aarch64-linux-gnu-
+        CROSS_SYSROOT_INCLUDES="-I/usr/include/aarch64-linux-gnu -I/usr/include"
+        CROSS_SYSROOT_LIBS="-L/usr/lib/aarch64-linux-gnu -Wl,-rpath-link,/usr/lib/aarch64-linux-gnu"
+    - file build/airies-upsd | grep -q "ARM aarch64"
+    - file build/airies-ups  | grep -q "ARM aarch64"
+  artifacts:
+    paths:
+      - build/airies-upsd
+      - build/airies-ups
+      - airies-ups.service
+      - 99-airies-ups-ftdi.rules
+    expire_in: 1 month
+
+# Push deploy: rsync binaries to each Pi and bounce the service. Sequential so
+# a failed restart on one host stops the run before bouncing the others —
+# important for a UPS daemon (don't kick all three Pis if one is broken).
+deploy:
+  stage: deploy
+  image: debian:trixie
+  tags:
+    - docker
+    - unraid
+  needs:
+    - build
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends openssh-client rsync ca-certificates
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519
+    - chmod 600 ~/.ssh/id_ed25519
+    - |
+      for host in $UPS_DEPLOY_HOSTS; do
+        ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+      done
+  script:
+    - |
+      set -euo pipefail
+      for host in $UPS_DEPLOY_HOSTS; do
+        echo "==> [$host] rsync binaries"
+        ssh "sysadmin@$host" "mkdir -p /home/sysadmin/airies-ups/build"
+        rsync -az build/airies-upsd build/airies-ups \
+          "sysadmin@$host:/home/sysadmin/airies-ups/build/"
+
+        echo "==> [$host] restart airies-ups.service"
+        ssh "sysadmin@$host" "sudo systemctl restart airies-ups.service"
+        sleep 2
+        ssh "sysadmin@$host" "systemctl is-active airies-ups.service"
+        echo "==> [$host] OK"
+      done

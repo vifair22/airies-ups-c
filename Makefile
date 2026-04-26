@@ -1,6 +1,6 @@
 PI_HOST    = sysadmin@upspi.internal.airies.net
 PI_DIR     = /home/sysadmin/airies-ups
-CUTILS_DIR = ../c-utils
+CUTILS_DIR ?= ../c-utils
 BUILD_DIR  = build
 
 # Version
@@ -16,13 +16,18 @@ LIBS     := -L$(CUTILS_DIR)/build -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -
 
 # ---- Cross-compilation (aarch64 Pi target) --------------------------------
 
-CROSS_PREFIX  := aarch64-unknown-linux-gnu-
-SYSROOT       := $(HOME)/.sysroot/aarch64
+CROSS_PREFIX  ?= aarch64-unknown-linux-gnu-
+SYSROOT       ?= $(HOME)/.sysroot/aarch64
 CROSS_CC      := $(CROSS_PREFIX)gcc
 CROSS_AR      := $(CROSS_PREFIX)ar
-CROSS_INCLUDES = $(INCLUDES) -I$(SYSROOT)/usr/include
-CROSS_LIBS     = -L$(CUTILS_DIR)/build -lc-utils -L$(SYSROOT)/usr/lib \
-                 -Wl,--allow-shlib-undefined -Wl,-rpath-link,$(SYSROOT)/usr/lib \
+# Sysroot include/lib flags. Local builds default to a single-tree sysroot at
+# $(SYSROOT). CI overrides these to point at Debian multi-arch paths
+# (/usr/include/aarch64-linux-gnu, /usr/lib/aarch64-linux-gnu).
+CROSS_SYSROOT_INCLUDES ?= -I$(SYSROOT)/usr/include
+CROSS_SYSROOT_LIBS     ?= -L$(SYSROOT)/usr/lib -Wl,-rpath-link,$(SYSROOT)/usr/lib
+CROSS_INCLUDES = $(INCLUDES) $(CROSS_SYSROOT_INCLUDES)
+CROSS_LIBS     = -L$(CUTILS_DIR)/build -lc-utils $(CROSS_SYSROOT_LIBS) \
+                 -Wl,--allow-shlib-undefined \
                  -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
 
 # ---- Flags ---------------------------------------------------------------
@@ -100,7 +105,7 @@ cross: frontend frontend-test embed-frontend embed-migrations
 	$(MAKE) -C $(CUTILS_DIR) \
 		CC="$(CROSS_CC)" \
 		AR="$(CROSS_AR)" \
-		"COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON -I$(SYSROOT)/usr/include"
+		"COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON $(CROSS_SYSROOT_INCLUDES)"
 	@echo "=== Cross-compiling airies-ups for aarch64 ==="
 	rm -rf $(BUILD_DIR)/obj
 	$(MAKE) EMBED=1 CC="$(CROSS_CC)" \
