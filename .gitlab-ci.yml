@@ -170,6 +170,15 @@ generate_deploy_child_pipeline:
           print("UPS_DEPLOY_HOSTS is empty", file=sys.stderr)
           sys.exit(1)
 
+      # $CI_PIPELINE_ID inside the generator is the parent's pipeline ID.
+      # We embed it literally into the child YAML — $CI_PARENT_PIPELINE_ID
+      # is not reliably exposed at child-pipeline expansion time and yields
+      # missing_dependency_failure on every child job.
+      parent_pid = os.environ.get("CI_PIPELINE_ID", "")
+      if not parent_pid:
+          print("CI_PIPELINE_ID is not set", file=sys.stderr)
+          sys.exit(1)
+
       def slug(h):
           return re.sub(r"[^a-zA-Z0-9]+", "_", h).strip("_")
 
@@ -187,7 +196,7 @@ generate_deploy_child_pipeline:
               "  variables:",
               f"    UPS_HOST: {q(host)}",
               "  needs:",
-              "    - pipeline: $CI_PARENT_PIPELINE_ID",
+              f"    - pipeline: \"{parent_pid}\"",
               "      job: build",
               "      artifacts: true",
               "  before_script:",
