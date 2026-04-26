@@ -909,17 +909,85 @@ static ups_config_reg_t backups_config_regs[] = {
       .meta.scalar = { 0, 0 } },
     { "manufacture_date", "Manufacture Date", "days since 2000-01-01", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
-      .meta.scalar = { 0, 0 } },
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
 
     /* --- Group: info --- */
     { "nominal_voltage", "Nominal Input Voltage", "V", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
-      .meta.scalar = { 0, 0 } },
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
     { "nominal_va", "Nominal Apparent Power", "VA", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
-      .meta.scalar = { 0, 0 } },
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
     { "design_capacity", "Design Capacity", "%", "info",
       0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+
+    /* === Comprehensive register dump (Phase 4) ===
+     * The driver's read_status / read_dynamic populate ups_data_t
+     * directly from these same HID fields; exposing them as descriptors
+     * adds them to /api/about for parity with the SRT/SMT register
+     * dumps. resolve_config_regs in this driver narrows by HID field
+     * presence — a missing field on the live device drops the
+     * descriptor entirely, so per-SKU variation is handled
+     * automatically.
+     *
+     * reg_addr is set to the resolved HID report_id by fixup_one_reg
+     * at connect time; the literal 0 here is a placeholder. */
+
+    /* Live measurements */
+    { "input_voltage", "Input Voltage", "V", "input",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "battery_voltage", "Battery Voltage", "V", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "remaining_capacity", "Battery Charge", "%", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "runtime_to_empty", "Runtime Remaining", "s", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "percent_load", "Output Load", "%", "output",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+    { "output_frequency", "Output Frequency", "Hz", "output",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_MEASUREMENT },
+
+    /* Identity (nominal real power) */
+    { "nominal_watts", "Nominal Real Power", "W", "info",
+      0, 1, UPS_CFG_SCALAR, 1, 0,
+      .meta.scalar = { 0, 0 },
+      .category = UPS_REG_CATEGORY_IDENTITY },
+
+    /* Operator-tunable shutdown / startup / reboot delays.
+     * Writable on the device — these are real settings, not just status. */
+    { "delay_before_shutdown", "Delay Before Shutdown", "s", "delays",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "delay_before_startup", "Delay Before Startup", "s", "delays",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "delay_before_reboot", "Delay Before Reboot", "s", "delays",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+
+    /* APC vendor extensions */
+    { "battery_replacement_date", "Battery Replacement Date", "days since 2000-01-01", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
+      .meta.scalar = { 0, 0 } },
+    { "battery_capacity_for_startup", "Battery Capacity Required for Startup", "%", "battery",
+      0, 1, UPS_CFG_SCALAR, 1, 1,
       .meta.scalar = { 0, 0 } },
 };
 
@@ -938,6 +1006,19 @@ enum {
     CFG_NOMINAL_VOLTAGE,
     CFG_NOMINAL_VA,
     CFG_DESIGN_CAPACITY,
+    /* === Phase 4 additions === */
+    CFG_INPUT_VOLTAGE,
+    CFG_BATTERY_VOLTAGE,
+    CFG_REMAINING_CAPACITY,
+    CFG_RUNTIME_TO_EMPTY,
+    CFG_PERCENT_LOAD,
+    CFG_OUTPUT_FREQUENCY,
+    CFG_NOMINAL_WATTS,
+    CFG_DELAY_BEFORE_SHUTDOWN,
+    CFG_DELAY_BEFORE_STARTUP,
+    CFG_DELAY_BEFORE_REBOOT,
+    CFG_BATTERY_REPLACEMENT_DATE,
+    CFG_BATTERY_CAPACITY_FOR_STARTUP,
 };
 
 /* Populate config register metadata from resolved HID fields */
@@ -964,6 +1045,20 @@ static void fixup_config_regs(hid_transport_t *t)
     fixup_one_reg(&backups_config_regs[CFG_NOMINAL_VOLTAGE],    t->f.output_voltage);
     fixup_one_reg(&backups_config_regs[CFG_NOMINAL_VA],         t->f.config_apparent_power);
     fixup_one_reg(&backups_config_regs[CFG_DESIGN_CAPACITY],    t->f.design_capacity);
+
+    /* Phase 4 — comprehensive register dump descriptors */
+    fixup_one_reg(&backups_config_regs[CFG_INPUT_VOLTAGE],            t->f.input_voltage);
+    fixup_one_reg(&backups_config_regs[CFG_BATTERY_VOLTAGE],          t->f.battery_voltage);
+    fixup_one_reg(&backups_config_regs[CFG_REMAINING_CAPACITY],       t->f.remaining_capacity);
+    fixup_one_reg(&backups_config_regs[CFG_RUNTIME_TO_EMPTY],         t->f.runtime_to_empty);
+    fixup_one_reg(&backups_config_regs[CFG_PERCENT_LOAD],             t->f.percent_load);
+    fixup_one_reg(&backups_config_regs[CFG_OUTPUT_FREQUENCY],         t->f.output_frequency);
+    fixup_one_reg(&backups_config_regs[CFG_NOMINAL_WATTS],            t->f.config_active_power);
+    fixup_one_reg(&backups_config_regs[CFG_DELAY_BEFORE_SHUTDOWN],    t->f.delay_before_shutdown);
+    fixup_one_reg(&backups_config_regs[CFG_DELAY_BEFORE_STARTUP],     t->f.delay_before_startup);
+    fixup_one_reg(&backups_config_regs[CFG_DELAY_BEFORE_REBOOT],      t->f.delay_before_reboot);
+    fixup_one_reg(&backups_config_regs[CFG_BATTERY_REPLACEMENT_DATE], t->f.apc_batt_repl_date);
+    fixup_one_reg(&backups_config_regs[CFG_BATTERY_CAPACITY_FOR_STARTUP], t->f.apc_batt_cap_startup);
 }
 
 /* Convert USB battery ManufactureDate (85:85) to days since 2000-01-01.
@@ -999,7 +1094,7 @@ static const hid_field_t *find_config_field(const hid_transport_t *t,
 }
 
 static int backups_config_read(void *transport, const ups_config_reg_t *reg,
-                                uint16_t *raw_value, char *str_buf, size_t str_bufsz)
+                                uint32_t *raw_value, char *str_buf, size_t str_bufsz)
 {
     (void)str_buf; (void)str_bufsz;
     hid_transport_t *t = transport;
@@ -1020,7 +1115,7 @@ static int backups_config_read(void *transport, const ups_config_reg_t *reg,
     if (strcmp(reg->name, "manufacture_date") == 0)
         val = (int32_t)usb_date_to_days_since_2000((uint16_t)val);
 
-    if (raw_value) *raw_value = (uint16_t)val;
+    if (raw_value) *raw_value = (uint32_t)val;
 
     return UPS_OK;
 }
@@ -1062,7 +1157,7 @@ static int backups_config_write(void *transport, const ups_config_reg_t *reg, ui
         return UPS_ERR_IO;
 
     /* Read back and verify */
-    uint16_t readback;
+    uint32_t readback;
     if (backups_config_read(transport, reg, &readback, NULL, 0) != UPS_OK)
         return UPS_ERR_IO;
 
@@ -1140,6 +1235,22 @@ static size_t backups_resolve_config_regs(void *transport,
     KEEP_IF(CFG_NOMINAL_VOLTAGE,       t->f.output_voltage);
     KEEP_IF(CFG_NOMINAL_VA,            t->f.config_apparent_power);
     KEEP_IF(CFG_DESIGN_CAPACITY,       t->f.design_capacity);
+
+    /* Phase 4 — comprehensive register dump descriptors. Same per-field
+     * presence gating: drop the descriptor if the device's HID descriptor
+     * doesn't expose the underlying field. */
+    KEEP_IF(CFG_INPUT_VOLTAGE,            t->f.input_voltage);
+    KEEP_IF(CFG_BATTERY_VOLTAGE,          t->f.battery_voltage);
+    KEEP_IF(CFG_REMAINING_CAPACITY,       t->f.remaining_capacity);
+    KEEP_IF(CFG_RUNTIME_TO_EMPTY,         t->f.runtime_to_empty);
+    KEEP_IF(CFG_PERCENT_LOAD,             t->f.percent_load);
+    KEEP_IF(CFG_OUTPUT_FREQUENCY,         t->f.output_frequency);
+    KEEP_IF(CFG_NOMINAL_WATTS,            t->f.config_active_power);
+    KEEP_IF(CFG_DELAY_BEFORE_SHUTDOWN,    t->f.delay_before_shutdown);
+    KEEP_IF(CFG_DELAY_BEFORE_STARTUP,     t->f.delay_before_startup);
+    KEEP_IF(CFG_DELAY_BEFORE_REBOOT,      t->f.delay_before_reboot);
+    KEEP_IF(CFG_BATTERY_REPLACEMENT_DATE, t->f.apc_batt_repl_date);
+    KEEP_IF(CFG_BATTERY_CAPACITY_FOR_STARTUP, t->f.apc_batt_cap_startup);
     #undef KEEP_IF
     return n;
 }
