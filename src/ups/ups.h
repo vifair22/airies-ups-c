@@ -206,7 +206,10 @@ struct ups_data {
  * --------------------------------------------------------------------------- */
 
 struct ups_inventory {
-    char     model[33];           /* "SMT1500RM2UC", "Smart-UPS 1500", etc. */
+    char     model[33];           /* friendly model name ("Smart-UPS 1500", "Smart-UPS SRT 1000") */
+    char     sku[33];             /* SKU / part number ("SMT1500RM2UC"). Empty on transports
+                                   * that don't expose a SKU separately (e.g. Back-UPS USB,
+                                   * where iProduct *is* the model). */
     char     serial[17];          /* factory serial number */
     char     firmware[17];        /* firmware version string (e.g. "UPS 04.1") */
     uint16_t nominal_va;          /* nameplate VA rating */
@@ -402,14 +405,16 @@ const ups_config_reg_t *ups_find_config_reg(const ups_t *ups, const char *name);
 
 /* Read a config register.
  *   reg        : descriptor returned from ups_find_config_reg
- *   raw_value  : for scalar / bitfield types, receives the raw uint16.
- *                Ignored for UPS_CFG_STRING.
+ *   raw_value  : for SCALAR / BITFIELD / FLAGS, receives the raw value.
+ *                For reg_count==2 the driver packs the two registers into
+ *                a uint32 (Modbus convention: MSB first). Ignored for
+ *                UPS_CFG_STRING.
  *   str_buf    : for UPS_CFG_STRING, receives a NUL-terminated ASCII string
  *                (<= str_bufsz-1 characters). Ignored for other types.
  *
  * Returns UPS_OK, UPS_ERR_IO, or UPS_ERR_NOT_SUPPORTED. */
 int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
-                    uint16_t *raw_value, char *str_buf, size_t str_bufsz);
+                    uint32_t *raw_value, char *str_buf, size_t str_bufsz);
 
 /* Write a config register. The registry enforces a 100 ms inter-write delay
  * between successive config_writes against the same UPS and always reads

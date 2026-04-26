@@ -384,8 +384,10 @@ static size_t backups_resolve_config_regs(
 }
 ```
 
-Drivers that don't need narrowing (the Modbus drivers, currently) leave
-`resolve_config_regs = NULL` and consumers see the static array.
+Drivers that don't need narrowing (SRT, currently) leave
+`resolve_config_regs = NULL` and consumers see the static array. SMT uses
+this to drop SOG descriptors for outlet groups that aren't physically
+present on the SKU.
 
 ### `freq_settings[]`
 
@@ -491,7 +493,7 @@ See `tests/test_ups_strings.c` for the pattern.
 
 ## New-driver checklist
 
-Adding a new driver (e.g., a modern SMT rewrite):
+Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 
 1. **Files** — create `src/ups/ups_<family>.c`. Header-in-c file; no
    separate `.h` unless the driver exposes helpers to other translation
@@ -542,8 +544,6 @@ Not blocking, but worth fixing when someone has the cycles:
   UPS but not perfect during transitional states.
 - **Modbus TCP / SNMP are placeholder enums**. `ups_connect` will return
   `UPS_ERR_NO_DRIVER` for either until a driver lands.
-- **`ups_smt.c` is a stub cribbed from SRT**. See the driver's top-of-file
-  comment. The SMT rewrite against 990-9840B is the next project.
 
 ---
 

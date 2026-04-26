@@ -31,7 +31,7 @@ static int fake_config_write(void *transport, const ups_config_reg_t *reg, uint1
 }
 
 static int fake_config_read(void *transport, const ups_config_reg_t *reg,
-                            uint16_t *raw, char *str, size_t str_sz)
+                            uint32_t *raw, char *str, size_t str_sz)
 {
     (void)transport; (void)reg; (void)str; (void)str_sz;
     if (raw) *raw = 0;

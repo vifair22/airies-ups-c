@@ -569,7 +569,7 @@ static void test_read_thresholds_no_callback_not_supported(void **state)
  * in a different translation unit. */
 static int fake_config_read_calls;
 static int fake_config_read_fn(void *t, const ups_config_reg_t *r,
-                               uint16_t *raw, char *str, size_t str_sz)
+                               uint32_t *raw, char *str, size_t str_sz)
 {
     (void)t; (void)r; (void)str; (void)str_sz;
     fake_config_read_calls++;
@@ -583,7 +583,7 @@ static void test_config_read_success(void **state)
     fake_driver.config_read = fake_config_read_fn;
     fake_config_read_calls = 0;
 
-    uint16_t raw = 0;
+    uint32_t raw = 0;
     assert_int_equal(ups_config_read(u, &fake_regs[0], &raw, NULL, 0), 0);
     assert_int_equal(fake_config_read_calls, 1);
     assert_int_equal(raw, 0xAB);
@@ -593,7 +593,7 @@ static void test_config_read_no_callback_not_supported(void **state)
 {
     ups_t *u = *state;
     fake_driver.config_read = NULL;
-    uint16_t raw = 0;
+    uint32_t raw = 0;
     assert_int_equal(ups_config_read(u, &fake_regs[0], &raw, NULL, 0),
                      UPS_ERR_NOT_SUPPORTED);
 }
