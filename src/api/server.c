@@ -386,13 +386,17 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
     srv->_tcp_cls = tcp_cls;
     srv->_unix_cls = unix_cls;
 
-    /* TCP daemon */
+    /* TCP daemon. MHD_OPTION_LISTENING_ADDRESS_REUSE sets SO_REUSEADDR on the
+     * listen socket so a restart can rebind while the previous instance's
+     * socket is still in TIME_WAIT — without it, systemctl restart races
+     * the kernel's socket cleanup and the new daemon refuses to start. */
     if (tcp_port > 0) {
         srv->tcp_daemon = MHD_start_daemon(
             MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
             (uint16_t)tcp_port,
             NULL, NULL,
             request_handler, tcp_cls,
+            MHD_OPTION_LISTENING_ADDRESS_REUSE, (unsigned int)1,
             MHD_OPTION_END);
 
         if (!srv->tcp_daemon) {
