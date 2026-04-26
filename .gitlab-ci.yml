@@ -31,8 +31,18 @@ test:
   script:
     - export BUN_INSTALL="$HOME/.bun"
     - export PATH="$BUN_INSTALL/bin:$PATH"
-    - make CUTILS_DIR=/tmp/c-utils test
-    - cd frontend && bun install --frozen-lockfile && bun run test
+    - make CUTILS_DIR=/tmp/c-utils test-junit
+    - cd frontend && bun install --frozen-lockfile && bun run test:junit
+  artifacts:
+    when: always
+    paths:
+      - build/tests/*.junit.xml
+      - frontend/test-results.junit.xml
+    reports:
+      junit:
+        - build/tests/*.junit.xml
+        - frontend/test-results.junit.xml
+    expire_in: 1 week
 
 # Static analysis: cppcheck + stack-usage + gcc-fanalyzer + clang-tidy.
 analyze:
