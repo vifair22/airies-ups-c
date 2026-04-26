@@ -348,7 +348,14 @@ flowchart LR
   test --> coverage
   test --> build
   analyze --> build
-  build -->|master only| deploy
+  build -->|master only| generate
+  generate --> child
+  subgraph child[child pipeline]
+    direction LR
+    deploy_upspi
+    deploy_upspi2
+    deploy_upspi3
+  end
 ```
 
 | Stage | Job | What it does |
@@ -357,7 +364,9 @@ flowchart LR
 | analyze | `analyze` | `make analyze` (cppcheck, stack-usage, gcc-fanalyzer) and `make lint` (clang-tidy) |
 | analyze | `coverage` | `make coverage`, gates on **75%** line coverage (`gcovr --fail-under-line 75`) — ratchet up toward 80% as new tests land |
 | build | `build` | Cross-compiles to aarch64 against Debian multi-arch arm64 libs, asserts `file` reports ARM aarch64, publishes binaries as artifacts |
-| deploy | `deploy` | Master only. SSH/rsync binaries to each host in `$UPS_DEPLOY_HOSTS`, `systemctl restart airies-ups.service`, verify active. Sequential — a failed restart on host N stops host N+1 |
+| deploy | `generate_deploy_child_pipeline` | Master only. Reads `$UPS_DEPLOY_HOSTS` and emits `deploy-child.yml` with one deploy job per host |
+| deploy | `deploy` (trigger) | Master only. Includes the generated `deploy-child.yml`; `strategy: depend` so the parent reflects child pipeline status |
+| deploy *(child)* | `deploy_<host>` | One per hostname. SSH/rsync binaries to the host, `systemctl restart airies-ups.service`, verify active. Children run in parallel — UPS daemons are independent and a synchronized bounce is acceptable |
 
 ### Required CI/CD variables
 

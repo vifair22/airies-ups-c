@@ -139,10 +139,11 @@ build:
       - 99-airies-ups-ftdi.rules
     expire_in: 1 month
 
-# Push deploy: rsync binaries to each Pi and bounce the service. Sequential so
-# a failed restart on one host stops the run before bouncing the others —
-# important for a UPS daemon (don't kick all three Pis if one is broken).
-deploy:
+# Push deploy via dynamically-generated child pipeline. One job per host in
+# $UPS_DEPLOY_HOSTS so each shows up as its own line in the pipeline graph
+# and can be retried independently. Children run in parallel — UPS daemons
+# are independent across Pis and a synchronized bounce is acceptable.
+generate_deploy_child_pipeline:
   stage: deploy
   image: debian:trixie
   tags:
@@ -154,27 +155,80 @@ deploy:
     - if: '$CI_COMMIT_BRANCH == "master"'
   before_script:
     - apt-get update -qq
-    - apt-get install -y --no-install-recommends openssh-client rsync ca-certificates
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519
-    - chmod 600 ~/.ssh/id_ed25519
-    - |
-      for host in $UPS_DEPLOY_HOSTS; do
-        ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
-      done
+    - apt-get install -y --no-install-recommends python3
   script:
     - |
       set -euo pipefail
-      for host in $UPS_DEPLOY_HOSTS; do
-        echo "==> [$host] rsync binaries"
-        ssh "sysadmin@$host" "mkdir -p /home/sysadmin/airies-ups/build"
-        rsync -az build/airies-upsd build/airies-ups \
-          "sysadmin@$host:/home/sysadmin/airies-ups/build/"
+      : "${UPS_DEPLOY_HOSTS:?UPS_DEPLOY_HOSTS is not set}"
+      python3 - <<'PY'
+      import os, re, sys
 
-        echo "==> [$host] restart airies-ups.service"
-        ssh "sysadmin@$host" "sudo systemctl restart airies-ups.service"
-        sleep 2
-        ssh "sysadmin@$host" "systemctl is-active airies-ups.service"
-        echo "==> [$host] OK"
-      done
+      raw = os.environ.get("UPS_DEPLOY_HOSTS", "")
+      hosts = [h.strip() for h in raw.splitlines()
+               if h.strip() and not h.strip().startswith("#")]
+      if not hosts:
+          print("UPS_DEPLOY_HOSTS is empty", file=sys.stderr)
+          sys.exit(1)
+
+      def slug(h):
+          return re.sub(r"[^a-zA-Z0-9]+", "_", h).strip("_")
+
+      def q(s):
+          return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+      out = ["stages: [deploy]", ""]
+      for host in hosts:
+          name = "deploy_" + slug(host)
+          out += [
+              f"{name}:",
+              "  stage: deploy",
+              "  image: debian:trixie",
+              "  tags: [docker, unraid]",
+              "  variables:",
+              f"    UPS_HOST: {q(host)}",
+              "  needs:",
+              "    - pipeline: $CI_PARENT_PIPELINE_ID",
+              "      job: build",
+              "      artifacts: true",
+              "  before_script:",
+              "    - apt-get update -qq",
+              "    - apt-get install -y --no-install-recommends openssh-client rsync ca-certificates",
+              "    - mkdir -p ~/.ssh && chmod 700 ~/.ssh",
+              '    - cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519',
+              "    # GitLab File variables strip trailing newlines;",
+              '    # OpenSSH refuses to load the key with "error in libcrypto" without one.',
+              "    - printf '\\n' >> ~/.ssh/id_ed25519",
+              "    - chmod 600 ~/.ssh/id_ed25519",
+              '    - ssh-keyscan -H "$UPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null',
+              "  script:",
+              '    - ssh "sysadmin@$UPS_HOST" "mkdir -p /home/sysadmin/airies-ups/build"',
+              "    - rsync -az build/airies-upsd build/airies-ups"
+              ' "sysadmin@$UPS_HOST:/home/sysadmin/airies-ups/build/"',
+              '    - ssh "sysadmin@$UPS_HOST" "sudo systemctl restart airies-ups.service"',
+              "    - sleep 2",
+              '    - ssh "sysadmin@$UPS_HOST" "systemctl is-active airies-ups.service"',
+              "",
+          ]
+
+      with open("deploy-child.yml", "w", encoding="utf-8") as f:
+          f.write("\n".join(out))
+
+      print(f"Generated deploy-child.yml with {len(hosts)} job(s).")
+      PY
+    - cat deploy-child.yml
+  artifacts:
+    paths:
+      - deploy-child.yml
+    expire_in: 1 hour
+
+deploy:
+  stage: deploy
+  needs:
+    - generate_deploy_child_pipeline
+  trigger:
+    include:
+      - artifact: deploy-child.yml
+        job: generate_deploy_child_pipeline
+    strategy: depend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
