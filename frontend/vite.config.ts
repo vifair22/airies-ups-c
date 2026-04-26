@@ -22,11 +22,19 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     css: false,
     coverage: {
+      provider: 'istanbul',
+      include: ['src/**'],
       exclude: [
         'src/pages/Telemetry.tsx',
         'src/pages/DevPowerFlow.tsx',
         'src/test/**',
+        'src/**/*.test.{ts,tsx}',
+        'src/main.tsx',
+        'src/env.d.ts',
+        'src/types/**',
       ],
+      reporter: ['text', 'cobertura'],
+      reportsDirectory: './coverage',
     },
   },
 })

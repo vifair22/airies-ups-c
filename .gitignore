@@ -33,3 +33,5 @@ frontend/test-results.junit.xml
 # OS
 .DS_Store
 .cache/
+
+todo.md
