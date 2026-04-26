@@ -9,6 +9,7 @@ import UpsConfig from './pages/UpsConfig'
 import AppConfig from './pages/AppConfig'
 import ShutdownConfig from './pages/ShutdownConfig'
 import WeatherConfig from './pages/WeatherConfig'
+import About from './pages/About'
 import Login from './pages/Login'
 import Setup from './pages/Setup'
 
@@ -75,6 +76,7 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/events" element={<Events />} />
         <Route path="/commands" element={<Commands />} />
+        <Route path="/about" element={<About />} />
         <Route path="/config/ups" element={<UpsConfig />} />
         <Route path="/config/app" element={<AppConfig />} />
         <Route path="/config/shutdown" element={<ShutdownConfig />} />

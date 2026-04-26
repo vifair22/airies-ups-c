@@ -46,7 +46,7 @@ const mockRegs: ConfigReg[] = [
     ],
   },
   {
-    name: 'battery_voltage', display_name: 'Battery Voltage', type: 'number',
+    name: 'battery_voltage', display_name: 'Battery Voltage', type: 'scalar',
     raw_value: 546, value: 54.6, writable: false, group: 'battery',
   },
 ]
