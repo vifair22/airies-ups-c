@@ -65,11 +65,12 @@ analyze:
     - make CUTILS_DIR=/tmp/c-utils analyze
     - make CUTILS_DIR=/tmp/c-utils lint
 
-# Coverage report + threshold gate. Threshold is currently 75% (matches the
-# present baseline); ratchet up toward the global 80% standard as new tests
-# land. The gcovr line-coverage percentage is exposed to GitLab via the
-# `coverage:` regex below so it shows up on MRs and the project dashboard.
-coverage:
+# Backend (C) coverage report + threshold gate. Threshold is currently 75%
+# (matches the present baseline); ratchet up toward the global 80% standard
+# as new tests land. Cobertura artifact lets GitLab annotate per-file
+# coverage in the MR diff view; the `coverage:` regex below feeds the
+# pipeline-view percentage and the project's default coverage badge.
+coverage:backend:
   stage: analyze
   image: debian:trixie
   tags:
@@ -90,6 +91,7 @@ coverage:
   script:
     - make CUTILS_DIR=/tmp/c-utils coverage
     - gcovr --root . --filter 'src/' --exclude 'src/daemon/'
+        --cobertura build/coverage/cobertura.xml
         --fail-under-line "$COVERAGE_LINE_THRESHOLD"
         --print-summary
   coverage: '/^lines: (\d+\.\d+)%/'
@@ -97,6 +99,50 @@ coverage:
     when: always
     paths:
       - build/coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: build/coverage/cobertura.xml
+    expire_in: 1 week
+
+# Frontend (TypeScript/React) coverage. Vitest under Bun cannot use the
+# v8 provider (no Node inspector exposed), so we run the istanbul provider
+# instead — configured in frontend/vite.config.ts. Threshold is currently
+# 70% (baseline is ~72%); ratchet up toward 80% as new tests land. The
+# threshold is passed via CLI so local `bun run test:coverage` stays
+# unhampered. Cobertura artifact merges with the backend one in the MR
+# diff view, giving per-file annotations across both stacks.
+coverage:frontend:
+  stage: analyze
+  image: debian:trixie
+  tags:
+    - docker
+  needs:
+    - test
+  variables:
+    COVERAGE_LINE_THRESHOLD: "70"
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends curl ca-certificates unzip
+    - curl -fsSL https://bun.sh/install | bash
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+  script:
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - cd frontend
+    - bun install --frozen-lockfile
+    - bun run vitest run --coverage
+        --coverage.thresholds.lines="$COVERAGE_LINE_THRESHOLD"
+  coverage: '/^Lines\s*:\s*(\d+\.\d+)%/'
+  artifacts:
+    when: always
+    paths:
+      - frontend/coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: frontend/coverage/cobertura-coverage.xml
     expire_in: 1 week
 
 # Cross-compile to aarch64 against Debian multi-arch arm64 runtime libs. The
