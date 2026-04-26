@@ -334,10 +334,13 @@ static int read_and_save_param(weather_t *w)
     const ups_config_reg_t *reg = ups_find_config_reg(w->ups, w->control_register);
     if (!reg) return -1;
 
-    uint16_t current = 0;
+    uint32_t current = 0;
     int rc = ups_config_read(w->ups, reg, &current, NULL, 0);
     if (rc == 0) {
-        w->saved_value = current;
+        /* weather only ever targets writable config registers, all of
+         * which are uint16 — narrow the read value to match the saved
+         * field width and the write_param signature. */
+        w->saved_value = (uint16_t)current;
         w->has_saved = 1;
         log_info("weather: saved current %s=%u before override",
                  w->control_register, current);

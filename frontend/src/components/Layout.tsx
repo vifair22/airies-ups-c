@@ -7,6 +7,7 @@ const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
   { to: '/events', label: 'Events', icon: '!' },
   { to: '/commands', label: 'Commands', icon: '>' },
+  { to: '/about', label: 'About', icon: '?' },
 ]
 
 const configNav = [

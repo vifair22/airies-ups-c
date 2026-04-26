@@ -24,7 +24,18 @@
 
 /* --- UPS config register JSON --- */
 
-static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
+static const char *category_name(ups_reg_category_t c)
+{
+    switch (c) {
+    case UPS_REG_CATEGORY_CONFIG:      return "config";
+    case UPS_REG_CATEGORY_MEASUREMENT: return "measurement";
+    case UPS_REG_CATEGORY_IDENTITY:    return "identity";
+    case UPS_REG_CATEGORY_DIAGNOSTIC:  return "diagnostic";
+    }
+    return "config";
+}
+
+static cJSON *reg_to_json(const ups_config_reg_t *reg, uint32_t raw,
                           const char *str_val)
 {
     cJSON *obj = cJSON_CreateObject();
@@ -32,14 +43,23 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
     cJSON_AddStringToObject(obj, "display_name", reg->display_name);
     if (reg->unit) cJSON_AddStringToObject(obj, "unit", reg->unit);
     if (reg->group) cJSON_AddStringToObject(obj, "group", reg->group);
-    cJSON_AddNumberToObject(obj, "raw_value", raw);
+    cJSON_AddStringToObject(obj, "category", category_name(reg->category));
+    cJSON_AddNumberToObject(obj, "raw_value", (double)raw);
     cJSON_AddBoolToObject(obj, "writable", reg->writable);
+
+    /* Sentinel: driver flagged this raw value as "not applicable on this
+     * firmware/SKU" (e.g. SMT bypass voltage = 0xFFFF, load shed = 0x0000).
+     * Frontend renders is_sentinel as "N/A" instead of decoding. */
+    int is_sentinel = reg->has_sentinel && raw == reg->sentinel_value;
+    if (is_sentinel)
+        cJSON_AddBoolToObject(obj, "is_sentinel", true);
 
     double scaled = (reg->scale > 1) ? (double)raw / reg->scale : (double)raw;
     cJSON_AddNumberToObject(obj, "value", scaled);
 
     /* Add human-readable date for date fields */
-    if (reg->unit && strcmp(reg->unit, "days since 2000-01-01") == 0 && raw > 0) {
+    if (reg->unit && strcmp(reg->unit, "days since 2000-01-01") == 0 && raw > 0
+        && !is_sentinel) {
         time_t epoch = 946684800 + (time_t)raw * 86400;
         struct tm tm;
         gmtime_r(&epoch, &tm);
@@ -75,6 +95,34 @@ static cJSON *reg_to_json(const ups_config_reg_t *reg, uint16_t raw,
         }
         cJSON_AddItemToObject(obj, "options", opts);
         cJSON_AddBoolToObject(obj, "strict", reg->meta.bitfield.strict);
+    } else if (reg->type == UPS_CFG_FLAGS) {
+        /* Multi-bit field: emit every opts[] entry whose value bits are
+         * set in raw. Used for status / error registers where many bits
+         * can be active simultaneously (e.g. UPS Status: OnLine | HE Mode). */
+        cJSON_AddStringToObject(obj, "type", "flags");
+        cJSON *active = cJSON_CreateArray();
+        for (size_t i = 0; i < reg->meta.bitfield.count; i++) {
+            uint32_t mask = reg->meta.bitfield.opts[i].value;
+            if (mask != 0 && (raw & mask) == mask) {
+                cJSON *flag = cJSON_CreateObject();
+                cJSON_AddNumberToObject(flag, "value", mask);
+                cJSON_AddStringToObject(flag, "name",  reg->meta.bitfield.opts[i].name);
+                cJSON_AddStringToObject(flag, "label", reg->meta.bitfield.opts[i].label);
+                cJSON_AddItemToArray(active, flag);
+            }
+        }
+        cJSON_AddItemToObject(obj, "active_flags", active);
+        /* Also emit the full opts[] catalog so the UI can show "this bit
+         * is defined but not currently set" if it wants to. */
+        cJSON *opts = cJSON_CreateArray();
+        for (size_t i = 0; i < reg->meta.bitfield.count; i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "value", reg->meta.bitfield.opts[i].value);
+            cJSON_AddStringToObject(o, "name",  reg->meta.bitfield.opts[i].name);
+            cJSON_AddStringToObject(o, "label", reg->meta.bitfield.opts[i].label);
+            cJSON_AddItemToArray(opts, o);
+        }
+        cJSON_AddItemToObject(obj, "options", opts);
     } else if (reg->type == UPS_CFG_STRING) {
         cJSON_AddStringToObject(obj, "type", "string");
         if (reg->meta.string.max_chars != 0)
@@ -101,7 +149,7 @@ static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
         const ups_config_reg_t *reg = ups_find_config_reg(ctx->ups, name);
         if (!reg) return api_error(404, "register not found");
 
-        uint16_t raw = 0;
+        uint32_t raw = 0;
         char str_buf[64] = "";
         if (ups_config_read(ctx->ups, reg, &raw,
                             reg->type == UPS_CFG_STRING ? str_buf : NULL,
@@ -120,9 +168,14 @@ static api_response_t handle_config_ups_get(const api_request_t *req, void *ud)
     if (!regs || count == 0)
         return api_ok(strdup("[]"));
 
+    /* /api/config/ups is the operator-facing settings list — filter to
+     * CONFIG-category entries so MEASUREMENT/IDENTITY/DIAGNOSTIC don't
+     * flood the page. /api/about is the "everything" view. */
     cJSON *arr = cJSON_CreateArray();
     for (size_t i = 0; i < count; i++) {
-        uint16_t raw = 0;
+        if (regs[i].category != UPS_REG_CATEGORY_CONFIG) continue;
+
+        uint32_t raw = 0;
         char str_buf[64] = "";
         if (ups_config_read(ctx->ups, &regs[i], &raw,
                             regs[i].type == UPS_CFG_STRING ? str_buf : NULL,
@@ -227,7 +280,7 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
         return api_ok_status(400, ejson);
     }
 
-    uint16_t readback = 0;
+    uint32_t readback = 0;
     /* Best-effort readback for the snapshot insert below; a failure here
      * just means the "display_value" will reflect 0 in the audit trail. */
     CUTILS_UNUSED(ups_config_read(ctx->ups, reg, &readback, NULL, 0));
@@ -260,7 +313,7 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
 
     cJSON *resp = reg_to_json(reg, readback, NULL);
     if (rc != 0) {
-        if (readback != val)
+        if (readback != (uint32_t)val)
             cJSON_AddStringToObject(resp, "result", "rejected");
         else
             cJSON_AddStringToObject(resp, "result", "written");
@@ -274,6 +327,56 @@ static api_response_t handle_config_ups_set(const api_request_t *req, void *ud)
         strcmp(reg->name, "transfer_low") == 0)
         api_refresh_thresholds(ctx);
 
+    return api_ok(json);
+}
+
+/* --- About (device facts) endpoint ---
+ * Co-located with config because it reuses reg_to_json. Returns the full
+ * picture of what the driver knows about the device: inventory
+ * (ups_inventory_t identity fields) + every config_reg the driver
+ * exposes (writable and read-only alike). Read-only view; the UI does
+ * not offer edits here — that's what the dedicated config page is for. */
+
+static api_response_t handle_about(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+
+    cJSON *root = cJSON_CreateObject();
+
+    if (ctx->monitor) {
+        ups_inventory_t inv;
+        if (monitor_get_inventory(ctx->monitor, &inv) == 0) {
+            cJSON *inventory = cJSON_CreateObject();
+            cJSON_AddStringToObject(inventory, "model",         inv.model);
+            cJSON_AddStringToObject(inventory, "sku",           inv.sku);
+            cJSON_AddStringToObject(inventory, "serial",        inv.serial);
+            cJSON_AddStringToObject(inventory, "firmware",      inv.firmware);
+            cJSON_AddNumberToObject(inventory, "nominal_va",    inv.nominal_va);
+            cJSON_AddNumberToObject(inventory, "nominal_watts", inv.nominal_watts);
+            cJSON_AddNumberToObject(inventory, "sog_config",    inv.sog_config);
+            cJSON_AddItemToObject(root, "inventory", inventory);
+        }
+    }
+
+    cJSON *registers = cJSON_CreateArray();
+    if (ctx->ups) {
+        size_t count;
+        const ups_config_reg_t *regs = ups_get_config_regs(ctx->ups, &count);
+        for (size_t i = 0; i < count; i++) {
+            uint32_t raw = 0;
+            char str_buf[64] = "";
+            if (ups_config_read(ctx->ups, &regs[i], &raw,
+                                regs[i].type == UPS_CFG_STRING ? str_buf : NULL,
+                                sizeof(str_buf)) == 0)
+                cJSON_AddItemToArray(registers, reg_to_json(&regs[i], raw,
+                    regs[i].type == UPS_CFG_STRING ? str_buf : NULL));
+        }
+    }
+    cJSON_AddItemToObject(root, "registers", registers);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
     return api_ok(json);
 }
 
@@ -363,4 +466,6 @@ void api_register_config_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/config/ups",   API_POST, handle_config_ups_set, ctx);
     api_server_route(srv, "/api/config/app",   API_GET,  handle_app_config_get, ctx);
     api_server_route(srv, "/api/config/app",   API_POST, handle_app_config_set, ctx);
+
+    api_server_route(srv, "/api/about",        API_GET,  handle_about,          ctx);
 }

@@ -451,7 +451,7 @@ const ups_config_reg_t *ups_find_config_reg(const ups_t *ups, const char *name)
 }
 
 int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
-                    uint16_t *raw_value, char *str_buf, size_t str_bufsz)
+                    uint32_t *raw_value, char *str_buf, size_t str_bufsz)
 {
     if (!ups->driver->config_read) return UPS_ERR_NOT_SUPPORTED;
     CUTILS_LOCK_GUARD(&ups->cmd_mutex);
@@ -493,6 +493,13 @@ static int ups_config_validate(const ups_config_reg_t *reg, uint16_t value)
     case UPS_CFG_STRING:
         /* String writes don't go through this path; the string-write
          * helper enforces max_chars at its own boundary. */
+        return UPS_OK;
+    case UPS_CFG_FLAGS:
+        /* FLAGS descriptors are read-only diagnostics (status bits,
+         * error registers); no driver currently writes them. If/when a
+         * future driver does, validation should ensure the value covers
+         * only declared bits — until then, accept and let the driver
+         * reject if needed. */
         return UPS_OK;
     }
     return UPS_OK;

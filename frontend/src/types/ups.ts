@@ -7,6 +7,7 @@ export interface UpsStatus {
   message?: string
   inventory?: {
     model: string
+    sku?: string
     serial: string
     firmware: string
     nominal_va: number

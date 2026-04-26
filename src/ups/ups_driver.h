@@ -163,7 +163,19 @@ typedef enum {
     UPS_CFG_SCALAR,     /* unsigned integer; apply `scale` divisor to display */
     UPS_CFG_BITFIELD,   /* one-bit-set enum; look up the matching option */
     UPS_CFG_STRING,     /* multiple registers, 2 ASCII chars per register */
+    UPS_CFG_FLAGS,      /* multi-bit field; decode every set bit via opts[] */
 } ups_cfg_type_t;
+
+/* Semantic class of a register descriptor. The /api/config/ups endpoint
+ * filters to UPS_REG_CATEGORY_CONFIG so the operator-facing settings page
+ * isn't flooded with read-only diagnostics. /api/about returns every
+ * category. Default 0 = CONFIG so existing entries don't need annotation. */
+typedef enum {
+    UPS_REG_CATEGORY_CONFIG = 0,    /* tunable / operator-facing setting */
+    UPS_REG_CATEGORY_MEASUREMENT,   /* live numeric reading (voltage, load, etc.) */
+    UPS_REG_CATEGORY_IDENTITY,      /* static device fact (model, serial, ratings) */
+    UPS_REG_CATEGORY_DIAGNOSTIC,    /* status bits, error flags, test progress */
+} ups_reg_category_t;
 
 /* One named option for a BITFIELD config register.
  *
@@ -176,7 +188,10 @@ typedef enum {
  * rejected values back. When `bitfield.strict` is set on the
  * descriptor, the registry blocks writes of any value not in opts[]. */
 typedef struct {
-    uint16_t    value;  /* raw register value (usually a single bit set) */
+    uint32_t    value;  /* raw register value or bit mask. uint32 so that
+                         * UPS_CFG_FLAGS descriptors against 32-bit
+                         * registers (UPSStatus, PowerSystemError, outlet
+                         * group status) can name bits beyond bit 15. */
     const char *name;   /* API key (e.g. "onstart_plus_7") */
     const char *label;  /* display ("On startup + every 7 days") */
 } ups_bitfield_opt_t;
@@ -229,11 +244,20 @@ typedef struct {
             const ups_bitfield_opt_t *opts;
             size_t                    count;
             int                       strict;  /* 1 = reject writes not in opts[] */
-        } bitfield;           /* UPS_CFG_BITFIELD */
+        } bitfield;           /* UPS_CFG_BITFIELD and UPS_CFG_FLAGS */
         struct {
             size_t max_chars; /* enforced on string writes */
         } string;             /* UPS_CFG_STRING */
     } meta;
+
+    /* Appended fields. Default-zero is safe for every existing entry: 0 =
+     * CONFIG category and no sentinel. Append-only here keeps positional
+     * initializers in the existing srt_config_regs[] / smt_config_regs[] /
+     * backups_config_regs[] tables valid; new entries should use designated
+     * initializers when they need to set these. */
+    ups_reg_category_t category;       /* default 0 = CONFIG */
+    int                has_sentinel;   /* 1 = sentinel_value means "N/A" */
+    uint32_t           sentinel_value; /* compared against the raw read value */
 } ups_config_reg_t;
 
 /* ---------------------------------------------------------------------------
@@ -420,7 +444,7 @@ typedef struct ups_driver {
      *               failure. The registry guarantees a 100 ms inter-write
      *               delay and reads the value back afterwards. */
     int (*config_read)(void *transport, const ups_config_reg_t *reg,
-                       uint16_t *raw_value, char *str_buf, size_t str_bufsz);
+                       uint32_t *raw_value, char *str_buf, size_t str_bufsz);
     int (*config_write)(void *transport, const ups_config_reg_t *reg, uint16_t value);
 } ups_driver_t;
 
