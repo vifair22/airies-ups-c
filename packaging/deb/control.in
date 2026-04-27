@@ -5,7 +5,7 @@ Priority: optional
 Architecture: @ARCH@
 Maintainer: XxI0NICxX <vifair22@gmail.com>
 Homepage: https://git.airies.net/vifair22/airies-ups-c
-Depends: libc6, libmodbus5, libsqlite3-0, libcurl4t64, libmicrohttpd12t64, libssl3t64, systemd, adduser
+Depends: libc6, libmodbus5, libsqlite3-0, libcurl4t64 | libcurl4, libmicrohttpd12t64 | libmicrohttpd12, libssl3t64 | libssl3, systemd, adduser
 Recommends: udev
 Description: APC and CyberPower UPS management daemon
  airies-ups is a self-contained UPS management daemon that talks
