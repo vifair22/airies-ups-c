@@ -362,7 +362,13 @@ release:nightly:
 # fails loudly if the variable is missing rather than silently skipping.
 release:auto-tag:
   stage: release
-  image: alpine/git:latest
+  # alpine/git's ENTRYPOINT is `git`, so a plain `image: alpine/git:latest`
+  # makes CI's `sh -c "<step_script>"` resolve as `git sh -c "..."` and die
+  # with `'sh' is not a git command`. Override the entrypoint so the runner
+  # can invoke /bin/sh normally; the image still has `git` on PATH.
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
   tags:
     - docker
   needs:
