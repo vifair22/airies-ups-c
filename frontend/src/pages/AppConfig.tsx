@@ -121,7 +121,7 @@ function PasswordChange() {
         <h3 className="text-xs font-medium text-muted uppercase tracking-wider">Admin Password</h3>
       </div>
       <div className="px-4 py-3 space-y-3">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <label className="text-xs text-muted">Current Password</label>
             <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)}
@@ -161,7 +161,7 @@ function ConfigRow({ entry, saving, onSave }: {
   const isDefault = entry.value === entry.default_value
 
   return (
-    <div className="flex items-center gap-4 px-4 py-3">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <label className="text-sm text-primary font-medium">{subKey}</label>
@@ -174,20 +174,22 @@ function ConfigRow({ entry, saving, onSave }: {
           <p className="text-[10px] text-faint mt-0.5">default: {entry.default_value}</p>
         )}
       </div>
-      <input
-        type={entry.type === 'int' ? 'number' : 'text'}
-        value={val}
-        onChange={(e) => setVal(e.target.value)}
-        className="bg-field border border-edge-strong rounded px-3 py-1.5 text-sm w-28 text-right font-mono"
-      />
-      {changed && (
-        <button
-          onClick={() => onSave(entry.key, val)}
-          disabled={saving === entry.key}
-          className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs shrink-0 transition-colors">
-          {saving === entry.key ? '...' : 'Save'}
-        </button>
-      )}
+      <div className="flex items-center gap-2 sm:gap-4">
+        <input
+          type={entry.type === 'int' ? 'number' : 'text'}
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          className="flex-1 sm:flex-none sm:w-28 bg-field border border-edge-strong rounded px-3 py-1.5 text-sm text-right font-mono"
+        />
+        {changed && (
+          <button
+            onClick={() => onSave(entry.key, val)}
+            disabled={saving === entry.key}
+            className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs shrink-0 transition-colors">
+            {saving === entry.key ? '...' : 'Save'}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

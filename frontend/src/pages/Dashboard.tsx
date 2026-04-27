@@ -459,7 +459,7 @@ export default function Dashboard() {
           {s.outlets && (
             <div className="mt-3 pt-3 border-t border-edge">
               <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Outlet Groups</h4>
-              <div className={`grid gap-4 ${hasSog(sogCfg, 0) || hasSog(sogCfg, 1) ? 'grid-cols-3' : 'grid-cols-1'}`}>
+              <div className={`grid gap-4 ${hasSog(sogCfg, 0) || hasSog(sogCfg, 1) ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1'}`}>
                 <OutletBadge label="Main (MOG)" raw={s.outlets.mog} />
                 {hasSog(sogCfg, 0) && <OutletBadge label="SOG 0" raw={s.outlets.sog0} />}
                 {hasSog(sogCfg, 1) && <OutletBadge label="SOG 1" raw={s.outlets.sog1} />}
@@ -469,7 +469,7 @@ export default function Dashboard() {
           {s.timers && (s.timers.shutdown > 0 || s.timers.start > 0 || s.timers.reboot > 0) && (
             <div className="mt-3 pt-3 border-t border-edge">
               <h4 className="text-[10px] font-medium text-muted uppercase tracking-wider mb-1">Active Timers</h4>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {s.timers.shutdown > 0 && <Metric label="Turn Off" value={`${s.timers.shutdown}s`} accent="text-red-400" />}
                 {s.timers.start > 0 && <Metric label="Turn On" value={`${s.timers.start}s`} accent="text-green-400" />}
                 {s.timers.reboot > 0 && <Metric label="Stay Off" value={`${s.timers.reboot}s`} accent="text-yellow-400" />}

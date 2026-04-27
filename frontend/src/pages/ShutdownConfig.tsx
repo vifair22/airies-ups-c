@@ -135,9 +135,9 @@ export default function ShutdownConfig() {
 
               {trigger.source === 'runtime' && (
                 <div className="flex gap-3 items-end flex-wrap">
-                  <Field label="Runtime Below (s)" type="number" value={String(trigger.runtime_sec)} width="w-24"
+                  <Field label="Runtime Below (s)" type="number" value={String(trigger.runtime_sec)} width="w-full sm:w-24"
                     onChange={(v) => { setTrigger({ ...trigger, runtime_sec: parseInt(v) || 0 }); setSettingsDirty(true) }} />
-                  <Field label="Battery Below (%)" type="number" value={String(trigger.battery_pct)} width="w-24"
+                  <Field label="Battery Below (%)" type="number" value={String(trigger.battery_pct)} width="w-full sm:w-24"
                     onChange={(v) => { setTrigger({ ...trigger, battery_pct: parseInt(v) || 0 }); setSettingsDirty(true) }} />
                   <p className="text-xs text-muted pb-1">Set to 0 to disable that condition.</p>
                 </div>
@@ -146,19 +146,19 @@ export default function ShutdownConfig() {
               {trigger.source === 'field' && (
                 <div className="space-y-2">
                   <div className="flex gap-3 items-end flex-wrap">
-                    <Field label="Field" value={trigger.field} width="w-36"
+                    <Field label="Field" value={trigger.field} width="w-full sm:w-36"
                       onChange={(v) => { setTrigger({ ...trigger, field: v }); setSettingsDirty(true) }} />
                     <div>
                       <label className="text-xs text-muted">Operator</label>
                       <select value={trigger.field_op}
                         onChange={(e) => { setTrigger({ ...trigger, field_op: e.target.value }); setSettingsDirty(true) }}
-                        className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm mt-0.5 w-20">
+                        className="block bg-field border border-edge-strong rounded px-2 py-1 text-sm mt-0.5 w-full sm:w-20">
                         <option value="lt">&lt;</option>
                         <option value="gt">&gt;</option>
                         <option value="eq">=</option>
                       </select>
                     </div>
-                    <Field label="Value" type="number" value={String(trigger.field_value)} width="w-20"
+                    <Field label="Value" type="number" value={String(trigger.field_value)} width="w-full sm:w-20"
                       onChange={(v) => { setTrigger({ ...trigger, field_value: parseInt(v) || 0 }); setSettingsDirty(true) }} />
                   </div>
                   <p className="text-[10px] text-faint">
@@ -168,7 +168,7 @@ export default function ShutdownConfig() {
               )}
 
               <div className="border-t border-edge pt-3 flex gap-3 items-end flex-wrap">
-                <Field label="Debounce (s)" type="number" value={String(trigger.delay_sec)} width="w-20"
+                <Field label="Debounce (s)" type="number" value={String(trigger.delay_sec)} width="w-full sm:w-20"
                   onChange={(v) => { setTrigger({ ...trigger, delay_sec: parseInt(v) || 0 }); setSettingsDirty(true) }} />
                 <label className="flex items-center gap-1 text-sm pb-1">
                   <input type="checkbox" checked={trigger.on_battery}
@@ -227,11 +227,11 @@ export default function ShutdownConfig() {
           <div className="flex gap-3 items-end flex-wrap">
             <Field label="Name" value={newGroup.name}
               onChange={(v) => setNewGroup({ ...newGroup, name: v })} />
-            <Field label="Order" type="number" value={String(newGroup.execution_order)} width="w-16"
+            <Field label="Order" type="number" value={String(newGroup.execution_order)} width="w-full sm:w-16"
               onChange={(v) => setNewGroup({ ...newGroup, execution_order: parseInt(v) || 0 })} />
-            <Field label="Max Timeout (s)" type="number" value={String(newGroup.max_timeout_sec)} width="w-20"
+            <Field label="Max Timeout (s)" type="number" value={String(newGroup.max_timeout_sec)} width="w-full sm:w-20"
               onChange={(v) => setNewGroup({ ...newGroup, max_timeout_sec: parseInt(v) || 0 })} />
-            <Field label="Post Delay (s)" type="number" value={String(newGroup.post_group_delay)} width="w-20"
+            <Field label="Post Delay (s)" type="number" value={String(newGroup.post_group_delay)} width="w-full sm:w-20"
               onChange={(v) => setNewGroup({ ...newGroup, post_group_delay: parseInt(v) || 0 })} />
             <label className="flex items-center gap-1 text-sm pb-1">
               <input type="checkbox" checked={newGroup.parallel}
@@ -274,10 +274,10 @@ export default function ShutdownConfig() {
             <p className="text-xs text-muted">Sends the driver's shutdown command to the UPS.</p>
           )}
           {upsAction.mode === 'register' && (
-            <div className="flex gap-3 items-end">
-              <Field label="Register" value={upsAction.register} width="w-40"
+            <div className="flex gap-3 items-end flex-wrap">
+              <Field label="Register" value={upsAction.register} width="w-full sm:w-40"
                 onChange={(v) => { setUpsAction({ ...upsAction, register: v }); setSettingsDirty(true) }} />
-              <Field label="Value" type="number" value={String(upsAction.value)} width="w-20"
+              <Field label="Value" type="number" value={String(upsAction.value)} width="w-full sm:w-20"
                 onChange={(v) => { setUpsAction({ ...upsAction, value: parseInt(v) || 0 }); setSettingsDirty(true) }} />
             </div>
           )}
@@ -287,7 +287,7 @@ export default function ShutdownConfig() {
 
           {upsAction.mode !== 'none' && (
             <div className="flex items-center gap-2">
-              <Field label="Post-Action Delay (s)" type="number" value={String(upsAction.delay)} width="w-20"
+              <Field label="Post-Action Delay (s)" type="number" value={String(upsAction.delay)} width="w-full sm:w-20"
                 onChange={(v) => { setUpsAction({ ...upsAction, delay: parseInt(v) || 0 }); setSettingsDirty(true) }} />
             </div>
           )}
@@ -343,15 +343,15 @@ function GroupCard({ group, targets, editing, onEdit, onCancelEdit, onSave, onDe
   return (
     <div className="rounded-lg bg-panel border border-edge mb-4">
       {/* Group header */}
-      <div className="px-4 py-2.5 border-b border-edge flex items-center gap-3">
+      <div className="px-4 py-2.5 border-b border-edge flex flex-wrap items-center gap-x-3 gap-y-1">
         {editing ? (
           <div className="flex-1 flex gap-2 items-end flex-wrap">
             <Field label="Name" value={editGroup.name} onChange={(v) => setEditGroup({ ...editGroup, name: v })} />
-            <Field label="Order" type="number" value={String(editGroup.execution_order)} width="w-16"
+            <Field label="Order" type="number" value={String(editGroup.execution_order)} width="w-full sm:w-16"
               onChange={(v) => setEditGroup({ ...editGroup, execution_order: parseInt(v) || 0 })} />
-            <Field label="Max Timeout (s)" type="number" value={String(editGroup.max_timeout_sec)} width="w-20"
+            <Field label="Max Timeout (s)" type="number" value={String(editGroup.max_timeout_sec)} width="w-full sm:w-20"
               onChange={(v) => setEditGroup({ ...editGroup, max_timeout_sec: parseInt(v) || 0 })} />
-            <Field label="Post Delay (s)" type="number" value={String(editGroup.post_group_delay)} width="w-20"
+            <Field label="Post Delay (s)" type="number" value={String(editGroup.post_group_delay)} width="w-full sm:w-20"
               onChange={(v) => setEditGroup({ ...editGroup, post_group_delay: parseInt(v) || 0 })} />
             <label className="flex items-center gap-1 text-sm pb-1">
               <input type="checkbox" checked={editGroup.parallel}
@@ -418,11 +418,11 @@ function TargetRow({ target, onEdit, onDelete }: {
   target: ShutdownTarget; onEdit: () => void; onDelete: () => void
 }) {
   return (
-    <div className="px-4 py-2.5 flex items-center gap-3 text-sm">
-      <span className="font-medium w-28 shrink-0">{target.name}</span>
-      <span className="font-mono text-xs text-muted w-28 shrink-0">{target.host}</span>
-      <span className="px-1.5 py-0.5 rounded text-[10px] bg-status-muted text-muted">{target.method}</span>
-      <span className="font-mono text-xs text-muted flex-1 truncate">{target.command}</span>
+    <div className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span className="font-medium w-full sm:w-28 sm:shrink-0">{target.name}</span>
+      <span className="font-mono text-xs text-muted w-full sm:w-28 sm:shrink-0 truncate">{target.host}</span>
+      <span className="px-1.5 py-0.5 rounded text-[10px] bg-status-muted text-muted shrink-0">{target.method}</span>
+      <span className="font-mono text-xs text-muted flex-1 min-w-0 truncate">{target.command}</span>
       <span className="text-[10px] text-faint shrink-0">{target.confirm_method} / {target.timeout_sec}s</span>
       {target.post_confirm_delay > 0 && (
         <span className="text-[10px] text-faint shrink-0">+{target.post_confirm_delay}s</span>
@@ -461,12 +461,12 @@ function TargetForm({ target, setTarget, onSubmit, onCancel, submitLabel }: {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Name" value={t.name} onChange={(v) => set('name', v)} />
         <Field label="Host" value={t.host} onChange={(v) => set('host', v)} />
         <Field label="Username" value={t.username} onChange={(v) => set('username', v)} />
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <label className="text-xs text-muted">Action Method</label>
           <select value={t.method} onChange={(e) => set('method', e.target.value)}
@@ -479,7 +479,7 @@ function TargetForm({ target, setTarget, onSubmit, onCancel, submitLabel }: {
         <Field label={t.method === 'command' ? 'Command' : 'Shutdown Command'} value={t.command} onChange={(v) => set('command', v)} />
         <Field label={t.method === 'ssh_password' ? 'Password' : 'Key Path'} value={t.credential || ''} onChange={(v) => set('credential', v)} />
       </div>
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div>
           <label className="text-xs text-muted">Confirmation</label>
           <select value={t.confirm_method} onChange={(e) => set('confirm_method', e.target.value)}

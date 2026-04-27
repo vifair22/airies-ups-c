@@ -84,7 +84,7 @@ export default function WeatherConfig() {
 
       {/* Action buttons */}
       {status?.enabled && (
-        <div className="flex gap-3 mb-6">
+        <div className="flex flex-wrap gap-3 mb-6">
           <button onClick={async () => {
               setReportLoading(true)
               try {
@@ -198,11 +198,11 @@ export default function WeatherConfig() {
             <div className="space-y-2">
               {report.forecast.map((p, i) => (
                 <div key={i} className="rounded border border-edge bg-field p-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium w-28 shrink-0">{p.name}</span>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-sm font-medium w-full sm:w-28 sm:shrink-0">{p.name}</span>
                     <span className="text-sm">{p.temperature}°F</span>
                     <span className="text-xs text-muted">{p.wind} {p.wind_direction}</span>
-                    <span className="text-xs text-muted ml-auto">{p.short_forecast}</span>
+                    <span className="text-xs text-muted sm:ml-auto">{p.short_forecast}</span>
                   </div>
                 </div>
               ))}
@@ -223,7 +223,7 @@ export default function WeatherConfig() {
               Enable weather monitoring
             </label>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Latitude" value={String(form.latitude)}
                 onChange={(v) => setForm({ ...form, latitude: parseFloat(v) || 0 })} />
               <Field label="Longitude" value={String(form.longitude)}
@@ -264,7 +264,7 @@ export default function WeatherConfig() {
             </p>
 
             {!upsRegs ? (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {[1,2,3].map(i => (
                   <div key={i}>
                     <div className="h-3 w-24 bg-field rounded animate-pulse mb-2" />
@@ -273,7 +273,7 @@ export default function WeatherConfig() {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="text-xs text-muted">Control Register</label>
                   <select value={form.control_register}
