@@ -324,12 +324,20 @@ release:nightly:
       done
     # Tear down previous nightly Release + tag so we can recreate at the
     # new commit. Both DELETEs are idempotent (404 on first run is fine).
+    #
+    # CI_JOB_TOKEN can delete a Release object but NOT the underlying git
+    # tag — same scope limit that forces release:auto-tag to use
+    # RELEASE_TAG_TOKEN for tag creation. Without this, the tag DELETE
+    # silently 403s and the subsequent `release:` keyword's create-with-
+    # ref: sees the existing tag and (per release-cli docs) ignores
+    # `ref:` — leaving the nightly tag stuck at the first commit forever
+    # while the Release object's description correctly advances.
     - |
       curl --silent --request DELETE \
            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/nightly" >/dev/null || true
       curl --silent --request DELETE \
-           --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+           --header "PRIVATE-TOKEN: $RELEASE_TAG_TOKEN" \
            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/nightly" >/dev/null || true
   release:
     tag_name: nightly
