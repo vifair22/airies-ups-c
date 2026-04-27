@@ -1,0 +1,18 @@
+Package: airies-ups
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCH@
+Maintainer: XxI0NICxX <vifair22@gmail.com>
+Homepage: https://git.airies.net/vifair22/airies-ups-c
+Depends: libc6, libmodbus5, libsqlite3-0, libcurl4t64 | libcurl4, libmicrohttpd12t64 | libmicrohttpd12, libssl3t64 | libssl3, systemd, adduser
+Recommends: udev
+Description: APC and CyberPower UPS management daemon
+ airies-ups is a self-contained UPS management daemon that talks
+ directly to UPS hardware over Modbus RTU (APC SMT/SRT) or USB HID
+ (APC Back-UPS, CyberPower PowerPanel). Replaces APC PowerChute and
+ NUT for these device families.
+ .
+ Includes a web UI served by the daemon (no separate web server
+ needed), Pushover alerting, weather-aware HE mode toggling, and
+ orchestrated shutdown of dependent hosts.
