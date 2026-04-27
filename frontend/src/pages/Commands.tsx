@@ -212,7 +212,7 @@ export default function Commands() {
               </div>
               <div className="px-4 py-3">
                 {cmds.map(cmd => (
-                  <div key={cmd.name} className="flex items-center justify-between py-2.5 border-b border-edge/60 last:border-0">
+                  <div key={cmd.name} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-2.5 border-b border-edge/60 last:border-0">
                     <div className="mr-4">
                       <span className="text-sm text-primary">{cmd.display_name}</span>
                       <p className="text-xs text-muted mt-0.5">{cmd.description}</p>
@@ -234,7 +234,7 @@ export default function Commands() {
 
                 {/* Inject shutdown workflow into power group */}
                 {group === 'power' && (
-                  <div className="flex items-center justify-between py-2.5 border-b border-edge/60 last:border-0">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-2.5 border-b border-edge/60 last:border-0">
                     <div className="mr-4">
                       <span className="text-sm text-primary">Shutdown Workflow</span>
                       <p className="text-xs text-muted mt-0.5">Executes the full orchestrated shutdown — shuts down all configured hosts, then the UPS itself</p>
