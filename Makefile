@@ -80,7 +80,14 @@ ALL_SRCS    = $(DAEMON_SRCS) $(CLI_SRCS)
 
 # ---- Object files ---------------------------------------------------------
 
-OBJ_DIR     = $(BUILD_DIR)/obj
+# Per-variant object directory. Without this, toggling BUILD_TYPE or EMBED
+# silently reuses .o files compiled with different CFLAGS — e.g. switching
+# release(EMBED=1) → debug → release(EMBED=1) keeps the debug objects (which
+# were compiled WITHOUT -DEMBED_FRONTEND), so the relinked release binary
+# silently drops the embedded-frontend code path. Override with `make
+# BUILD_VARIANT=foo` if you need a separate cache (cross compile does this).
+BUILD_VARIANT ?= $(BUILD_TYPE)$(if $(filter 1,$(EMBED)),-embed,)
+OBJ_DIR     = $(BUILD_DIR)/obj/$(BUILD_VARIANT)
 DAEMON_OBJS = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(DAEMON_SRCS))
 CLI_OBJS    = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(CLI_SRCS))
 
@@ -108,8 +115,7 @@ cross: frontend frontend-test embed-frontend embed-migrations
 		AR="$(CROSS_AR)" \
 		"COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON $(CROSS_SYSROOT_INCLUDES)"
 	@echo "=== Cross-compiling airies-ups for aarch64 ==="
-	rm -rf $(BUILD_DIR)/obj
-	$(MAKE) EMBED=1 CC="$(CROSS_CC)" \
+	$(MAKE) BUILD_VARIANT=cross-aarch64-embed EMBED=1 CC="$(CROSS_CC)" \
 		CFLAGS='-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection $(CROSS_INCLUDES) -DVERSION_STRING="\"$(VERSION)\"" -O2 -DEMBED_FRONTEND' \
 		"LDFLAGS=$(CROSS_LIBS)" \
 		_build
@@ -163,11 +169,29 @@ DAEMON_OBJS += $(MIGRATE_OBJ)
 
 # ---- Link targets ---------------------------------------------------------
 
-$(BUILD_DIR)/airies-upsd: $(DAEMON_OBJS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+# Variant sentinel — depended on by the link rules so a BUILD_TYPE/EMBED
+# switch always relinks the binary at the stable $(BUILD_DIR)/<bin> path.
+# Without it, the binary's mtime can be newer than the (cached) objects of
+# the just-selected variant, and make would skip the link — leaving the
+# previous variant's binary in place under the new variant's name. The
+# recipe runs unconditionally (FORCE prereq) but only rewrites the file
+# when the recorded variant differs, so same-variant builds keep their
+# mtime and skip relinking as expected.
+VARIANT_TAG = $(BUILD_DIR)/.variant
 
-$(BUILD_DIR)/airies-ups: $(CLI_OBJS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+.PHONY: FORCE
+FORCE:
+
+$(VARIANT_TAG): FORCE | $(BUILD_DIR)
+	@if [ "$$(cat $@ 2>/dev/null)" != "$(BUILD_VARIANT)" ]; then \
+	    echo "$(BUILD_VARIANT)" > $@; \
+	fi
+
+$(BUILD_DIR)/airies-upsd: $(DAEMON_OBJS) $(VARIANT_TAG) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $(DAEMON_OBJS) $(LDFLAGS)
+
+$(BUILD_DIR)/airies-ups: $(CLI_OBJS) $(VARIANT_TAG) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $(CLI_OBJS) $(LDFLAGS)
 
 # ---- Static analysis ------------------------------------------------------
 
