@@ -3,6 +3,7 @@ stages:
   - analyze
   - build
   - package
+  - release
   - deploy
 
 variables:
@@ -192,9 +193,269 @@ build:
     paths:
       - build/airies-upsd
       - build/airies-ups
-      - airies-ups.service
-      - 99-airies-ups-ftdi.rules
     expire_in: 1 month
+
+# Native amd64 build of the daemon. Mirrors `build:` (which produces the
+# arm64 cross-compile for the Pis) and feeds package:deb:amd64. Skips the
+# cmocka run that `make all` bundles — the dedicated test: stage already
+# covered that.
+build:amd64:
+  stage: build
+  image: debian:trixie
+  tags:
+    - docker
+  needs:
+    - test
+    - analyze
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        build-essential pkg-config git curl unzip ca-certificates
+        libmodbus-dev libsqlite3-dev libcurl4-openssl-dev
+        libmicrohttpd-dev libssl-dev
+        xxd brotli file
+    - curl -fsSL https://bun.sh/install | bash
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - git clone --depth 1 "$C_UTILS_REPO" /tmp/c-utils
+    - make -C /tmp/c-utils
+  script:
+    - export BUN_INSTALL="$HOME/.bun"
+    - export PATH="$BUN_INSTALL/bin:$PATH"
+    - make CUTILS_DIR=/tmp/c-utils frontend
+    - make CUTILS_DIR=/tmp/c-utils embed-frontend embed-migrations
+    - make CUTILS_DIR=/tmp/c-utils BUILD_TYPE=release EMBED=1 _build
+    - file build/airies-upsd | grep -q "x86-64"
+    - file build/airies-ups  | grep -q "x86-64"
+  artifacts:
+    paths:
+      - build/airies-upsd
+      - build/airies-ups
+    expire_in: 1 month
+
+# Per-arch .deb packages. Both run in parallel under the package stage.
+# Runtime libs are resolved at apt-install time on the target host —
+# the .deb just declares them in Depends. Always-on (every pipeline) so
+# MRs can verify the package builds and download it as a job artifact.
+.package_deb_template: &package_deb_template
+  stage: package
+  image: debian:trixie
+  tags:
+    - docker
+  before_script:
+    # `binutils` provides /usr/bin/strip for native amd64 binaries;
+    # `binutils-aarch64-linux-gnu` provides aarch64-linux-gnu-strip,
+    # needed because the host strip refuses foreign-arch ELFs.
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        $STRIP_PACKAGE file
+
+package:deb:amd64:
+  <<: *package_deb_template
+  needs:
+    - build:amd64
+  variables:
+    STRIP_PACKAGE: binutils
+  script:
+    - bash scripts/build-deb.sh amd64
+    - ls -lh dist/
+  artifacts:
+    paths:
+      - dist/airies-ups_*_amd64.deb
+    expire_in: 1 month
+
+package:deb:arm64:
+  <<: *package_deb_template
+  needs:
+    - build
+  variables:
+    STRIP_PACKAGE: binutils-aarch64-linux-gnu
+  script:
+    - STRIP=aarch64-linux-gnu-strip bash scripts/build-deb.sh arm64
+    - ls -lh dist/
+  artifacts:
+    paths:
+      - dist/airies-ups_*_arm64.deb
+    expire_in: 1 month
+
+# Publish .deb files to the Generic Package Registry and create a GitLab
+# Release. Two jobs share the stage:
+#
+#   release:nightly  fires on every master push. Uploads to
+#                    packages/airies-ups/nightly/ with stable filenames
+#                    (overwrite), and recreates the "nightly" Release at
+#                    the new commit so the Releases page always reflects
+#                    the latest master snapshot.
+#
+#   release:stable   fires on git tags (e.g. `git tag v0.1.0 && git push
+#                    --tags`). Uploads to packages/airies-ups/<tag>/ and
+#                    creates an immutable tagged Release.
+#
+# release-cli is the official tool for the release: keyword; it shells
+# out to the GitLab API. curl handles the package-registry uploads
+# alongside it (release-cli doesn't upload, only references URLs).
+release:nightly:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  tags:
+    - docker
+  needs:
+    - job: package:deb:amd64
+      artifacts: true
+    - job: package:deb:arm64
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  before_script:
+    - apk add --no-cache curl
+  script:
+    # Stable filenames in the registry — internal Version metadata still
+    # carries the timestamp+SHA, but a permanent URL beats scraping
+    # pipeline IDs. ?select=package_file replaces the previous nightly.
+    - |
+      set -euo pipefail
+      for arch in amd64 arm64; do
+        src=$(ls dist/airies-ups_*_${arch}.deb | head -1)
+        echo "Uploading $src as airies-ups_${arch}.deb"
+        curl --fail --silent --show-error \
+             --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+             --upload-file "$src" \
+             "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/airies-ups/nightly/airies-ups_${arch}.deb?select=package_file&status=default"
+      done
+    # Tear down previous nightly Release + tag so we can recreate at the
+    # new commit. Both DELETEs are idempotent (404 on first run is fine).
+    - |
+      curl --silent --request DELETE \
+           --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+           "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/nightly" >/dev/null || true
+      curl --silent --request DELETE \
+           --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+           "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/nightly" >/dev/null || true
+  release:
+    tag_name: nightly
+    ref: $CI_COMMIT_SHA
+    name: 'Nightly ($CI_COMMIT_SHORT_SHA)'
+    description: |
+      Rolling snapshot of master, refreshed on every push.
+
+      Commit: $CI_COMMIT_SHORT_SHA — `$CI_COMMIT_TITLE`
+
+      For testing the latest changes. Production deployments should pin to a tagged stable release.
+    assets:
+      links:
+        - name: 'airies-ups_amd64.deb'
+          url: '$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/airies-ups/nightly/airies-ups_amd64.deb'
+          link_type: package
+        - name: 'airies-ups_arm64.deb'
+          url: '$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/airies-ups/nightly/airies-ups_arm64.deb'
+          link_type: package
+
+# Auto-tag stable releases off a `release_version` bump on master. When
+# the semver string in release_version changes since the previous master
+# commit, this job creates `v<semver>` via the GitLab API at the current
+# SHA. The new tag triggers a pipeline whose release:stable job does the
+# actual upload + Release creation — so the tagged commit is guaranteed
+# to have already passed test/analyze/build/package on master.
+#
+# Requires CI variable RELEASE_TAG_TOKEN: a Project Access Token with
+# `api` scope. CI_JOB_TOKEN cannot create tags via the API. The job
+# fails loudly if the variable is missing rather than silently skipping.
+release:auto-tag:
+  stage: release
+  image: alpine/git:latest
+  tags:
+    - docker
+  needs:
+    - test
+    - analyze
+    - package:deb:amd64
+    - package:deb:arm64
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master"'
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      set -eu
+      # CI's default depth (20) makes HEAD~1 reachable; the file is small
+      # enough that `git show` is cheap regardless.
+      PREV=$(git show HEAD~1:release_version 2>/dev/null | tr -d '[:space:]' || echo "")
+      CURR=$(tr -d '[:space:]' < release_version)
+      if [ "$PREV" = "$CURR" ]; then
+          echo "release_version unchanged ($CURR); no tag to create."
+          exit 0
+      fi
+      echo "release_version bumped: ${PREV:-<none>} -> $CURR"
+
+      TAG="v${CURR}"
+      # Idempotent: a re-run of this same master commit (e.g. retry after
+      # a transient failure) finds the tag already at the same SHA and
+      # exits cleanly instead of erroring.
+      if curl --silent --fail --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+              "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/${TAG}" \
+              >/dev/null 2>&1; then
+          echo "Tag $TAG already exists; nothing to do."
+          exit 0
+      fi
+
+      if [ -z "${RELEASE_TAG_TOKEN:-}" ]; then
+          echo "ERROR: RELEASE_TAG_TOKEN is not set." >&2
+          echo "Create a Project Access Token with 'api' scope and add it" >&2
+          echo "as a masked, protected CI variable named RELEASE_TAG_TOKEN." >&2
+          exit 1
+      fi
+
+      curl --fail --silent --show-error --request POST \
+           --header "PRIVATE-TOKEN: $RELEASE_TAG_TOKEN" \
+           --data-urlencode "tag_name=${TAG}" \
+           --data-urlencode "ref=${CI_COMMIT_SHA}" \
+           --data-urlencode "message=Tag ${TAG} from release_version bump (auto)" \
+           "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags"
+      echo
+      echo "Tag $TAG created at ${CI_COMMIT_SHORT_SHA}. release:stable will run in the tag pipeline."
+
+release:stable:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  tags:
+    - docker
+  needs:
+    - job: package:deb:amd64
+      artifacts: true
+    - job: package:deb:arm64
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  before_script:
+    - apk add --no-cache curl
+  script:
+    # Tagged uploads are immutable — no ?select=package_file. The git tag
+    # IS the package version, so re-running the same tag's pipeline would
+    # 409 here, which is the desired safety: tagged releases never change.
+    - |
+      set -euo pipefail
+      for arch in amd64 arm64; do
+        src=$(ls dist/airies-ups_*_${arch}.deb | head -1)
+        dst="airies-ups_${CI_COMMIT_TAG}_${arch}.deb"
+        echo "Uploading $src as $dst"
+        curl --fail --silent --show-error \
+             --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+             --upload-file "$src" \
+             "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/airies-ups/${CI_COMMIT_TAG}/${dst}"
+      done
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: '$CI_COMMIT_TAG'
+    description: |
+      Stable release of airies-ups $CI_COMMIT_TAG.
+    assets:
+      links:
+        - name: 'airies-ups_${CI_COMMIT_TAG}_amd64.deb'
+          url: '$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/airies-ups/${CI_COMMIT_TAG}/airies-ups_${CI_COMMIT_TAG}_amd64.deb'
+          link_type: package
+        - name: 'airies-ups_${CI_COMMIT_TAG}_arm64.deb'
+          url: '$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/airies-ups/${CI_COMMIT_TAG}/airies-ups_${CI_COMMIT_TAG}_arm64.deb'
+          link_type: package
 
 # Build + push the multi-arch Docker image for external users / Unraid hosts.
 # Independent of the bare-metal Pi deploy — that path uses the cross-compiled
@@ -202,9 +463,14 @@ build:
 # (the Dockerfile re-runs the build inside debian:trixie per platform via
 # QEMU) so it doesn't share artifacts with the build job.
 #
-# On every pipeline: build amd64, load locally, smoke-run for 5s, verify the
-# container is still up. Catches Dockerfile breakage on MRs before it lands.
-# On master only: also build arm64 and push :SHA + :latest to the registry.
+# Tag scheme mirrors the .deb release scheme:
+#   master push  → :nightly + :<short_sha>
+#   git tag      → :<tag> + :latest + :<short_sha>     (e.g. :v0.1.0 + :latest)
+#   MR / branch  → smoke build only, no push
+#
+# `:latest` follows the Docker community convention — points at the most
+# recent stable release, NOT the latest master. Use `:nightly` for the
+# bleeding-edge master snapshot.
 package:docker:
   stage: package
   image: docker:27
@@ -229,28 +495,42 @@ package:docker:
     - docker buildx create --use --name multi
   script:
     - SHA_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
-    - LATEST_TAG="$CI_REGISTRY_IMAGE:latest"
-    # Smoke build — amd64 only, loaded into the local docker so we can run it.
+    # Smoke build — amd64 only, loaded into local docker so we can run it.
     - docker buildx build --platform linux/amd64 --load -t "$SHA_TAG" .
     - docker run -d --rm --name smoke "$SHA_TAG"
     - sleep 5
     # If the daemon crashed, the container is gone; this grep fails the job.
     - docker ps --filter "name=smoke" --format '{{.Names}}' | grep -q '^smoke$'
     - docker stop smoke
-    # Multi-arch push — only on master, otherwise stop here. amd64 leg hits
-    # the buildx layer cache from the smoke build above.
+    # Multi-arch push. amd64 leg hits the buildx layer cache from the smoke
+    # build above, so the arm64 build is the only real cost here.
     - |
-      if [ "$CI_COMMIT_BRANCH" = "master" ]; then
-        docker buildx build --platform linux/amd64,linux/arm64 \
-          --push -t "$SHA_TAG" -t "$LATEST_TAG" .
+      TAGS=""
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        TAGS="-t $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG -t $CI_REGISTRY_IMAGE:latest -t $SHA_TAG"
+      elif [ "${CI_COMMIT_BRANCH:-}" = "master" ]; then
+        TAGS="-t $CI_REGISTRY_IMAGE:nightly -t $SHA_TAG"
+      fi
+      if [ -n "$TAGS" ]; then
+        docker buildx build --platform linux/amd64,linux/arm64 --push $TAGS .
       else
-        echo "Not on master — skipping registry push."
+        echo "MR / branch pipeline — built and smoked, not pushing."
       fi
 
-# Push deploy via dynamically-generated child pipeline. One job per host in
-# $UPS_DEPLOY_HOSTS so each shows up as its own line in the pipeline graph
-# and can be retried independently. Children run in parallel — UPS daemons
-# are independent across Pis and a synchronized bounce is acceptable.
+# Push the nightly .deb to each Pi listed in $UPS_DEPLOY_HOSTS via a
+# dynamically-generated child pipeline. One job per host so each shows
+# up as its own line in the pipeline graph and can be retried
+# independently. Children run in parallel — UPS daemons are independent
+# across Pis and a synchronized bounce is acceptable.
+#
+# Each child pulls the package:deb:arm64 artifact, scp's it onto the Pi,
+# and `apt-get install`s it. apt resolves runtime deps from the trixie
+# repo automatically; the .deb's postinst (re)starts the service.
+#
+# Pis must already be on the .deb-managed layout (system user airies-ups,
+# state in /var/lib/airies-ups). Use scripts/migrate-pi-to-deb.sh once
+# per host to convert from the legacy /home/sysadmin/airies-ups layout
+# before the first deploy through this path.
 generate_deploy_child_pipeline:
   stage: deploy
   image: debian:trixie
@@ -258,7 +538,7 @@ generate_deploy_child_pipeline:
     - docker
     - unraid
   needs:
-    - build
+    - package:deb:arm64
   rules:
     - if: '$CI_COMMIT_BRANCH == "master"'
   before_script:
@@ -305,11 +585,11 @@ generate_deploy_child_pipeline:
               f"    UPS_HOST: {q(host)}",
               "  needs:",
               f"    - pipeline: \"{parent_pid}\"",
-              "      job: build",
+              "      job: package:deb:arm64",
               "      artifacts: true",
               "  before_script:",
               "    - apt-get update -qq",
-              "    - apt-get install -y --no-install-recommends openssh-client rsync ca-certificates",
+              "    - apt-get install -y --no-install-recommends openssh-client ca-certificates",
               "    - mkdir -p ~/.ssh && chmod 700 ~/.ssh",
               '    - cp "$DEPLOY_SSH_KEY" ~/.ssh/id_ed25519',
               "    # GitLab File variables strip trailing newlines;",
@@ -318,10 +598,12 @@ generate_deploy_child_pipeline:
               "    - chmod 600 ~/.ssh/id_ed25519",
               '    - ssh-keyscan -H "$UPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null',
               "  script:",
-              '    - ssh "sysadmin@$UPS_HOST" "mkdir -p /home/sysadmin/airies-ups/build"',
-              "    - rsync -az build/airies-upsd build/airies-ups"
-              ' "sysadmin@$UPS_HOST:/home/sysadmin/airies-ups/build/"',
-              '    - ssh "sysadmin@$UPS_HOST" "sudo systemctl restart airies-ups.service"',
+              "    - DEB=$(ls dist/airies-ups_*_arm64.deb | head -1)",
+              "    - NAME=$(basename \"$DEB\")",
+              '    - scp "$DEB" "sysadmin@$UPS_HOST:/tmp/$NAME"',
+              "    # apt-get install of a local .deb upgrades-or-installs in",
+              "    # place; postinst (re)starts the service via deb-systemd-helper.",
+              '    - ssh "sysadmin@$UPS_HOST" "sudo apt-get install -y /tmp/$NAME && rm /tmp/$NAME"',
               "    - sleep 2",
               '    - ssh "sysadmin@$UPS_HOST" "systemctl is-active airies-ups.service"',
               "",

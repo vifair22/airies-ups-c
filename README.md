@@ -79,11 +79,14 @@ Master commits auto-deploy via GitLab CI. See [DEPLOY.md](DEPLOY.md) for the dep
 
 ### Docker
 
-A multi-arch (`amd64` / `arm64`) image is built and pushed on every master commit:
+Multi-arch (`amd64` / `arm64`) images are published to `registry.git.airies.net/vifair22/airies-ups-c`. Tag scheme matches the Debian package release tracks:
 
-```
-registry.git.airies.net/vifair22/airies-ups-c:latest
-```
+| Tag | Refreshed | Use for |
+|-----|-----------|---------|
+| `:latest` | latest stable release | Production. Follows Docker community convention — *not* master. |
+| `:v0.1.0` (etc.) | once, immutable | Pinning to a specific stable release |
+| `:nightly` | every master push | Tracking the bleeding edge |
+| `:<short_sha>` | once, immutable | Pinning to a specific commit |
 
 ```bash
 docker run -d \
@@ -100,6 +103,25 @@ Replace `--device=/dev/bus/usb` with `--device=/dev/ttyUSB0` (or similar) for se
 State (`config.yaml`, `app.db`) lives in the named volume — first run drops you into the setup wizard at `http://<host>:8080`.
 
 The udev rules for FTDI Modbus adapters are baked into the image at `/usr/share/airies-ups/udev/99-airies-ups-ftdi.rules`. They have to be installed on the **host**, not the container — copy with `docker cp airies-ups:/usr/share/airies-ups/udev/99-airies-ups-ftdi.rules /etc/udev/rules.d/` and run `sudo udevadm control --reload && sudo udevadm trigger`.
+
+### Debian package
+
+For Debian trixie or derivatives (Ubuntu 24.04+, Raspberry Pi OS trixie), `.deb` packages for `amd64` and `arm64` are published to the project's [Releases page](https://git.airies.net/vifair22/airies-ups-c/-/releases). Two release tracks:
+
+- **Nightly** — rolling snapshot of `master`, refreshed on every push. Stable URLs:
+  - `https://git.airies.net/api/v4/projects/233/packages/generic/airies-ups/nightly/airies-ups_amd64.deb`
+  - `https://git.airies.net/api/v4/projects/233/packages/generic/airies-ups/nightly/airies-ups_arm64.deb`
+- **Stable** — tagged releases (`v0.1.0`, etc.). Each tag's `.deb` is immutable. Tags are created automatically by CI when the [`release_version`](release_version) file changes on `master` — bump the semver, push, the next pipeline tags `v<semver>` and publishes the stable release.
+
+Install:
+
+```bash
+ARCH=$(dpkg --print-architecture)
+curl -fLO "https://git.airies.net/api/v4/projects/233/packages/generic/airies-ups/nightly/airies-ups_${ARCH}.deb"
+sudo apt install ./airies-ups_${ARCH}.deb
+```
+
+The package creates an `airies-ups` system user (joined to `dialout` and `plugdev` for UPS hardware access), drops the binaries in `/usr/bin/`, the systemd unit in `/usr/lib/systemd/system/`, the udev rule in `/usr/lib/udev/rules.d/`, and reserves `/var/lib/airies-ups/` for `config.yaml` + `app.db`. The setup wizard runs on first start at `http://<host>:8080`.
 
 ## Documentation
 

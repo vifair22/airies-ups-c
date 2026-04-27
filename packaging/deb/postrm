@@ -1,0 +1,32 @@
+#!/bin/sh
+# `apt remove`  → keep state (config.yaml, app.db, user) so reinstall is clean
+# `apt purge`   → wipe state, drop the system user
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+if [ "$1" = "remove" ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper mask airies-ups.service >/dev/null || true
+    fi
+fi
+
+if [ "$1" = "purge" ]; then
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper purge airies-ups.service >/dev/null || true
+        deb-systemd-helper unmask airies-ups.service >/dev/null || true
+    fi
+
+    rm -rf /var/lib/airies-ups
+
+    if getent passwd airies-ups >/dev/null; then
+        deluser --quiet --system airies-ups >/dev/null 2>&1 || true
+    fi
+    if getent group airies-ups >/dev/null; then
+        delgroup --quiet --system airies-ups >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0
