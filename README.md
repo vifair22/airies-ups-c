@@ -77,6 +77,30 @@ Production deploy:
 
 Master commits auto-deploy via GitLab CI. See [DEPLOY.md](DEPLOY.md) for the deploy script modes, host inventory, and the CI pipeline diagram.
 
+### Docker
+
+A multi-arch (`amd64` / `arm64`) image is built and pushed on every master commit:
+
+```
+registry.git.airies.net/vifair22/airies-ups-c:latest
+```
+
+```bash
+docker run -d \
+  --name airies-ups \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v airies-ups-state:/var/lib/airies-ups \
+  --device=/dev/bus/usb \
+  registry.git.airies.net/vifair22/airies-ups-c:latest
+```
+
+Replace `--device=/dev/bus/usb` with `--device=/dev/ttyUSB0` (or similar) for serial Modbus UPSes.
+
+State (`config.yaml`, `app.db`) lives in the named volume — first run drops you into the setup wizard at `http://<host>:8080`.
+
+The udev rules for FTDI Modbus adapters are baked into the image at `/usr/share/airies-ups/udev/99-airies-ups-ftdi.rules`. They have to be installed on the **host**, not the container — copy with `docker cp airies-ups:/usr/share/airies-ups/udev/99-airies-ups-ftdi.rules /etc/udev/rules.d/` and run `sudo udevadm control --reload && sudo udevadm trigger`.
+
 ## Documentation
 
 | File | Purpose |
