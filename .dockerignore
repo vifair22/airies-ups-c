@@ -1,0 +1,44 @@
+# Build artifacts — image rebuilds these from source
+build/
+*.o
+*.d
+*.gcda
+*.gcno
+*.gcov
+
+# Local dev binaries at repo root (not under build/)
+airies-ups
+airies-upsd
+
+# Local runtime state (must not leak into the image)
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend rebuild outputs — `make frontend` regenerates inside the builder
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results.junit.xml
+
+# Tests — image build doesn't compile them
+tests/
+
+# Editor / OS
+*.swp
+*.swo
+*~
+.idea/
+.DS_Store
+.cache/
+
+# Repo-only files
+.git/
+.gitignore
+.gitlab-ci.yml
+todo.md
+dist/
+docs/
+DEPLOY.md
+Manual.md
