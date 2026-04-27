@@ -18,9 +18,16 @@ const ups_driver_t ups_driver_smt = {
     .caps      = 0,
 };
 
-const ups_driver_t ups_driver_backups_hid = {
-    .name      = "backups_hid_stub",
+const ups_driver_t ups_driver_apc_hid = {
+    .name      = "apc_hid_stub",
     .conn_type = UPS_CONN_USB,
     .topology  = UPS_TOPO_STANDBY,
+    .caps      = 0,
+};
+
+const ups_driver_t ups_driver_cyberpower_hid = {
+    .name      = "cyberpower_hid_stub",
+    .conn_type = UPS_CONN_USB,
+    .topology  = UPS_TOPO_LINE_INTERACTIVE,
     .caps      = 0,
 };
