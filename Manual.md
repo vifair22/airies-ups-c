@@ -59,7 +59,8 @@ One daemon per UPS. Each Pi owns its UPS exclusively over a serial USB cable (Mo
 |--------|-----------|--------|------------------|-------|
 | APC Smart-UPS SRT (online double-conversion) | Modbus RTU over USB-serial | `src/ups/ups_srt.c` | SRT 2200 | Full feature set: bypass, deep test, frequency tolerance, outlet groups |
 | APC Smart-UPS SMT (line-interactive) | Modbus RTU over USB-serial | `src/ups/ups_smt.c` | SMT1500RM2UC (FW 04.1, ModbusMapID 00.5) | No bypass; no Green Mode write over Modbus (empirically — see project notes) |
-| APC Back-UPS ES | USB HID | `src/ups/ups_backups_hid.c` | Back-UPS ES 600M1 | Consumer firmware; deep runtime calibration intentionally omitted (firmware rejects it) |
+| APC Back-UPS / Smart-UPS HID | USB HID | `src/ups/ups_apc_hid.c` (+ `hid_pdc_core.c`) | Back-UPS ES 600M1 | APC vendor page (sensitivity, lights/beeper test, batt repl date); deep runtime calibration intentionally omitted (firmware rejects it) |
+| CyberPower PowerPanel HID | USB HID | `src/ups/ups_cyberpower_hid.c` (+ `hid_pdc_core.c`) | CP1500PFCLCD | Standard HID PDC only; no vendor extensions in this driver yet |
 
 Hardware reference material lives under `docs/`:
 
@@ -297,7 +298,7 @@ Common causes: wrong `device` path in `config.yaml`; port 8080 already bound by 
 
 - Confirm device on the bus: `lsusb | grep 051d`.
 - Confirm hidraw is accessible by `sysadmin`: `ls -l /dev/hidraw*`.
-- The udev rule in [DEPLOY.md](DEPLOY.md) sets `0660 plugdev` for APC VID 051d — re-run `udevadm control --reload-rules && udevadm trigger` after editing.
+- The udev rule in [DEPLOY.md](DEPLOY.md) sets `0660 plugdev` for APC VID 051d — re-run `udevadm control --reload-rules && udevadm trigger` after editing. CyberPower lives at VID 0764; add the matching rule if deploying that family.
 
 ### Modbus reads erratic right after a config write
 

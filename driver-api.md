@@ -71,7 +71,8 @@ comments; this section is a high-altitude reference.
 
 Drivers that don't need a particular feature leave the corresponding pointer
 / count as NULL / 0. Designated initializers make this cheap; see
-`ups_srt.c` or `ups_backups_hid.c` for real examples.
+`ups_srt.c` (Modbus) or `ups_apc_hid.c` / `ups_cyberpower_hid.c` (USB HID
+adapters layered on `hid_pdc_core.c`) for real examples.
 
 ---
 
@@ -182,7 +183,7 @@ its library needs.
 | Driver | `conn_type` | Transport handle | Lifetime |
 |--------|-------------|-------------------|----------|
 | `ups_srt`, `ups_smt` | `UPS_CONN_SERIAL` | `modbus_t *` (libmodbus) | `modbus_new_rtu` in `connect`, `modbus_free` in `disconnect` |
-| `ups_backups_hid` | `UPS_CONN_USB` | `hid_transport_t *` (in-tree, see `ups_backups_hid.c`) | hidraw fd + parsed descriptor + resolved field pointers |
+| `ups_apc_hid`, `ups_cyberpower_hid` | `UPS_CONN_USB` | `hid_pdc_transport_t *` (defined in `hid_pdc_core.h`) | hidraw fd + parsed descriptor + standard PDC field pointers + opaque vendor-state pointer |
 | *(future)* | `UPS_CONN_TCP` | TBD | Placeholder; no driver yet |
 | *(future)* | `UPS_CONN_SNMP` | TBD | Placeholder; no driver yet |
 
@@ -211,18 +212,29 @@ you have a reason not to.
 
 ### USB HID
 
-The transport handle is a `hid_transport_t` defined in `ups_backups_hid.c`.
-The important bits:
+The transport handle is a `hid_pdc_transport_t` defined in `hid_pdc_core.h`,
+shared by every HID PDC vendor adapter. The important bits:
 
 - `fd`: open `/dev/hidrawN`
 - `map`: parsed HID report descriptor (`hid_report_map_t`)
-- `f`: resolved field pointers keyed by HID usage path (see
-  `resolve_fields` in the driver)
+- `pdc`: resolved standard PDC field pointers keyed by HID usage path,
+  populated by `hid_pdc_open()` at connect time
+- `vendor`: opaque pointer the vendor adapter casts to its own struct
+  (e.g., `apc_vendor_t` for APC's vendor-page field cache). The vendor
+  owns the lifetime — allocate in `connect()`, free in `disconnect()`
+  before calling `hid_pdc_close()`
 
 Field reads use `hid_field_read_raw` / `hid_field_read_scaled` from
-`hid_parser.h`. Writes use `hid_set_feature`. A field may be NULL if the
-specific device didn't declare that usage in its descriptor — this is the
-main reason `backups_resolve_caps()` exists (see [Capabilities](#capabilities)).
+`hid_parser.h`. Writes use `hid_pdc_set_feature`. A field may be NULL if
+the specific device didn't declare that usage in its descriptor — this is
+the main reason `apc_resolve_caps()` (and its CyberPower equivalent)
+exists (see [Capabilities](#capabilities)).
+
+The shared core (`hid_pdc_core.c`) provides ready-made implementations of
+`read_status`, `read_dynamic`, `read_thresholds`, and the standard PDC
+commands (shutdown / abort / battery test / mute / unmute / clear faults).
+Vendor adapters typically just delegate; they only override when adding
+vendor-page behaviour on top.
 
 ---
 
@@ -298,21 +310,20 @@ present, letting the driver clear bits for features that didn't resolve
 against this specific device. The returned mask is stored on `ups_t->caps`,
 and every `ups_has_cap()` query reads from there.
 
-Example (Back-UPS HID):
+Example (APC HID):
 
 ```c
-static uint32_t backups_resolve_caps(void *transport, uint32_t default_caps)
+static uint32_t apc_resolve_caps(void *transport, uint32_t default_caps)
 {
-    hid_transport_t *t = transport;
+    hid_pdc_transport_t *t = transport;
+    const apc_vendor_t  *v = t->vendor;
     uint32_t caps = default_caps;
 
-    if (!t->f.delay_before_shutdown) caps &= ~UPS_CAP_SHUTDOWN;
-    if (!t->f.test)                  caps &= ~UPS_CAP_BATTERY_TEST;
-    if (!t->f.module_reset)          caps &= ~UPS_CAP_CLEAR_FAULTS;
-    if (!t->f.alarm_control) {
-        caps &= ~UPS_CAP_MUTE;
-        caps &= ~UPS_CAP_BEEP;
-    }
+    if (!t->pdc.delay_before_shutdown) caps &= ~UPS_CAP_SHUTDOWN;
+    if (!t->pdc.test)                  caps &= ~UPS_CAP_BATTERY_TEST;
+    if (!t->pdc.module_reset)          caps &= ~UPS_CAP_CLEAR_FAULTS;
+    if (!t->pdc.alarm_control)         caps &= ~UPS_CAP_MUTE;
+    if (!v || !v->lights_test)         caps &= ~UPS_CAP_BEEP;
     return caps;
 }
 ```
@@ -350,9 +361,10 @@ Descriptor fields include: API `name`, `display_name`, `unit`, `group`,
 (min/max for scalar, options array for bitfield, `max_chars` for string).
 
 The driver's `config_read` / `config_write` callbacks translate the
-descriptor into transport-level I/O. Back-UPS HID uses `reg_addr` as an
-opaque field-lookup key; Modbus drivers use it as an absolute register
-address.
+descriptor into transport-level I/O. The HID adapters store the resolved
+HID report ID in `reg_addr` and resolve it via
+`hid_pdc_find_field_by_report_id()`; Modbus drivers use `reg_addr` as an
+absolute register address.
 
 #### Narrowing at connect time: `resolve_config_regs`
 
@@ -365,19 +377,19 @@ subset as struct copies, and the result is cached on `ups_t->resolved_regs`.
 `ups_get_config_regs` returns the narrowed set when present and the full
 static array otherwise.
 
-Back-UPS HID uses this to drop descriptors whose HID field didn't resolve
-on the current device:
+The APC and CyberPower HID adapters use this to drop descriptors whose
+HID field didn't resolve on the current device:
 
 ```c
-static size_t backups_resolve_config_regs(
+static size_t apc_resolve_config_regs(
     void *transport, const ups_config_reg_t *default_regs,
     size_t default_count, ups_config_reg_t *out)
 {
-    hid_transport_t *t = transport;
+    hid_pdc_transport_t *t = transport;
     (void)default_count;
     size_t n = 0;
     #define KEEP_IF(idx, f) do { if ((f)) out[n++] = default_regs[(idx)]; } while (0)
-    KEEP_IF(CFG_TRANSFER_LOW,  t->f.transfer_low);
+    KEEP_IF(CFG_TRANSFER_LOW, t->pdc.transfer_low);
     // ...one line per descriptor index
     #undef KEEP_IF
     return n;
@@ -421,7 +433,9 @@ because when implementing a new driver, you'll touch this twice: once
 to define the static table, and again to implement the driver's
 `config_read` / `config_write` callbacks. See `ups_srt.c:srt_config_regs`
 and `srt_config_read` / `srt_config_write` for the Modbus example, and
-`ups_backups_hid.c:backups_config_regs` for the HID-field-mapped example.
+`ups_apc_hid.c:apc_config_regs` for the HID-field-mapped example (the
+adapter delegates the actual I/O to `hid_pdc_config_read_field` /
+`hid_pdc_config_write_field` in the shared core).
 
 ---
 
@@ -470,10 +484,11 @@ time and read without a lock thereafter; `has_inventory` is the guard.
 ## Testing
 
 Each test binary links against `src/ups/ups.c`, which references
-`extern const ups_driver_t ups_driver_srt / _smt / _backups_hid`. To
-satisfy the linker without pulling in real driver code and the libraries
-they need (libmodbus, hidraw open paths), `tests/test_stubs.c` declares
-each driver as a minimal empty `ups_driver_t`:
+`extern const ups_driver_t ups_driver_srt / _smt / _apc_hid /
+_cyberpower_hid`. To satisfy the linker without pulling in real driver
+code and the libraries they need (libmodbus, hidraw open paths),
+`tests/test_stubs.c` declares each driver as a minimal empty
+`ups_driver_t`:
 
 ```c
 const ups_driver_t ups_driver_srt = {
@@ -497,7 +512,9 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 
 1. **Files** — create `src/ups/ups_<family>.c`. Header-in-c file; no
    separate `.h` unless the driver exposes helpers to other translation
-   units (rare).
+   units (rare). For a USB HID PDC family, layer on `hid_pdc_core` and
+   model the file on `ups_cyberpower_hid.c` (minimal) or `ups_apc_hid.c`
+   (with vendor-page extensions).
 2. **Static driver struct** — `static const ups_driver_t ups_driver_<family>`
    at the bottom of the file, with every required callback pointing at a
    file-scope static function.
@@ -506,7 +523,7 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 4. **Detect** — cheap probe (one or two reads); return 1 if you recognize
    the device. Keep this small; it runs on every connect candidate.
 5. **Resolve caps** (if needed) — narrow the maximum-cap mask based on
-   what resolved against the live device. See Back-UPS example above.
+   what resolved against the live device. See APC example above.
 6. **Reads** — `read_status`, `read_dynamic`, `read_inventory`,
    `read_thresholds`. Populate the relevant `ups_data_t` /
    `ups_inventory_t` fields and leave the rest zeroed. Remember
@@ -523,8 +540,8 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
    put specific drivers before permissive ones to avoid misclassification.
 9. **Stub in `tests/test_stubs.c`** — add the empty `const
    ups_driver_t ups_driver_<family>` stub so tests link.
-10. **Makefile** — source files are discovered by pattern; if your driver
-    fits `src/ups/*.c`, it builds automatically.
+10. **Makefile** — append the new source file to `UPS_SRCS` in the top-level
+    `Makefile`. (The build doesn't auto-discover by glob.)
 11. **Build & test** — `make clean && make debug && make test`. All
     warnings are errors; the project uses strict flags.
 12. **Smoke-test against real hardware** — run `./airies-upsd` against
@@ -537,11 +554,17 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 
 Not blocking, but worth fixing when someone has the cycles:
 
-- **`BACKUPS_CFG_COUNT` is hardcoded** (`ups_backups_hid.c`). Keep in
-  sync with the array size manually; no compile-time assertion.
-- **`backups_hid` output-voltage inference** is derived from
-  `status & ON_BATTERY ? nominal : input_voltage`. Accurate for standby
-  UPS but not perfect during transitional states.
+- **`*_CFG_COUNT` is hardcoded** in each HID adapter (`apc_config_regs`,
+  `cyberpower_config_regs`). Keep in sync with the array size manually;
+  no compile-time assertion.
+- **HID PDC output-voltage inference** in `hid_pdc_read_dynamic_standard`
+  is derived from `status & ON_BATTERY ? nominal : input_voltage`.
+  Accurate for standby/line-interactive UPS but not perfect during
+  transitional states.
+- **HID PDC standard descriptor metadata is duplicated** between
+  `apc_config_regs` and `cyberpower_config_regs`. Roughly 20 entries are
+  identical static initializer text. Acceptable while there are only two
+  HID vendor adapters; revisit if a third lands.
 - **Modbus TCP / SNMP are placeholder enums**. `ups_connect` will return
   `UPS_ERR_NO_DRIVER` for either until a driver lands.
 

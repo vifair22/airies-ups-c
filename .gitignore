@@ -35,3 +35,4 @@ frontend/test-results.junit.xml
 .cache/
 
 todo.md
+dist
