@@ -112,7 +112,8 @@ export default function UpsConfig() {
       <h2 className="text-xl font-semibold mb-4">UPS Configuration Registers</h2>
 
       <div className="rounded-lg border border-edge overflow-hidden">
-        <table className="w-full text-sm table-fixed">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm table-fixed min-w-[640px]">
           <colgroup>
             <col className="w-[40%]" />
             <col className="w-[30%]" />
@@ -156,6 +157,7 @@ export default function UpsConfig() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )
@@ -327,7 +329,8 @@ function HistoryPanel({ registerName }: { registerName: string }) {
   return (
     <div>
       <p className="text-[10px] uppercase tracking-widest text-muted mb-2">Change history</p>
-      <table className="w-full text-xs">
+      <div className="overflow-x-auto">
+      <table className="w-full text-xs min-w-[420px]">
         <thead className="text-faint">
           <tr>
             <th className="text-left font-normal py-1">When</th>
@@ -347,6 +350,7 @@ function HistoryPanel({ registerName }: { registerName: string }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
