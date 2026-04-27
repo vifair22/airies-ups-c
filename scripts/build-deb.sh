@@ -28,7 +28,11 @@ PKG_DIR="$REPO_ROOT/packaging/deb"
 
 SEMVER="$(tr -d '[:space:]' < "$REPO_ROOT/release_version")"
 TS="$(date -u '+%Y%m%d.%H%M')"
-SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# Prefer the env var so CI builds get a real SHA without needing git
+# installed in the package:deb:* image. Fall back to git for local
+# builds, then to "unknown" as a last-resort sentinel that still sorts
+# correctly through dpkg --compare-versions.
+SHA="${CI_COMMIT_SHORT_SHA:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 VERSION="${SEMVER}~${TS}.${SHA}"
 PKG="airies-ups_${VERSION}_${ARCH}"
 STAGE="$REPO_ROOT/$BINDIR/deb-$ARCH"
