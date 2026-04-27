@@ -464,7 +464,7 @@ int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
 /* Validate a write against the descriptor's metadata before letting it
  * reach the driver. Keeps invalid values off the wire entirely (some
  * UPS firmwares respond to out-of-range writes with a control-plane
- * reset; see APC_SRT_MODBUS_REFERENCE.md "Rapid-fire config register
+ * reset; see docs/reference/apc-srt-modbus.md "Rapid-fire config register
  * writes" note) and gives the API layer a clean operator-error signal
  * distinct from real I/O failures.
  *
