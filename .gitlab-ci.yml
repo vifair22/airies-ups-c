@@ -2,6 +2,7 @@ stages:
   - test
   - analyze
   - build
+  - package
   - deploy
 
 variables:
@@ -194,6 +195,57 @@ build:
       - airies-ups.service
       - 99-airies-ups-ftdi.rules
     expire_in: 1 month
+
+# Build + push the multi-arch Docker image for external users / Unraid hosts.
+# Independent of the bare-metal Pi deploy — that path uses the cross-compiled
+# binary from `build:` directly. The image embeds its own build of the daemon
+# (the Dockerfile re-runs the build inside debian:trixie per platform via
+# QEMU) so it doesn't share artifacts with the build job.
+#
+# On every pipeline: build amd64, load locally, smoke-run for 5s, verify the
+# container is still up. Catches Dockerfile breakage on MRs before it lands.
+# On master only: also build arm64 and push :SHA + :latest to the registry.
+package:docker:
+  stage: package
+  image: docker:27
+  services:
+    - docker:27-dind
+  tags:
+    - docker
+    - unraid
+  needs:
+    - test
+    - analyze
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_BUILDKIT: "1"
+  before_script:
+    - docker info
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER"
+        --password-stdin "$CI_REGISTRY"
+    # binfmt registers QEMU handlers for cross-arch emulation so the arm64
+    # leg of the multi-arch build can run on the amd64 runner.
+    - docker run --privileged --rm tonistiigi/binfmt --install all
+    - docker buildx create --use --name multi
+  script:
+    - SHA_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - LATEST_TAG="$CI_REGISTRY_IMAGE:latest"
+    # Smoke build — amd64 only, loaded into the local docker so we can run it.
+    - docker buildx build --platform linux/amd64 --load -t "$SHA_TAG" .
+    - docker run -d --rm --name smoke "$SHA_TAG"
+    - sleep 5
+    # If the daemon crashed, the container is gone; this grep fails the job.
+    - docker ps --filter "name=smoke" --format '{{.Names}}' | grep -q '^smoke$'
+    - docker stop smoke
+    # Multi-arch push — only on master, otherwise stop here. amd64 leg hits
+    # the buildx layer cache from the smoke build above.
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "master" ]; then
+        docker buildx build --platform linux/amd64,linux/arm64 \
+          --push -t "$SHA_TAG" -t "$LATEST_TAG" .
+      else
+        echo "Not on master — skipping registry push."
+      fi
 
 # Push deploy via dynamically-generated child pipeline. One job per host in
 # $UPS_DEPLOY_HOSTS so each shows up as its own line in the pipeline graph
