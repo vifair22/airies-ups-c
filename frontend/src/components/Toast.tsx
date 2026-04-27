@@ -18,7 +18,7 @@ export function useToast() {
 export function ToastContainer({ toasts }: { toasts: Toast[] }) {
   if (toasts.length === 0) return null
   return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2">
+    <div className="fixed bottom-4 left-4 right-4 sm:left-auto z-50 space-y-2">
       {toasts.map(t => (
         <div key={t.id} className={`px-4 py-2.5 rounded-lg border text-sm shadow-lg ${
           t.type === 'error'

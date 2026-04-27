@@ -172,7 +172,8 @@ export default function About() {
           <section key={cat} className="mb-6">
             <h3 className="text-[10px] uppercase tracking-widest text-muted mb-2 px-1">{CATEGORY_TITLE[cat]}</h3>
             <div className="rounded-lg border border-edge overflow-hidden">
-              <table className="w-full text-sm table-fixed">
+              <div className="overflow-x-auto">
+              <table className="w-full text-sm table-fixed min-w-[480px]">
                 <colgroup>
                   <col className="w-[50%]" />
                   <col className="w-[30%]" />
@@ -195,6 +196,7 @@ export default function About() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </section>
         )
