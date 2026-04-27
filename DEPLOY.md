@@ -1,8 +1,8 @@
 # Deployment
 
-airies-ups is cross-compiled locally for aarch64 and deployed to the Raspberry Pi as a pre-built binary. The Pi needs no build tools — just the runtime libraries.
+airies-ups is distributed to the Raspberry Pis as a Debian package (`.deb`) built in CI and pushed via `apt-get install`. The Pi needs no build tools — just the runtime libraries that the package's `Depends:` field resolves automatically.
 
-The frontend (React/Vite) and SQL migrations are embedded into the daemon binary at build time. A single binary serves the API, web UI, and manages its own schema with no external files needed beyond `config.yaml` and the SQLite database.
+The frontend (React/Vite) and SQL migrations are embedded into the daemon binary at build time. A single binary serves the API, web UI, and manages its own schema with no external files needed beyond `config.yaml` and the SQLite database — both of which the `.deb` plants in `/var/lib/airies-ups/`.
 
 ## Targets
 
@@ -21,10 +21,10 @@ aarch64-unknown-linux-gnu-gcc    # Gentoo crossdev: sudo crossdev -t aarch64-unk
 bun brotli gzip xxd
 ```
 
-**Pi** — runtime libraries only (no build tools):
+**Pi** — nothing pre-installed. The `.deb`'s `Depends:` field pulls runtime libraries from trixie's main repo on first install:
 
 ```
-libmodbus5 libsqlite3-0 libcurl4 libmicrohttpd12 libssl3
+libmodbus5 libsqlite3-0 libcurl4t64 libmicrohttpd12t64 libssl3t64
 ```
 
 **Sysroot** — library headers and `.so` files synced from the Pi to `~/.sysroot/aarch64/`:
@@ -44,19 +44,7 @@ rsync -azL pi:/usr/lib/aarch64-linux-gnu/lib{modbus,sqlite3,curl,microhttpd,cryp
 
 The sysroot only needs refreshing on a Debian major version upgrade (e.g. bookworm → trixie). Patch updates within a release don't change the ABI.
 
-**USB HID**: The `sysadmin` user needs access to `/dev/hidrawN`. Pick the vendor rule(s) that match the deployed hardware:
-
-```bash
-# APC (Back-UPS, Smart-UPS HID)
-echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="051d", MODE="0660", GROUP="plugdev"' \
-  | sudo tee /etc/udev/rules.d/99-apc-ups.rules
-
-# CyberPower (PowerPanel — CP1500PFCLCD and family)
-echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0764", MODE="0660", GROUP="plugdev"' \
-  | sudo tee /etc/udev/rules.d/99-cyberpower-ups.rules
-
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
+**USB HID**: the `.deb` ships `99-airies-ups-ftdi.rules` to `/usr/lib/udev/rules.d/` and joins the `airies-ups` system user to `dialout` (Modbus FTDI) + `plugdev` (USB HID) automatically — no manual udev setup needed for installed Pis. For dev-machine local runs, the rule's still in the repo at `99-airies-ups-ftdi.rules`.
 
 ## Build pipeline
 
@@ -94,38 +82,33 @@ The migration embed step generates `build/migrations_compiled.c` from the `migra
 
 ## Quick deploy
 
+The primary deploy path is GitLab CI. Every master push:
+
+1. Builds the `arm64` `.deb` (`package:deb:arm64`)
+2. Publishes it as the rolling `nightly` release (`release:nightly`)
+3. Fans out to each host in `$UPS_DEPLOY_HOSTS` via the dynamic child pipeline — `scp` the `.deb` and `apt-get install` it. The package's `postinst` restarts the service.
+
+For native dev work without a Pi:
+
 ```bash
 ./deploy.sh local        # native debug build → ~/.local/share/airies-ups
-./deploy.sh              # full deploy to all hosts
-./deploy.sh full upspi   # deploy to upspi only
-./deploy.sh full upspi2  # deploy to upspi2 only
-./deploy.sh full upspi3  # deploy to upspi3 only
 ```
 
-Master commits also auto-deploy via GitLab CI — see [CI/CD pipeline](#cicd-pipeline) below.
-
-## Deploy script modes
-
-| Command | What it does |
-|---------|-------------|
-| `./deploy.sh local` | Native debug build, copy binaries to `~/.local/share/airies-ups` |
-| `./deploy.sh [full] [target]` | Cross-compile locally, rsync binaries to Pi, restart service |
-| `./deploy.sh build [target]` | Cross-compile + rsync binaries (no restart) |
-| `./deploy.sh restart [target]` | Restart the service only (no build) |
-| `./deploy.sh install-service [target]` | Copy the service file to systemd and reload (one-time setup) |
-
-Target is `all` (default), `upspi`, `upspi2`, or `upspi3`.
+For the one-time conversion of an existing Pi from the legacy `/home/sysadmin/airies-ups` rsync-binary layout to the `.deb` layout, see [First-time setup](#first-time-setup) below.
 
 ## What gets deployed
 
-Only the two binaries are rsynced to the Pi:
+The arm64 `.deb` (~410 KB) lays out the FHS-conventional way:
 
 ```
-build/airies-upsd    # daemon (868KB, frontend + migrations embedded)
-build/airies-ups     # CLI
+/usr/bin/airies-upsd                        daemon
+/usr/bin/airies-ups                         CLI
+/usr/lib/systemd/system/airies-ups.service  systemd unit (enabled by postinst)
+/usr/lib/udev/rules.d/99-airies-ups-ftdi.rules  FTDI Modbus rule
+/var/lib/airies-ups/                        state (config.yaml, app.db, owned airies-ups:airies-ups 0750)
 ```
 
-No source code, no build artifacts, no frontend toolchain.
+The package creates an `airies-ups` system user (in `dialout` + `plugdev`), no human shell. The service runs as that user. Frontend assets and SQL migrations are embedded into the daemon binary itself — no separate asset directory on disk.
 
 ## Pre-deploy verification
 
@@ -145,12 +128,14 @@ make lint
 ## Runtime layout
 
 ```
-/home/sysadmin/airies-ups/
-  build/airies-upsd       # daemon binary (frontend + migrations embedded)
-  build/airies-ups        # CLI binary
-  config.yaml             # bootstrap config
-  app.db                  # SQLite database (created on first run)
+/usr/bin/airies-upsd       # daemon (frontend + migrations embedded)
+/usr/bin/airies-ups        # CLI
+/var/lib/airies-ups/
+  config.yaml              # bootstrap config (managed by setup wizard)
+  app.db                   # SQLite database (created on first run)
 ```
+
+The systemd unit pins `AIRIES_UPS_CONFIG_PATH=/var/lib/airies-ups/config.yaml` via `Environment=` so the daemon's c-utils config layer resolves the file from the state dir, not CWD. `db.path` defaults to `app.db` (CWD-relative); `WorkingDirectory=/var/lib/airies-ups` lands it next to the config.
 
 ## Configuration
 
@@ -208,34 +193,18 @@ Replace `upspi` with `upspi2` for the second target.
 
 ## First-time setup
 
-1. Ensure Pi has runtime libraries installed (and udev rule for USB HID)
-2. Create the app directory on the Pi:
-   ```bash
-   ssh sysadmin@<host> "mkdir -p /home/sysadmin/airies-ups/build"
-   ```
-3. Deploy:
-   ```bash
-   ./deploy.sh build <target>
-   ```
-4. Create a minimal `config.yaml` on the Pi (just db + http, no UPS config needed):
-   ```bash
-   ssh sysadmin@<host> "cat > /home/sysadmin/airies-ups/config.yaml << 'EOF'
-   db:
-     path: app.db
-   http:
-     port: 8080
-     socket: /tmp/airies-ups.sock
-   EOF"
-   ```
-5. Install and enable the service:
-   ```bash
-   ./deploy.sh install-service <target>
-   ```
-6. Start:
-   ```bash
-   ./deploy.sh restart <target>
-   ```
-7. Open the web UI — the setup wizard will guide you through setting the admin password, detecting and configuring the UPS connection, and optional Pushover setup.
+For a Pi (or any trixie host) that's never had airies-ups installed:
+
+```bash
+ARCH=$(ssh sysadmin@<host> dpkg --print-architecture)
+curl -fLO "https://git.airies.net/api/v4/projects/233/packages/generic/airies-ups/nightly/airies-ups_${ARCH}.deb"
+scp "airies-ups_${ARCH}.deb" "sysadmin@<host>:/tmp/"
+ssh sysadmin@<host> "sudo apt-get install -y /tmp/airies-ups_${ARCH}.deb"
+```
+
+Open `http://<host>:8080` — the setup wizard guides you through admin password, UPS detection, and optional Pushover.
+
+After the host is registered with `$UPS_DEPLOY_HOSTS`, subsequent deploys flow through master pipelines automatically.
 
 ## Local development
 
@@ -353,8 +322,18 @@ flowchart LR
   test --> analyze
   test --> coverage
   test --> build
+  test --> build_amd64["build:amd64"]
   analyze --> build
-  build -->|master only| generate
+  analyze --> build_amd64
+  build --> deb_arm64["package:deb:arm64"]
+  build_amd64 --> deb_amd64["package:deb:amd64"]
+  test --> docker[package:docker]
+  analyze --> docker
+  deb_arm64 --> nightly[release:nightly]
+  deb_amd64 --> nightly
+  deb_arm64 --> autotag[release:auto-tag]
+  deb_amd64 --> autotag
+  deb_arm64 -->|master only| generate
   generate --> child
   subgraph child[child pipeline]
     direction LR
@@ -368,20 +347,27 @@ flowchart LR
 |-------|-----|--------------|
 | test | `test` | Builds c-utils + airies-ups natively, runs all C cmocka suites and frontend Vitest |
 | analyze | `analyze` | `make analyze` (cppcheck, stack-usage, gcc-fanalyzer) and `make lint` (clang-tidy) |
-| analyze | `coverage` | `make coverage`, gates on **75%** line coverage (`gcovr --fail-under-line 75`) — ratchet up toward 80% as new tests land |
-| build | `build` | Cross-compiles to aarch64 against Debian multi-arch arm64 libs, asserts `file` reports ARM aarch64, publishes binaries as artifacts |
-| deploy | `generate_deploy_child_pipeline` | Master only. Reads `$UPS_DEPLOY_HOSTS` and emits `deploy-child.yml` with one deploy job per host |
-| deploy | `deploy` (trigger) | Master only. Includes the generated `deploy-child.yml`; `strategy: depend` so the parent reflects child pipeline status |
-| deploy *(child)* | `deploy_<host>` | One per hostname. SSH/rsync binaries to the host, `systemctl restart airies-ups.service`, verify active. Children run in parallel — UPS daemons are independent and a synchronized bounce is acceptable |
+| analyze | `coverage:backend` / `coverage:frontend` | gcovr / vitest coverage with thresholds (75% / 70%, ratcheting up) |
+| build | `build` | Cross-compiles to aarch64 against Debian multi-arch arm64 libs |
+| build | `build:amd64` | Native amd64 build for the .deb and Docker amd64 leg |
+| package | `package:deb:{amd64,arm64}` | Stages the FHS layout, runs `dpkg-deb --build`, attaches the `.deb` as a job artifact |
+| package | `package:docker` | Multi-arch Docker image (`amd64` + `arm64`) via buildx + QEMU. master → `:nightly` + `:<sha>`; tags → `:<tag>` + `:latest` + `:<sha>`; MR/branch → smoke build only |
+| release | `release:nightly` | Master only. Uploads the `.deb`s to the Generic Package Registry under `airies-ups/nightly/` (overwrite), recreates the "Nightly" Release |
+| release | `release:auto-tag` | Master only. If `release_version` changed since the previous master commit, creates `v<semver>` git tag via API. Requires CI variable `RELEASE_TAG_TOKEN` |
+| release | `release:stable` | Tag-pipeline only. Uploads `.deb`s under `airies-ups/<tag>/`, creates an immutable Release |
+| deploy | `generate_deploy_child_pipeline` | Master only. Reads `$UPS_DEPLOY_HOSTS`, emits `deploy-child.yml` with one job per host |
+| deploy | `deploy` (trigger) | Master only. Includes the child YAML with `strategy: depend` |
+| deploy *(child)* | `deploy_<host>` | scp's the arm64 `.deb` to the host, runs `apt-get install`, verifies `systemctl is-active`. Children run in parallel — UPS daemons are independent across Pis and a synchronized bounce is acceptable |
 
 ### Required CI/CD variables
 
-Both are set on `vifair22/airies-ups-c` and **protected** (only available to jobs on protected branches like `master`):
+All set on `vifair22/airies-ups-c` and **protected** (only available to jobs on protected branches like `master`):
 
 | Variable | Type | Description |
 |----------|------|-------------|
 | `DEPLOY_SSH_KEY` | File | ed25519 private key for `sysadmin@upspi*.internal.airies.net`. Public side lives in each Pi's `~sysadmin/.ssh/authorized_keys` |
 | `UPS_DEPLOY_HOSTS` | Variable (raw) | Newline-separated list of hostnames, e.g. `upspi.internal.airies.net\nupspi2.internal.airies.net\nupspi3.internal.airies.net` |
+| `RELEASE_TAG_TOKEN` | Variable (masked, protected) | Project Access Token with `api` (or `write_repository`) scope. Used by `release:auto-tag` to create `v<semver>` git tags via the GitLab API when `release_version` changes — `CI_JOB_TOKEN` cannot create tags |
 
 Edit a host out of `UPS_DEPLOY_HOSTS` to skip it on the next deploy without changing the pipeline.
 

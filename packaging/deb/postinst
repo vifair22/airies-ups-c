@@ -1,0 +1,62 @@
+#!/bin/sh
+# Modeled on dh_installsystemd's output: idempotent, safe to re-run on every
+# upgrade. Creates the airies-ups system user, ensures /var/lib/airies-ups
+# exists with the right ownership, and hands the unit to systemd.
+
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group airies-ups >/dev/null; then
+            addgroup --system airies-ups
+        fi
+        if ! getent passwd airies-ups >/dev/null; then
+            adduser --system --no-create-home --ingroup airies-ups \
+                    --home /var/lib/airies-ups --shell /usr/sbin/nologin \
+                    airies-ups
+        fi
+
+        # Hardware access: dialout for /dev/ttyUSB* (FTDI Modbus on SMT/SRT),
+        # plugdev for USB HID (APC Back-UPS, CyberPower PowerPanel).
+        # Skip if the group doesn't exist on this system — both are usually
+        # present on Debian, but the package shouldn't fail to install if not.
+        for grp in dialout plugdev; do
+            if getent group "$grp" >/dev/null; then
+                adduser --quiet airies-ups "$grp" >/dev/null || true
+            fi
+        done
+
+        # Daemon writes config.yaml here on first run via the setup wizard,
+        # plus app.db (SQLite) for telemetry, alerts, auth, and runtime config.
+        install -d -o airies-ups -g airies-ups -m 0750 /var/lib/airies-ups
+
+        # Reload udev so the FTDI rule we just installed takes effect for
+        # any already-attached adapter, without requiring a reboot.
+        if command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules >/dev/null 2>&1 || true
+            udevadm trigger >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null || true
+fi
+
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || \
+   [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    if deb-systemd-helper debian-installed airies-ups.service; then
+        deb-systemd-helper unmask airies-ups.service >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled airies-ups.service; then
+            deb-systemd-helper enable airies-ups.service >/dev/null || true
+        else
+            deb-systemd-helper update-state airies-ups.service >/dev/null || true
+        fi
+    fi
+fi
+
+if [ "$1" = "configure" ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke restart airies-ups.service >/dev/null || true
+fi
+
+exit 0
