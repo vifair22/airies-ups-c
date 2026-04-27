@@ -9,7 +9,7 @@
  * Verified against APC SMT1500RM2UC (FW UPS 04.1, ModbusMapID 00.5) on
  * /dev/ttyUSB0 at 9600 8N1, slave 1. The full register table and the
  * real-life quirks this driver works around live in
- * APC_SMT_MODBUS_REFERENCE.md at the repo root.
+ * docs/reference/apc-smt-modbus.md.
  *
  * Differences from the SRT driver in the same family:
  *
@@ -121,7 +121,7 @@ static void smt_disconnect(void *transport)
 
 /* Detect: read SKU_STR (reg 548, 16 regs = 32 chars) and substring-match
  * "SMT". Model_STR alone does not contain the family prefix on the SMT
- * line — see APC_SMT_MODBUS_REFERENCE.md "Quirk — driver must detect via
+ * line — see docs/reference/apc-smt-modbus.md "Quirk — driver must detect via
  * SKU, not Model". */
 static int smt_detect(void *transport)
 {
@@ -451,7 +451,7 @@ enum {
  * these values before they hit the wire.
  *
  * Do not "fix" the gaps by re-adding 4/8 here without verifying on the
- * specific firmware in question. See APC_SMT_MODBUS_REFERENCE.md
+ * specific firmware in question. See docs/reference/apc-smt-modbus.md
  * "Battery test interval — register 1024" for reproduction details. */
 static const ups_bitfield_opt_t smt_bat_test_opts[] = {
     { 1,  "never",         "Never" },
@@ -480,7 +480,7 @@ static const ups_bitfield_opt_t smt_voltage_opts[] = {
 };
 
 /* --- FLAGS / BITFIELD options arrays for the comprehensive register dump.
- * Bit definitions transcribed from APC_SMT_MODBUS_REFERENCE.md (verified
+ * Bit definitions transcribed from docs/reference/apc-smt-modbus.md (verified
  * against APC SMT1500RM2UC, FW UPS 04.1). Strict=0 throughout — these are
  * read-only diagnostics, not validation targets.
  *
@@ -551,7 +551,7 @@ static const ups_bitfield_opt_t smt_transfer_reason_opts[] = {
     { 30, "failure_bypass_expired",      "Failure Bypass Expired" },
 };
 
-/* SMT outlet status bits per APC_SMT_MODBUS_REFERENCE.md table at line
+/* SMT outlet status bits per docs/reference/apc-smt-modbus.md table at line
  * 140-152 — differs from the SRT layout. */
 static const ups_bitfield_opt_t smt_outlet_status_opts[] = {
     { 0x00000001, "state_on",                "State: ON" },
@@ -572,7 +572,7 @@ static const ups_bitfield_opt_t smt_signaling_status_opts[] = {
     { 0x0002, "shutdown_imminent", "Shutdown Imminent" },
 };
 
-/* SMT general_error: bits 0-5, 7, 8 only per APC_SMT_MODBUS_REFERENCE.md
+/* SMT general_error: bits 0-5, 7, 8 only per docs/reference/apc-smt-modbus.md
  * line 169-179. Bits 6 and 9-15 are SRT/SURTD-only and omitted here. */
 static const ups_bitfield_opt_t smt_general_error_opts[] = {
     { 0x0001, "site_wiring",            "Site Wiring" },
@@ -813,14 +813,14 @@ static const ups_config_reg_t smt_config_regs[] = {
 
     /* === Comprehensive register dump descriptors (Phase 3) ===
      * Added 2026-04-25 to surface every documented Modbus register on
-     * /api/about. Coverage is per APC_SMT_MODBUS_REFERENCE.md. Existing
+     * /api/about. Coverage is per docs/reference/apc-smt-modbus.md. Existing
      * entries above (transfer_*, bat_test_interval, sensitivity, outlet
      * timings, load_shed*, output_voltage_setting, dates) cover the
      * operator-tunable settings; the entries below cover the read-only
      * diagnostic / measurement / identity surface plus the writable
      * Names block.
      *
-     * SMT-specific sentinels (per APC_SMT_MODBUS_REFERENCE.md):
+     * SMT-specific sentinels (per docs/reference/apc-smt-modbus.md):
      *   - reg 132 (Battery.Negative.VoltageDC) — 0xFFFF
      *   - reg 147 (Bypass.InputStatus_BF) — 0x0000
      *   - reg 148/149 (Bypass voltage/freq) — 0xFFFF

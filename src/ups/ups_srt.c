@@ -174,7 +174,7 @@ static int srt_read_inventory(void *transport, ups_inventory_t *inv)
 
     memset(inv, 0, sizeof(*inv));
 
-    /* Block layout (offsets from base 516, per APC_SRT_MODBUS_REFERENCE.md):
+    /* Block layout (offsets from base 516, per docs/reference/apc-srt-modbus.md):
      *   regs[ 0.. 7] firmware version (8 regs, 16 chars)
      *   regs[16..31] model name       (16 regs, 32 chars)
      *   regs[32..47] SKU              (16 regs, 32 chars)
@@ -314,7 +314,7 @@ static int srt_cmd_bypass_disable(void *transport)
  * AN-176 / 990-9840B define seven values for AcceptableFrequencySetting_BF
  * (bits 0..6). On SRT1000XLA FW 16.5 only five are accepted; the SRT
  * firmware rejects bits 2 (Hz50_1_0 = value 4) and 5 (Hz60_1_0 = value
- * 32) with Modbus exception 0x04. See APC_SRT_MODBUS_REFERENCE.md
+ * 32) with Modbus exception 0x04. See docs/reference/apc-srt-modbus.md
  * "Rejected Values (SRT1000XLA FW 16.5)" for reproduction details.
  *
  * Do not "fix" the gaps by re-adding 4/32 here without verifying on the
@@ -337,7 +337,7 @@ static const ups_freq_setting_t srt_freq_settings[] = {
  * and 3 (OnStartUpPlus14 = value 8) with Modbus exception 0x04. The
  * bits are spec-defined but apparently never wired into the operational
  * firmware. Strict-on validation in the registry blocks writes of these
- * values before they hit the wire. See APC_SRT_MODBUS_REFERENCE.md
+ * values before they hit the wire. See docs/reference/apc-srt-modbus.md
  * "Battery Test Interval (Register 1024)" for the full table. */
 
 static const ups_bitfield_opt_t srt_bat_test_opts[] = {
@@ -367,7 +367,7 @@ static const ups_bitfield_opt_t srt_freq_tol_opts[] = {
 };
 
 /* --- FLAGS / BITFIELD options arrays for the comprehensive register dump.
- * Bit definitions transcribed from APC_SRT_MODBUS_REFERENCE.md (verified
+ * Bit definitions transcribed from docs/reference/apc-srt-modbus.md (verified
  * against APC SRT1000XLA, FW UPS 16.5). Strict=0 throughout — these are
  * read-only diagnostics, not validation targets. */
 
@@ -617,7 +617,7 @@ static const ups_config_reg_t srt_config_regs[] = {
 
     /* === Comprehensive register dump descriptors ===
      * Added 2026-04-25 to surface every documented Modbus register on
-     * /api/about. Coverage is per APC_SRT_MODBUS_REFERENCE.md. Existing
+     * /api/about. Coverage is per docs/reference/apc-srt-modbus.md. Existing
      * entries above (transfer_*, bat_test_interval, outlet timings,
      * load_shed*, output_voltage_setting, freq_tolerance, dates) cover
      * the operator-tunable settings; the entries below cover the

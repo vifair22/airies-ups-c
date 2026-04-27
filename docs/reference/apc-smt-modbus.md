@@ -4,7 +4,7 @@ Findings from direct testing against an **APC SMT1500RM2UC** (FW: `UPS 04.1`, Mo
 
 This document is the canonical reference for the in-tree `ups_smt` driver. It is built from APC's published materials — **Application Note #176** (Modbus Implementation in APC Smart-UPS) and **Register Map 990-9840B** (Smart-UPS models with prefix SMT/SMX/SURTD/SRT) — cross-checked against live hardware. Where the wire-level behaviour differs from what either document implies, that difference is called out as a **Quirk** so future maintainers don't waste cycles relearning it.
 
-The companion SRT reference (`APC_SRT_MODBUS_REFERENCE.md`) covers a different model in the same family. The protocol framing is identical; the differences are in which fields populate, which commands the firmware accepts, and the topology-driven capability set.
+The companion SRT reference (`apc-srt-modbus.md`) covers a different model in the same family. The protocol framing is identical; the differences are in which fields populate, which commands the firmware accepts, and the topology-driven capability set.
 
 ---
 
@@ -394,7 +394,7 @@ Live value `0x0010` = OnStartUp7Since.
 
 #### Rejected Values (SMT1500RM2UC FW UPS 04.1)
 
-Values 4 (OnStartUpPlus7) and 8 (OnStartUpPlus14) are defined in AN-176 / 990-9840B but rejected by this firmware with Modbus exception 0x04 ("Slave device or server failure"). The same constraint exists on the SRT line per `APC_SRT_MODBUS_REFERENCE.md` — the bits appear to be spec-defined but never wired into operational firmware. The driver omits them from `smt_bat_test_opts` and the registry's strict-bitfield validation blocks writes of these values before they hit the wire.
+Values 4 (OnStartUpPlus7) and 8 (OnStartUpPlus14) are defined in AN-176 / 990-9840B but rejected by this firmware with Modbus exception 0x04 ("Slave device or server failure"). The same constraint exists on the SRT line per `apc-srt-modbus.md` — the bits appear to be spec-defined but never wired into operational firmware. The driver omits them from `smt_bat_test_opts` and the registry's strict-bitfield validation blocks writes of these values before they hit the wire.
 
 | Value | Result |
 |-------|--------|
@@ -473,7 +473,7 @@ In summary: the entire load-shed feature appears not implemented on FW UPS 04.1.
 
 ### Rapid-fire config writes can desync the control plane
 
-Writing to multiple registers in the 1024-1073 block in quick succession (sub-200ms intervals) reliably triggers a control plane reset on this firmware: subsequent reads return Invalid CRC or Illegal Data Address spuriously, and the bus needs ~1-2 seconds to settle before it accepts further traffic. Same quirk documented for the SRT line in `APC_SRT_MODBUS_REFERENCE.md` "Rapid-fire config register writes" — the registry's existing 200ms post-write quiet window (see `post_command_settle()` in `src/ups/ups.c`) is the workaround. Drivers should not bypass it.
+Writing to multiple registers in the 1024-1073 block in quick succession (sub-200ms intervals) reliably triggers a control plane reset on this firmware: subsequent reads return Invalid CRC or Illegal Data Address spuriously, and the bus needs ~1-2 seconds to settle before it accepts further traffic. Same quirk documented for the SRT line in `apc-srt-modbus.md` "Rapid-fire config register writes" — the registry's existing 200ms post-write quiet window (see `post_command_settle()` in `src/ups/ups.c`) is the workaround. Drivers should not bypass it.
 
 ---
 
@@ -574,7 +574,7 @@ Capabilities **not** offered by the SMT driver: `UPS_CAP_BYPASS` (no bypass path
 
 ## References
 
-- AN-176 (`docs/apc/AN176_modbus_implementation.pdf`) — protocol framing, BPI encoding, register-block organisation, USB HID transport notes
-- 990-9840B (`docs/apc/990-9840_modbus_register_map.pdf`) — full register/bit table for SMX/SMT/SURTD/SRT
-- `APC_SRT_MODBUS_REFERENCE.md` — companion reference for the SRT line; useful for diffing online-double-conversion behaviour against this line-interactive document
-- `driver-api.md` — in-tree driver contract this `ups_smt` driver implements
+- AN-176 (`../vendor/apc/AN176_modbus_implementation.pdf`) — protocol framing, BPI encoding, register-block organisation, USB HID transport notes
+- 990-9840B (`../vendor/apc/990-9840_modbus_register_map.pdf`) — full register/bit table for SMX/SMT/SURTD/SRT
+- `apc-srt-modbus.md` — companion reference for the SRT line; useful for diffing online-double-conversion behaviour against this line-interactive document
+- `../../driver-api.md` — in-tree driver contract this `ups_smt` driver implements
