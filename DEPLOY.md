@@ -44,11 +44,17 @@ rsync -azL pi:/usr/lib/aarch64-linux-gnu/lib{modbus,sqlite3,curl,microhttpd,cryp
 
 The sysroot only needs refreshing on a Debian major version upgrade (e.g. bookworm → trixie). Patch updates within a release don't change the ABI.
 
-**USB HID (Back-UPS)**: The `sysadmin` user needs access to `/dev/hidrawN`. Add a udev rule:
+**USB HID**: The `sysadmin` user needs access to `/dev/hidrawN`. Pick the vendor rule(s) that match the deployed hardware:
 
 ```bash
+# APC (Back-UPS, Smart-UPS HID)
 echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="051d", MODE="0660", GROUP="plugdev"' \
   | sudo tee /etc/udev/rules.d/99-apc-ups.rules
+
+# CyberPower (PowerPanel — CP1500PFCLCD and family)
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0764", MODE="0660", GROUP="plugdev"' \
+  | sudo tee /etc/udev/rules.d/99-cyberpower-ups.rules
+
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 

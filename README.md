@@ -4,7 +4,7 @@ UPS management platform — replaces APC PowerChute with a self-contained daemon
 
 ## What it does
 
-- **Direct hardware control.** Modbus RTU for APC Smart-UPS SMT and SRT lines; USB HID for APC Back-UPS ES. No `upsd` / NUT shim in between.
+- **Direct hardware control.** Modbus RTU for APC Smart-UPS SMT and SRT lines; USB HID for APC Back-UPS and CyberPower PowerPanel families (built on a shared HID PDC core). No `upsd` / NUT shim in between.
 - **Single-binary deployment.** The React frontend bundle and the SQLite migrations are embedded into the daemon binary at build time. The Pi only needs runtime libraries, a `config.yaml`, and the binary itself.
 - **Web UI.** Dashboard, command panel, event log, full configuration surface, first-run setup wizard. Served from the daemon binary — no separate static-file path, no nginx.
 - **Weather-aware High Efficiency mode.** Optionally toggles the UPS HE mode out of the way of forecast storms.
@@ -22,7 +22,7 @@ src/
   daemon/      airies-upsd entry point and lifecycle
   monitor/     poll loop, telemetry snapshots, retention sweeper
   shutdown/    dependent-host shutdown orchestrator
-  ups/         driver registry plus SMT, SRT, Back-UPS HID drivers
+  ups/         driver registry, SMT/SRT Modbus drivers, APC + CyberPower HID adapters on shared hid_pdc_core
   weather/     weather lookup and HE mode policy
 frontend/      React / TypeScript web UI (Vite + Tailwind, embedded into daemon)
 migrations/    SQLite migration files (embedded at build time)
