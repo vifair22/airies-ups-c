@@ -1,0 +1,17 @@
+// Grant the airies-ups system user permission to power off the host via
+// logind, without sudo or root escalation. The shutdown workflow's
+// controller phase calls `systemctl poweroff` after powering down
+// dependent hosts and commanding the UPS to cut output — that path goes
+// through org.freedesktop.login1, which needs an explicit polkit grant
+// for unprivileged users.
+//
+// polkitd watches /usr/share/polkit-1/rules.d/ via inotify; changes take
+// effect on the next authorization check, no daemon reload needed.
+
+polkit.addRule(function(action, subject) {
+    if ((action.id === "org.freedesktop.login1.power-off" ||
+         action.id === "org.freedesktop.login1.power-off-multiple-sessions") &&
+        subject.user === "airies-ups") {
+        return polkit.Result.YES;
+    }
+});

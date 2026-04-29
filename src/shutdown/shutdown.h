@@ -21,6 +21,36 @@ typedef struct shutdown_mgr shutdown_mgr_t;
 typedef void (*shutdown_progress_fn)(const char *group, const char *target,
                                      const char *status, void *userdata);
 
+/* One row per executed/skipped step in a workflow run. The same struct
+ * is used for real and dry-run executions; for dry-run, ok=0 means
+ * pre-flight validation passed, ok=1 means it failed.
+ *
+ * Phase identifiers:
+ *   "phase1"    user-defined group target (Phase 1)
+ *   "phase2"    UPS shutdown action       (Phase 2)
+ *   "phase3"    controller poweroff       (Phase 3)
+ *
+ * `target` carries:
+ *   "<group>/<target>"   for Phase 1
+ *   "ups"                for Phase 2
+ *   "controller"         for Phase 3 */
+typedef struct {
+    char phase[16];
+    char target[96];
+    int  ok;            /* 0 = ok, 1 = failed, 2 = skipped */
+    char error[256];    /* short reason on failure (empty on ok/skipped) */
+} shutdown_step_result_t;
+
+/* Aggregated result of a workflow run. Allocated by shutdown_execute_ex,
+ * freed via shutdown_result_free. */
+typedef struct {
+    shutdown_step_result_t *steps;
+    size_t                  n_steps;
+    size_t                  n_failed;
+} shutdown_result_t;
+
+void shutdown_result_free(shutdown_result_t *res);
+
 /* Create the shutdown manager. */
 shutdown_mgr_t *shutdown_create(cutils_db_t *db, ups_t *ups,
                                 cutils_config_t *config);
@@ -37,6 +67,13 @@ void shutdown_on_progress(shutdown_mgr_t *mgr, shutdown_progress_fn fn,
  * UPS action mode and controller shutdown are driven by app config.
  * Returns 0 on success. */
 int shutdown_execute(shutdown_mgr_t *mgr, int dry_run);
+
+/* Variant of shutdown_execute that captures per-step results for the API
+ * to surface back to the caller. If `out` is non-NULL, *out is set to a
+ * heap-allocated result the caller must free with shutdown_result_free.
+ * Pass NULL to behave identically to shutdown_execute. */
+int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
+                        shutdown_result_t **out);
 
 /* Test a single target by name (connect + verify, don't shut down).
  * Returns 0 on success. */
