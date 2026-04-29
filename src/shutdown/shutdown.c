@@ -30,6 +30,13 @@ struct shutdown_mgr {
     int                 triggered;          /* 1 = workflow already fired, don't re-trigger */
 };
 
+/* Internal helpers, non-static so the unit tests can exercise them via
+ * extern prototypes. Not part of any public header. */
+char *write_key_to_tmpfs(const char *key_material);
+int fire_target_action(const char *method, const char *host,
+                       const char *username, const char *credential,
+                       const char *command);
+
 /* --- Progress reporting --- */
 
 static void report(shutdown_mgr_t *mgr, const char *group,
@@ -152,26 +159,74 @@ static int confirm_target_down(const char *method, const char *host,
 
 /* --- Target execution --- */
 
+/* Write SSH private key material to a tmpfs file for `ssh -i`. Uses
+ * /dev/shm (tmpfs on every Linux kernel and inside Docker by default) so
+ * the key never touches non-volatile storage. Caller must unlink() and
+ * free() the returned path. mkstemp creates the file with mode 0600.
+ *
+ * Non-static so the unit test in tests/test_shutdown.c can exercise it
+ * directly via an `extern` prototype — no public header entry. */
+char *write_key_to_tmpfs(const char *key_material)
+{
+    char template[] = "/dev/shm/airies-ups-key.XXXXXX";
+    int fd = mkstemp(template);
+    if (fd < 0) {
+        set_error(CUTILS_ERR_IO, "mkstemp: %s", strerror(errno));
+        return NULL;
+    }
+
+    size_t len = strlen(key_material);
+    size_t written = 0;
+    while (written < len) {
+        ssize_t n = write(fd, key_material + written, len - written);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            set_error(CUTILS_ERR_IO, "write key: %s", strerror(errno));
+            close(fd);
+            unlink(template);
+            return NULL;
+        }
+        written += (size_t)n;
+    }
+    close(fd);
+
+    return strdup(template);
+}
+
 /* Fire the shutdown action (SSH or command). Does NOT wait for confirmation. */
-static int fire_target_action(const char *method, const char *host,
-                              const char *username, const char *credential,
-                              const char *command)
+int fire_target_action(const char *method, const char *host,
+                       const char *username, const char *credential,
+                       const char *command)
 {
     if (strcmp(method, "ssh_password") == 0) {
-        char cmd[1024];
+        char cmd[2048];
         snprintf(cmd, sizeof(cmd),
-                 "sshpass -p '%s' ssh -o StrictHostKeyChecking=no "
+                 "sshpass -p '%s' ssh "
+                 "-o PreferredAuthentications=password "
+                 "-o PubkeyAuthentication=no "
+                 "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
                  credential, username, host, command);
         return system(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "ssh_key") == 0) {
-        char cmd[1024];
+        char *key_path = write_key_to_tmpfs(credential);
+        if (!key_path) return -1;
+
+        char cmd[2048];
         snprintf(cmd, sizeof(cmd),
-                 "ssh -i '%s' -o StrictHostKeyChecking=no "
+                 "ssh -i '%s' "
+                 "-o IdentitiesOnly=yes "
+                 "-o BatchMode=yes "
+                 "-o PreferredAuthentications=publickey "
+                 "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
-                 credential, username, host, command);
-        return system(cmd) == 0 ? 0 : -1;
+                 key_path, username, host, command);
+        int rc = system(cmd);
+
+        unlink(key_path);
+        free(key_path);
+        return rc == 0 ? 0 : -1;
 
     } else if (strcmp(method, "command") == 0) {
         return system(command) == 0 ? 0 : -1;

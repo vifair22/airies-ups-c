@@ -334,28 +334,58 @@ static api_response_t handle_shutdown_targets_put(const api_request_t *req, void
     snprintf(cp_s,  sizeof(cp_s),  "%d", cp);
     snprintf(pcd_s, sizeof(pcd_s), "%d", pcd);
 
-    const char *params[] = {
-        gid_s,
-        name,
-        method ? method : "ssh_password",
-        host   ? host   : "",
-        user   ? user   : "",
-        cred   ? cred   : "",
-        cmd,
-        tmo_s, ord_s,
-        confm ? confm : "ping",
-        cp_s,
-        confc ? confc : "",
-        pcd_s,
-        id_s,
-        NULL
-    };
-    int rc = db_execute_non_query(ctx->db,
-        "UPDATE shutdown_targets SET group_id=?, name=?, method=?, host=?, "
-        "username=?, credential=?, command=?, timeout_sec=?, order_in_group=?, "
-        "confirm_method=?, confirm_port=?, confirm_command=?, post_confirm_delay=? "
-        "WHERE id=?",
-        params, NULL);
+    /* Blank credential = "leave existing value alone." The GET endpoint
+     * never returns the credential, so the edit form starts empty —
+     * overwriting on every save would wipe the saved password/key. */
+    bool change_cred = cred && *cred;
+
+    int rc;
+    if (change_cred) {
+        const char *params[] = {
+            gid_s,
+            name,
+            method ? method : "ssh_password",
+            host   ? host   : "",
+            user   ? user   : "",
+            cred,
+            cmd,
+            tmo_s, ord_s,
+            confm ? confm : "ping",
+            cp_s,
+            confc ? confc : "",
+            pcd_s,
+            id_s,
+            NULL
+        };
+        rc = db_execute_non_query(ctx->db,
+            "UPDATE shutdown_targets SET group_id=?, name=?, method=?, host=?, "
+            "username=?, credential=?, command=?, timeout_sec=?, order_in_group=?, "
+            "confirm_method=?, confirm_port=?, confirm_command=?, post_confirm_delay=? "
+            "WHERE id=?",
+            params, NULL);
+    } else {
+        const char *params[] = {
+            gid_s,
+            name,
+            method ? method : "ssh_password",
+            host   ? host   : "",
+            user   ? user   : "",
+            cmd,
+            tmo_s, ord_s,
+            confm ? confm : "ping",
+            cp_s,
+            confc ? confc : "",
+            pcd_s,
+            id_s,
+            NULL
+        };
+        rc = db_execute_non_query(ctx->db,
+            "UPDATE shutdown_targets SET group_id=?, name=?, method=?, host=?, "
+            "username=?, command=?, timeout_sec=?, order_in_group=?, "
+            "confirm_method=?, confirm_port=?, confirm_command=?, post_confirm_delay=? "
+            "WHERE id=?",
+            params, NULL);
+    }
     if (rc != CUTILS_OK) return api_error(500, "failed to update target");
     return api_ok_msg("updated");
 }
