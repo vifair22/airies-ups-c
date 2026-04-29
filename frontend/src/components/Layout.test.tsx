@@ -147,4 +147,34 @@ describe('Layout', () => {
      * release_version. Format: "UI <version>" with optional daemon suffix. */
     expect(screen.getByText(/UI /)).toBeInTheDocument()
   })
+
+  it('strips daemon build stamp to semver in the footer', async () => {
+    /* Daemon stamp is "<semver>_<YYYYMMDD>.<HHMM>.<type>.<tag>" — too wide
+     * for the 208px sidebar, so the footer renders only the semver and
+     * tucks the full stamp into the title= tooltip. */
+    mockApiResponses({
+      '/api/status':  { name: 'X', connected: true, driver: 'd' },
+      '/api/version': { daemon: '1.0.3_20260429.2243.release.arm64' },
+    })
+    renderLayout()
+
+    /* On-screen text shows only the semver portion. */
+    const footer = await screen.findByText(/Daemon 1\.0\.3$/)
+    expect(footer).toBeInTheDocument()
+    expect(footer).not.toHaveTextContent('20260429')
+    expect(footer).not.toHaveTextContent('arm64')
+
+    /* Full stamp is still inspectable via the title tooltip. */
+    expect(footer).toHaveAttribute(
+      'title',
+      expect.stringContaining('1.0.3_20260429.2243.release.arm64'))
+  })
+
+  it('omits the daemon suffix until /api/version resolves', () => {
+    globalThis.fetch = vi.fn().mockReturnValue(new Promise(() => {}))
+    renderLayout()
+    /* No daemon yet -> footer reads "UI <semver>" with no Daemon clause. */
+    const footer = screen.getByText(/^UI /)
+    expect(footer.textContent).not.toMatch(/Daemon/)
+  })
 })
