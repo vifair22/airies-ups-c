@@ -218,4 +218,140 @@ describe('Commands', () => {
     await userEvent.click(screen.getByText('Enable High Efficiency'))
     expect(screen.getByText('Enable High Efficiency?')).toBeInTheDocument()
   })
+
+  /* ── Shutdown workflow: result modal vs toast fallback ── */
+
+  /* Stubs /api/cmd to return the given JSON for shutdown_workflow,
+   * /api/status as connected, /api/commands with the standard fixtures. */
+  function stubShutdownWorkflow(payload: object) {
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/cmd')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve(payload),
+        })
+      }
+      if (url.includes('/api/status')) {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ connected: true, status: { raw: 2 } }),
+        })
+      }
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: () => Promise.resolve(mockCommands),
+      })
+    })
+  }
+
+  /* Click Dry Run, then confirm in the modal. */
+  async function runDryRun() {
+    await waitFor(() => {
+      expect(screen.getByText('Shutdown Workflow')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Dry Run' }))
+    expect(screen.getByText('Run Shutdown Dry Run?')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Run Dry Run' }))
+  }
+
+  it('opens result modal with per-step rows when shutdown returns steps', async () => {
+    stubShutdownWorkflow({
+      result:   'dry run complete',
+      all_ok:   true,
+      n_steps:  3,
+      n_failed: 0,
+      steps: [
+        { phase: 'phase1', target: 'PFsense/IRTR1', ok: 0, error: '' },
+        { phase: 'phase2', target: 'ups',           ok: 0, error: '' },
+        { phase: 'phase3', target: 'controller',    ok: 2, error: '' },
+      ],
+    })
+    renderWithRouter(<Commands />)
+    await runDryRun()
+
+    await waitFor(() => {
+      expect(screen.getByText('Dry run complete — no problems detected')).toBeInTheDocument()
+    })
+    expect(screen.getByText('PFsense/IRTR1')).toBeInTheDocument()
+    /* Status pills: 2 "ok", 1 "skipped", 0 "failed". */
+    expect(screen.getAllByText('ok')).toHaveLength(2)
+    expect(screen.getByText('skipped')).toBeInTheDocument()
+  })
+
+  it('headlines failures and renders the failing step with its error', async () => {
+    stubShutdownWorkflow({
+      result:   'dry run found problems',
+      all_ok:   false,
+      n_steps:  2,
+      n_failed: 1,
+      steps: [
+        { phase: 'phase1', target: 'PFsense/IRTR1', ok: 1,
+          error: 'ssh_password probe to admin@172.20.0.1 failed' },
+        { phase: 'phase3', target: 'controller',    ok: 0, error: '' },
+      ],
+    })
+    renderWithRouter(<Commands />)
+    await runDryRun()
+
+    await waitFor(() => {
+      expect(screen.getByText('Dry run found 1 problem')).toBeInTheDocument()
+    })
+    expect(screen.getByText('failed')).toBeInTheDocument()
+    expect(screen.getByText(/ssh_password probe to admin@172.20.0.1 failed/)).toBeInTheDocument()
+  })
+
+  it('falls back to a toast when steps payload is missing', async () => {
+    stubShutdownWorkflow({ result: 'shutdown initiated' })
+    renderWithRouter(<Commands />)
+    await runDryRun()
+
+    await waitFor(() => {
+      expect(screen.getByText('shutdown initiated')).toBeInTheDocument()
+    })
+    /* No result-modal headline rendered. */
+    expect(screen.queryByText(/Dry run complete/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Dry run found/)).not.toBeInTheDocument()
+  })
+
+  it('closes the result modal when Close is clicked', async () => {
+    stubShutdownWorkflow({
+      result: 'dry run complete', all_ok: true, n_steps: 1, n_failed: 0,
+      steps: [{ phase: 'phase2', target: 'ups', ok: 0, error: '' }],
+    })
+    renderWithRouter(<Commands />)
+    await runDryRun()
+
+    await waitFor(() => {
+      expect(screen.getByText('Dry run complete — no problems detected')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => {
+      expect(screen.queryByText('Dry run complete — no problems detected')).not.toBeInTheDocument()
+    })
+  })
+
+  it('reports plural failure copy for multi-failure runs', async () => {
+    stubShutdownWorkflow({
+      result: 'shutdown completed with failures', all_ok: false,
+      n_steps: 3, n_failed: 2,
+      steps: [
+        { phase: 'phase1', target: 'g/a',        ok: 1, error: 'boom' },
+        { phase: 'phase1', target: 'g/b',        ok: 1, error: 'boom' },
+        { phase: 'phase3', target: 'controller', ok: 0, error: '' },
+      ],
+    })
+    renderWithRouter(<Commands />)
+    await waitFor(() => {
+      expect(screen.getByText('Shutdown Workflow')).toBeInTheDocument()
+    })
+    /* "Shutdown" matches both the UPS power-control command button and
+     * the workflow's red button — the workflow button is the last one. */
+    const shutdownButtons = screen.getAllByRole('button', { name: 'Shutdown' })
+    await userEvent.click(shutdownButtons[shutdownButtons.length - 1])
+    await userEvent.click(screen.getByRole('button', { name: 'Shutdown Now' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Shutdown completed with 2 failures')).toBeInTheDocument()
+    })
+  })
 })

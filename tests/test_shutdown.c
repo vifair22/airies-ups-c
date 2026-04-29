@@ -897,6 +897,153 @@ static void test_fire_target_action_unknown_method(void **state)
     assert_int_equal(rc, CUTILS_ERR_INVALID);
 }
 
+/* =========================================================================
+ * shutdown_execute_ex — per-step result aggregation
+ *
+ * The setup() defaults (ups_mode=none, controller_enabled=0) emit two
+ * phase2/phase3 skipped rows, so even a no-groups workflow has 2 result
+ * rows — gives every test a known baseline to inspect.
+ * ========================================================================= */
+
+static const shutdown_step_result_t *find_step(const shutdown_result_t *res,
+                                               const char *phase,
+                                               const char *target_substr)
+{
+    if (!res) return NULL;
+    for (size_t i = 0; i < res->n_steps; i++) {
+        const shutdown_step_result_t *s = &res->steps[i];
+        if (strcmp(s->phase, phase) != 0) continue;
+        if (target_substr && !strstr(s->target, target_substr)) continue;
+        return s;
+    }
+    return NULL;
+}
+
+static void test_execute_ex_no_groups_emits_phase2_phase3(void **state)
+{
+    test_ctx_t *ctx = *state;
+    shutdown_result_t *res = NULL;
+    int rc = shutdown_execute_ex(ctx->mgr, 0, &res);
+
+    assert_int_equal(rc, CUTILS_OK);
+    assert_non_null(res);
+    /* No phase1 rows (no groups). Phase 2 + 3 always emit one row each. */
+    assert_int_equal(res->n_steps, 2);
+    assert_non_null(find_step(res, "phase2", "ups"));
+    assert_non_null(find_step(res, "phase3", "controller"));
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_phase2_skipped_when_mode_none(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* setup() pins ups_mode=none. Phase 2 row should be ok=2 (skipped). */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p2 = find_step(res, "phase2", "ups");
+    assert_non_null(p2);
+    assert_int_equal(p2->ok, 2);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_phase3_skipped_when_disabled(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* setup() pins controller_enabled=0. Phase 3 row should be ok=2. */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p3 = find_step(res, "phase3", "controller");
+    assert_non_null(p3);
+    assert_int_equal(p3->ok, 2);
+    assert_int_equal(res->n_failed, 0);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_sequential_failure_captured(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('seq', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "good", "/bin/true"),  CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "bad",  "/bin/false"), CUTILS_OK);
+
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *good = find_step(res, "phase1", "/good");
+    const shutdown_step_result_t *bad  = find_step(res, "phase1", "/bad");
+    assert_non_null(good);
+    assert_non_null(bad);
+    assert_int_equal(good->ok, 0);
+    assert_int_equal(bad->ok,  1);
+    assert_int_equal(res->n_failed, 1);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_parallel_failure_captured(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('par', 1, 1, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "good", "/bin/true"),  CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "bad",  "/bin/false"), CUTILS_OK);
+
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *good = find_step(res, "phase1", "/good");
+    const shutdown_step_result_t *bad  = find_step(res, "phase1", "/bad");
+    assert_non_null(good);
+    assert_non_null(bad);
+    assert_int_equal(good->ok, 0);
+    assert_int_equal(bad->ok,  1);
+    /* Parallel can't reach the child's cutils_get_error across the fork,
+     * so the parent records a generic message — verify the prefix. */
+    assert_true(strstr(bad->error, "step failed") != NULL);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_dry_run_validates_command_target(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('g', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "t", "/bin/true"), CUTILS_OK);
+
+    /* Dry run; method='command' validation passes (can't probe shell cmds). */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 1, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p1 = find_step(res, "phase1", "/t");
+    assert_non_null(p1);
+    assert_int_equal(p1->ok, 0);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_null_out_is_safe(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* NULL out param: behaves like shutdown_execute, no crash, no leak. */
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, NULL), CUTILS_OK);
+}
+
+static void test_shutdown_result_free_handles_null(void **state)
+{
+    (void)state;
+    shutdown_result_free(NULL);   /* no-op, no crash */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -942,6 +1089,15 @@ int main(void)
         cmocka_unit_test(test_fire_target_action_command_success),
         cmocka_unit_test(test_fire_target_action_command_failure),
         cmocka_unit_test(test_fire_target_action_unknown_method),
+        /* shutdown_execute_ex result aggregation */
+        cmocka_unit_test_setup_teardown(test_execute_ex_no_groups_emits_phase2_phase3, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_phase2_skipped_when_mode_none, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_phase3_skipped_when_disabled, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_sequential_failure_captured, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_parallel_failure_captured, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_dry_run_validates_command_target, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_null_out_is_safe, setup, teardown),
+        cmocka_unit_test(test_shutdown_result_free_handles_null),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
