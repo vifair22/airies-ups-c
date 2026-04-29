@@ -1,6 +1,7 @@
 #include "monitor/monitor.h"
 #include "monitor/status_snapshot.h"
 #include "monitor/config_snapshot.h"
+#include "monitor/xfer_ring.h"
 #include <cutils/log.h>
 #include <cutils/error.h>
 #include <cutils/mem.h>
@@ -16,29 +17,15 @@
 #define MAX_EVENT_CBS 4
 #define HE_REENGAGE_THRESHOLD 30
 
-/* --- Transfer-reason fast-poll constants ---
+/* --- Transfer-reason fast-poll cadence ---
  *
- * The slow status poll (every poll_sec, default 2 s) reads the entire
- * status block including register 2 (transfer_reason). On the SRT/SMT
- * firmware, register 2 latches the cause briefly during a mains event,
- * then reverts to AcceptableInput once mains is good again. Brief
- * glitches (sub-second to ~1 s) push the UPS out of HE mode but resolve
- * before the next slow poll, so we'd record the HE Mode Exit event
- * with a stale "AcceptableInput" reason that's wrong.
- *
- * The fast-poll thread reads JUST register 2 every XFER_FAST_POLL_MS
- * and pushes any change into a small ring buffer. When the slow poll
- * detects a status-bit transition, it looks back over XFER_LOOKBACK_MS
- * for a non-AcceptableInput entry — that's the actual cause to log. */
-#define XFER_RING_SIZE      16
+ * Cadence the fast-poll thread runs at, and the lookback window the slow
+ * poll uses when annotating events with a recent cause. See xfer_ring.h
+ * for the rationale (brief mains glitches resolve before the slow poll
+ * lands; we capture transitions in real time on a 200 ms cadence and
+ * search a 5 s window when a status-bit transition fires). */
 #define XFER_FAST_POLL_MS   200
 #define XFER_LOOKBACK_MS    5000
-#define XFER_REASON_ACCEPTABLE_INPUT  8u   /* matches transfer_reasons[8] */
-
-typedef struct {
-    uint64_t timestamp_ms;
-    uint16_t reason;
-} xfer_event_t;
 
 /* --- Monitor state --- */
 
@@ -60,11 +47,7 @@ struct monitor {
     volatile int    xfer_running;
     int             xfer_thread_started;
     pthread_mutex_t xfer_mutex;
-    xfer_event_t    xfer_ring[XFER_RING_SIZE];
-    size_t          xfer_head;            /* next write index */
-    size_t          xfer_count;           /* valid entries (capped at SIZE) */
-    uint16_t        xfer_last_seen;       /* last value read (change detect) */
-    int             xfer_last_seen_valid; /* set after first successful read */
+    xfer_ring_t     xfer_ring;
 
     /* Current state (protected by mutex) */
     pthread_mutex_t mutex;
@@ -153,9 +136,9 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
-/* Fast-poll thread body: reads register 2 every XFER_FAST_POLL_MS, pushes
- * any change into the ring. Only spawned when the driver supports the
- * single-register read (SRT/SMT do; HID drivers don't). */
+/* Fast-poll thread body: reads register 2 every XFER_FAST_POLL_MS and
+ * pushes any change into the ring. Only spawned when the driver supports
+ * the single-register read (SRT/SMT do; HID drivers don't). */
 static void *xfer_fast_poll_thread(void *arg)
 {
     monitor_t *mon = arg;
@@ -175,42 +158,17 @@ static void *xfer_fast_poll_thread(void *arg)
             continue;
 
         CUTILS_LOCK_GUARD(&mon->xfer_mutex);
-        if (mon->xfer_last_seen_valid && r == mon->xfer_last_seen)
-            continue;
-        mon->xfer_ring[mon->xfer_head].timestamp_ms = now_ms();
-        mon->xfer_ring[mon->xfer_head].reason       = r;
-        mon->xfer_head = (mon->xfer_head + 1) % XFER_RING_SIZE;
-        if (mon->xfer_count < XFER_RING_SIZE) mon->xfer_count++;
-        mon->xfer_last_seen       = r;
-        mon->xfer_last_seen_valid = 1;
+        xfer_ring_push(&mon->xfer_ring, now_ms(), r);
     }
     return NULL;
 }
 
-/* Returns the most recent non-AcceptableInput transfer reason recorded in
- * the last `lookback_ms` milliseconds. AcceptableInput (8) is the
- * steady-state "no event" value — events fired right after a glitch
- * resolves should report the *cause* (DistortedInput etc.), not the
- * recovery transition. Returns UPS_TRANSFER_REASON_UNKNOWN if nothing
- * relevant landed in the window — fire_event_xfer drops the suffix in
- * that case, so the event surfaces with no misleading reason. */
+/* Locked wrapper around xfer_ring_recent_cause — same semantics, plus
+ * coordinates with the fast-poll thread's writes. */
 static uint16_t recent_transfer_cause(monitor_t *mon, uint32_t lookback_ms)
 {
     CUTILS_LOCK_GUARD(&mon->xfer_mutex);
-    uint64_t now    = now_ms();
-    uint64_t cutoff = (now > lookback_ms) ? now - lookback_ms : 0;
-    uint16_t best       = UPS_TRANSFER_REASON_UNKNOWN;
-    uint64_t best_ts    = 0;
-    for (size_t i = 0; i < mon->xfer_count; i++) {
-        const xfer_event_t *e = &mon->xfer_ring[i];
-        if (e->timestamp_ms < cutoff) continue;
-        if (e->reason == XFER_REASON_ACCEPTABLE_INPUT) continue;
-        if (e->timestamp_ms > best_ts) {
-            best    = e->reason;
-            best_ts = e->timestamp_ms;
-        }
-    }
-    return best;
+    return xfer_ring_recent_cause(&mon->xfer_ring, now_ms(), lookback_ms);
 }
 
 /* Same as fire_event, but appends " (reason: <XferReason>)" to the message
@@ -592,6 +550,7 @@ monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
 
     pthread_mutex_init(&mon->mutex, NULL);
     pthread_mutex_init(&mon->xfer_mutex, NULL);
+    xfer_ring_init(&mon->xfer_ring);
 
     /* Load persisted status snapshot synchronously so callers that need
      * it before monitor_start (e.g. main.c seeding the alert engine via
