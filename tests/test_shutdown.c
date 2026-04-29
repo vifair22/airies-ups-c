@@ -688,6 +688,83 @@ static void test_shutdown_test_target_unknown_method_fails(void **state)
     assert_int_equal(shutdown_test_target(ctx->mgr, "weird"), -1);
 }
 
+/* --- shutdown_test_target_confirm: per-target down-detect probe --- */
+
+static int insert_target_with_confirm(cutils_db_t *db, const char *target_name,
+                                      const char *confirm_method,
+                                      const char *confirm_command)
+{
+    int rc = db_exec_raw(db,
+        "INSERT OR IGNORE INTO shutdown_groups (id, name, execution_order, "
+        "parallel, max_timeout_sec, post_group_delay) "
+        "VALUES (1, 'g', 1, 0, 0, 0)");
+    if (rc != CUTILS_OK) return rc;
+
+    char sql[768];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
+        "credential, command, timeout_sec, order_in_group, confirm_method, "
+        "confirm_port, confirm_command, post_confirm_delay) "
+        "VALUES (1, '%s', 'command', 'h', 'u', 'c', '/bin/true', 30, 1, "
+        "'%s', 0, '%s', 0)",
+        target_name, confirm_method, confirm_command ? confirm_command : "");
+    return db_exec_raw(db, sql);
+}
+
+static void test_shutdown_test_target_confirm_not_found(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "does_not_exist"),
+                     CUTILS_ERR_NOT_FOUND);
+}
+
+static void test_shutdown_test_target_confirm_none_method_ok(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(insert_target_with_confirm(ctx->db, "cm_none", "none", ""),
+                     CUTILS_OK);
+    /* method='none' has nothing to validate -> trivially ok. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_none"), 0);
+}
+
+static void test_shutdown_test_target_confirm_command_success(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_ok", "command", "/bin/true"),
+        CUTILS_OK);
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_ok"), 0);
+}
+
+static void test_shutdown_test_target_confirm_command_failure(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_bad", "command", "/bin/false"),
+        CUTILS_OK);
+    /* command exits non-zero -> reachability probe fails. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_bad"), -1);
+}
+
+static void test_shutdown_test_target_confirm_command_empty_fails(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_empty", "command", ""),
+        CUTILS_OK);
+    /* No command stored -> can't probe -> -1. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_empty"), -1);
+}
+
+static void test_shutdown_test_target_confirm_unknown_method_fails(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_weird", "magic", ""),
+        CUTILS_OK);
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_weird"), -1);
+}
+
 /* =========================================================================
  * shutdown_execute UPS-action phase — swap mgr->ups for a fake
  *
@@ -1079,6 +1156,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_not_found, setup, teardown),
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_command_method_ok, setup, teardown),
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_unknown_method_fails, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_not_found, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_none_method_ok, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_failure, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_empty_fails, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_unknown_method_fails, setup, teardown),
         /* ups action phase */
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_none_skips_ups_action, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_unknown_warns, setup, teardown),

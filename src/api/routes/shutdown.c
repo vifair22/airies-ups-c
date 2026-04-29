@@ -413,6 +413,71 @@ static api_response_t handle_shutdown_targets_delete(const api_request_t *req, v
     return api_ok_msg("deleted");
 }
 
+/* --- Per-target tests ---
+ *
+ * Two POST endpoints (test_ssh, test_confirm) take {"id": N} and exercise
+ * one half of the shutdown plumbing against the configured target,
+ * without firing anything destructive. Used by the per-target Test
+ * buttons in the Shutdown Config UI.
+ *
+ * Both return {ok: bool, error: string} so the UI can render a status
+ * pill + the underlying reason on failure. */
+
+typedef int (*target_probe_fn)(shutdown_mgr_t *, const char *target_name);
+
+static api_response_t handle_target_probe(const api_request_t *req,
+                                          route_ctx_t *ctx,
+                                          target_probe_fn probe)
+{
+    if (!ctx->shutdown) return api_error(503, "shutdown manager unavailable");
+    if (!req->body)     return api_error(400, "request body required");
+
+    CUTILS_AUTO_JSON_REQ cutils_json_req_t *body = NULL;
+    if (json_req_parse(req->body, req->body_len, &body) != CUTILS_OK)
+        return api_error(400, "invalid JSON");
+
+    int32_t id;
+    if (json_req_get_i32(body, "id", &id, INT32_MIN, INT32_MAX) != CUTILS_OK)
+        return api_error(400, "missing 'id'");
+
+    /* Resolve id -> name. The shutdown probe APIs are name-keyed because
+     * names are what the operator sees; the route layer translates so
+     * the UI only has to round-trip the row id it already holds. */
+    char id_s[16];
+    snprintf(id_s, sizeof(id_s), "%d", id);
+    const char *params[] = { id_s, NULL };
+
+    CUTILS_AUTO_DBRES db_result_t *row = NULL;
+    if (db_execute(ctx->db,
+            "SELECT name FROM shutdown_targets WHERE id=?", params, &row)
+            != CUTILS_OK || !row || row->nrows == 0)
+        return api_error(404, "target not found");
+
+    const char *name = row->rows[0][0];
+    int rc = probe(ctx->shutdown, name);
+    const char *err = (rc == 0) ? "" : cutils_get_error();
+
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK ||
+        json_resp_add_bool(resp, "ok",    rc == 0)         != CUTILS_OK ||
+        json_resp_add_str (resp, "error", err ? err : "")  != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+
+    return finalize_ok(resp);
+}
+
+static api_response_t handle_shutdown_targets_test_ssh(const api_request_t *req,
+                                                       void *ud)
+{
+    return handle_target_probe(req, ud, shutdown_test_target);
+}
+
+static api_response_t handle_shutdown_targets_test_confirm(const api_request_t *req,
+                                                           void *ud)
+{
+    return handle_target_probe(req, ud, shutdown_test_target_confirm);
+}
+
 /* --- Shutdown settings --- */
 
 static api_response_t handle_shutdown_settings_get(const api_request_t *req, void *ud)
@@ -546,6 +611,8 @@ void api_register_shutdown_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/shutdown/targets",  API_POST,   handle_shutdown_targets_post,  ctx);
     api_server_route(srv, "/api/shutdown/targets",  API_PUT,    handle_shutdown_targets_put,   ctx);
     api_server_route(srv, "/api/shutdown/targets",  API_DELETE, handle_shutdown_targets_delete, ctx);
+    api_server_route(srv, "/api/shutdown/targets/test_ssh",     API_POST, handle_shutdown_targets_test_ssh,     ctx);
+    api_server_route(srv, "/api/shutdown/targets/test_confirm", API_POST, handle_shutdown_targets_test_confirm, ctx);
     api_server_route(srv, "/api/shutdown/settings", API_GET,    handle_shutdown_settings_get,  ctx);
     api_server_route(srv, "/api/shutdown/settings", API_POST,   handle_shutdown_settings_set,  ctx);
 }
