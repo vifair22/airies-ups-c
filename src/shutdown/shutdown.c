@@ -30,6 +30,13 @@ struct shutdown_mgr {
     int                 triggered;          /* 1 = workflow already fired, don't re-trigger */
 };
 
+/* Internal helpers, non-static so the unit tests can exercise them via
+ * extern prototypes. Not part of any public header. */
+char *write_key_to_tmpfs(const char *key_material);
+int fire_target_action(const char *method, const char *host,
+                       const char *username, const char *credential,
+                       const char *command);
+
 /* --- Progress reporting --- */
 
 static void report(shutdown_mgr_t *mgr, const char *group,
@@ -155,8 +162,11 @@ static int confirm_target_down(const char *method, const char *host,
 /* Write SSH private key material to a tmpfs file for `ssh -i`. Uses
  * /dev/shm (tmpfs on every Linux kernel and inside Docker by default) so
  * the key never touches non-volatile storage. Caller must unlink() and
- * free() the returned path. mkstemp creates the file with mode 0600. */
-static char *write_key_to_tmpfs(const char *key_material)
+ * free() the returned path. mkstemp creates the file with mode 0600.
+ *
+ * Non-static so the unit test in tests/test_shutdown.c can exercise it
+ * directly via an `extern` prototype — no public header entry. */
+char *write_key_to_tmpfs(const char *key_material)
 {
     char template[] = "/dev/shm/airies-ups-key.XXXXXX";
     int fd = mkstemp(template);
@@ -184,9 +194,9 @@ static char *write_key_to_tmpfs(const char *key_material)
 }
 
 /* Fire the shutdown action (SSH or command). Does NOT wait for confirmation. */
-static int fire_target_action(const char *method, const char *host,
-                              const char *username, const char *credential,
-                              const char *command)
+int fire_target_action(const char *method, const char *host,
+                       const char *username, const char *credential,
+                       const char *command)
 {
     if (strcmp(method, "ssh_password") == 0) {
         char cmd[2048];

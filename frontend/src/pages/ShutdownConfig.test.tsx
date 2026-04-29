@@ -298,6 +298,32 @@ describe('ShutdownConfig — Targets', () => {
     /* Target form should appear with Save button */
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
+
+  it('credential widget swaps with method', async () => {
+    mockAll()
+    const { container } = renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getAllByText('+ Add Target').length).toBe(2)
+    })
+
+    await userEvent.click(screen.getAllByText('+ Add Target')[0])
+
+    /* EMPTY_TARGET defaults to method='ssh_key' → multiline textarea visible */
+    expect(screen.getByText('Private Key (PEM)')).toBeInTheDocument()
+    expect(container.querySelector('textarea')).toBeTruthy()
+
+    /* Switch to ssh_password → single-line input, label changes */
+    const methodSelect = screen.getByDisplayValue('SSH Key')
+    await userEvent.selectOptions(methodSelect, 'ssh_password')
+    expect(screen.getByText('Password')).toBeInTheDocument()
+    expect(container.querySelector('textarea')).toBeFalsy()
+
+    /* Switch to command → no credential field at all */
+    await userEvent.selectOptions(screen.getByDisplayValue('SSH Password'), 'command')
+    expect(screen.queryByText('Password')).not.toBeInTheDocument()
+    expect(screen.queryByText('Private Key (PEM)')).not.toBeInTheDocument()
+  })
 })
 
 /* ══════════════════════════════════════════════════════

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <pthread.h>
 
@@ -732,6 +733,71 @@ static void test_execute_ups_mode_register_writes_register(void **state)
     free_fake_ups(fake);
 }
 
+/* =========================================================================
+ * write_key_to_tmpfs — ssh_key material lands on tmpfs at 0600
+ *
+ * Internal helper used by fire_target_action() for method='ssh_key'.
+ * Non-static so we can extern it here without a public header entry.
+ * ========================================================================= */
+
+extern char *write_key_to_tmpfs(const char *key_material);
+extern int   fire_target_action(const char *method, const char *host,
+                                const char *username, const char *credential,
+                                const char *command);
+
+static void test_write_key_to_tmpfs_writes_content_at_0600(void **state)
+{
+    (void)state;
+
+    const char *key =
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "fake-key-material-for-test\n"
+        "-----END OPENSSH PRIVATE KEY-----\n";
+
+    char *path = write_key_to_tmpfs(key);
+    assert_non_null(path);
+    assert_non_null(strstr(path, "/dev/shm/airies-ups-key."));
+
+    /* mode is 0600 */
+    struct stat st;
+    assert_int_equal(stat(path, &st), 0);
+    assert_int_equal(st.st_mode & 0777, 0600);
+
+    /* contents round-trip */
+    FILE *f = fopen(path, "r");
+    assert_non_null(f);
+    char buf[256] = {0};
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    assert_int_equal(n, strlen(key));
+    assert_string_equal(buf, key);
+
+    unlink(path);
+    free(path);
+}
+
+static void test_fire_target_action_command_success(void **state)
+{
+    (void)state;
+    /* method='command' shells out via system(). /bin/true exits 0. */
+    int rc = fire_target_action("command", NULL, NULL, NULL, "/bin/true");
+    assert_int_equal(rc, 0);
+}
+
+static void test_fire_target_action_command_failure(void **state)
+{
+    (void)state;
+    int rc = fire_target_action("command", NULL, NULL, NULL, "/bin/false");
+    assert_int_equal(rc, -1);
+}
+
+static void test_fire_target_action_unknown_method(void **state)
+{
+    (void)state;
+    int rc = fire_target_action("bogus", "h", "u", "c", "/bin/true");
+    assert_int_equal(rc, CUTILS_ERR_INVALID);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -767,6 +833,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_unknown_warns, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_command_fires_shutdown, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_register_writes_register, setup, teardown),
+        /* internal helpers */
+        cmocka_unit_test(test_write_key_to_tmpfs_writes_content_at_0600),
+        cmocka_unit_test(test_fire_target_action_command_success),
+        cmocka_unit_test(test_fire_target_action_command_failure),
+        cmocka_unit_test(test_fire_target_action_unknown_method),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -29,13 +29,13 @@ export function SecretField({ label, value, onChange, multiline, placeholder, ro
       {multiline ? (
         <textarea value={value} onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder} rows={rows} spellCheck={false}
-          autoComplete="off"
+          autoComplete="off" data-masked={!revealed}
           className={`${baseCls} font-mono`}
           style={revealed ? undefined : { WebkitTextSecurity: 'disc' } as React.CSSProperties} />
       ) : (
         <input type={revealed ? 'text' : 'password'} value={value}
           onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-          autoComplete="off" className={baseCls} />
+          autoComplete="off" data-masked={!revealed} className={baseCls} />
       )}
     </div>
   )
