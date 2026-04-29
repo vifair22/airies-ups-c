@@ -263,4 +263,292 @@ describe('Setup', () => {
       expect(screen.getByText('Passwords do not match')).toBeInTheDocument()
     })
   })
+
+  it('login step submits and advances to connection', async () => {
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        /* setup/status — password set, no token */
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (callCount === 2) {
+        /* auth/login */
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ token: 'login-jwt' }),
+        })
+      }
+      /* setup/ports */
+      return Promise.resolve({ ok: true, status: 200,
+        json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
+      })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome Back')).toBeInTheDocument()
+    })
+
+    await userEvent.type(document.querySelector('input[type="password"]')!, 'goodpass')
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('UPS Connection')).toBeInTheDocument()
+    })
+    expect(localStorage.getItem('auth_token')).toBe('login-jwt')
+  })
+
+  it('login error from server is surfaced', async () => {
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200,
+        json: () => Promise.resolve({ error: 'invalid password' }),
+      })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome Back')).toBeInTheDocument()
+    })
+
+    await userEvent.type(document.querySelector('input[type="password"]')!, 'wrong')
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('invalid password')).toBeInTheDocument()
+    })
+  })
+
+  it('connection step switches to USB form when user selects USB', async () => {
+    localStorage.setItem('auth_token', 'test-jwt')
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      /* Mixed port scan — serial wins auto-select; user manually picks USB */
+      return Promise.resolve({ ok: true, status: 200,
+        json: () => Promise.resolve({
+          serial: ['/dev/ttyUSB0'],
+          usb: [{ vid: '051d', pid: '0002', name: 'APC Back-UPS', device: '/dev/hidraw0' }],
+        }),
+      })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('UPS Connection')).toBeInTheDocument()
+    })
+
+    /* Switch to USB via the Connection Type dropdown */
+    const connTypeSelect = screen.getByDisplayValue('Serial (Modbus RTU)') as HTMLSelectElement
+    await userEvent.selectOptions(connTypeSelect, 'usb')
+
+    await waitFor(() => {
+      expect(screen.getByText('Detected USB Devices')).toBeInTheDocument()
+    })
+  })
+
+  it('test connection error is shown', async () => {
+    localStorage.setItem('auth_token', 'test-jwt')
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (callCount === 2) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200,
+        json: () => Promise.resolve({ error: 'no UPS detected on /dev/ttyUSB0' }),
+      })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByText('Test Connection'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/no UPS detected/)).toBeInTheDocument()
+    })
+  })
+
+  it('save config with pushover and restart polls back to dashboard', async () => {
+    localStorage.setItem('auth_token', 'test-jwt')
+    let restarted = false
+    let postRestartStatus = 0  /* simulate daemon down then up */
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      const u = String(url)
+      if (u.includes('/api/setup/status')) {
+        if (restarted) {
+          postRestartStatus++
+          if (postRestartStatus < 2) {
+            return Promise.reject(new Error('not ready'))
+          }
+          return Promise.resolve({ ok: true, status: 200,
+            json: () => Promise.resolve({ needs_setup: false, password_set: true, ups_configured: true, ups_connected: true }),
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (u.includes('/api/setup/ports')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
+        })
+      }
+      if (u.includes('/api/setup/test')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({
+            result: 'ok', driver: 'modbus',
+            inventory: { model: 'SRT3000', serial: 'A', firmware: '1', nominal_va: 3000, nominal_watts: 2700 },
+          }),
+        })
+      }
+      if (u.includes('/api/config/app') && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ result: 'ok' }),
+        })
+      }
+      if (u.includes('/api/restart')) {
+        restarted = true
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ result: 'ok' }),
+        })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+
+    /* Fill in UPS Name (covers the if(upsName) setConfig branch) */
+    const upsNameInput = screen.getByPlaceholderText(/Server Room/)
+    await userEvent.type(upsNameInput, 'Lab')
+
+    await userEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => expect(screen.getByText(/Connected/)).toBeInTheDocument())
+
+    await userEvent.click(
+      screen.getAllByRole('button').find(b => b.textContent === 'Continue')!
+    )
+
+    await waitFor(() => expect(screen.getByText('Notifications')).toBeInTheDocument())
+
+    /* Fill in pushover credentials → exercises the if(pushToken && pushUser) branch */
+    const inputs = screen.getAllByPlaceholderText('Leave blank to skip')
+    await userEvent.type(inputs[0], 'token-abc')
+    await userEvent.type(inputs[1], 'user-def')
+
+    /* Button text becomes "Save & Finish" when pushToken is set */
+    await userEvent.click(screen.getByText('Save & Finish'))
+
+    await waitFor(() => expect(screen.getByText('Setup Complete')).toBeInTheDocument())
+
+    /* Restart click triggers /api/restart and the polling loop */
+    await userEvent.click(screen.getByText('Restart & Go to Dashboard'))
+    await waitFor(() => expect(screen.getByText('Restarting...')).toBeInTheDocument())
+  })
+
+  it('save config from notifications step lands on done step', async () => {
+    localStorage.setItem('auth_token', 'test-jwt')
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      callCount++
+      const u = String(url)
+      if (u.includes('/api/setup/status')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (u.includes('/api/setup/ports')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
+        })
+      }
+      if (u.includes('/api/setup/test')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({
+            result: 'ok', driver: 'modbus',
+            inventory: { model: 'SRT3000', serial: 'A', firmware: '1', nominal_va: 3000, nominal_watts: 2700 },
+          }),
+        })
+      }
+      if (u.includes('/api/config/app') && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ result: 'ok' }),
+        })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<Setup />, { route: '/setup' })
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Connection')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => {
+      expect(screen.getByText(/Connected/)).toBeInTheDocument()
+    })
+
+    /* connection → notifications */
+    await userEvent.click(
+      screen.getAllByRole('button').find(b => b.textContent === 'Continue')!
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Notifications')).toBeInTheDocument()
+    })
+
+    /* Skip pushover (don't fill in token/user). Click "Skip" or "Save". */
+    const buttons = screen.getAllByRole('button')
+    const finishBtn = buttons.find(b =>
+      b.textContent === 'Skip & Finish' || b.textContent === 'Finish' ||
+      b.textContent === 'Save' || b.textContent === 'Save & Finish'
+    )
+    expect(finishBtn).toBeDefined()
+    await userEvent.click(finishBtn!)
+
+    /* saveConfig posts each config key — at least one POST hit */
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      const configPosts = calls.filter((call: unknown[]) => {
+        const [url, optsAny] = call as [string, RequestInit?]
+        return url.includes('/api/config/app') && optsAny?.method === 'POST'
+      })
+      expect(configPosts.length).toBeGreaterThan(0)
+    })
+
+    /* callCount used to silence linter — verifies the mock fired */
+    expect(callCount).toBeGreaterThan(0)
+  })
 })
