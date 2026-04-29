@@ -151,6 +151,14 @@ static void on_monitor_poll(const ups_data_t *data, void *userdata)
 
 int main(int argc, char *argv[])
 {
+    /* Line-buffer stdout/stderr so log lines flush on every '\n'. Without
+     * this, libc block-buffers stdout when journald hands us a pipe, which
+     * lets the parent's partial buffer interleave with a forked child's
+     * stdout — journald then flushes the partial bytes as a binary blob
+     * with `_LINE_BREAK=pid-change`. Must run before any I/O. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+
     appguard_set_argv(argc, argv);
 
     /* --- Phase 1: AppGuard (config, DB, migrations, logging, push) --- */

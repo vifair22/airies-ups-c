@@ -37,6 +37,17 @@ int fire_target_action(const char *method, const char *host,
                        const char *username, const char *credential,
                        const char *command);
 
+/* Flush stdio before forking a child so the child can't pick up half-
+ * written buffered bytes from the parent (which journald renders as
+ * `_LINE_BREAK=pid-change` blobs and drops on the floor). Wraps system(3)
+ * so every shell-out path through this module gets the same treatment. */
+static int run_shell(const char *cmd)
+{
+    fflush(stdout);
+    fflush(stderr);
+    return system(cmd);
+}
+
 /* --- Progress reporting --- */
 
 static void report(shutdown_mgr_t *mgr, const char *group,
@@ -53,7 +64,7 @@ static int is_host_online(const char *host)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "ping -c 1 -W 1 %s >/dev/null 2>&1", host);
-    return system(cmd) == 0;
+    return run_shell(cmd) == 0;
 }
 
 /* Wait for host to stop responding to ping. Returns 0 if confirmed down,
@@ -133,7 +144,7 @@ static int confirm_command(const char *cmd, int timeout_sec)
 {
     time_t start = time(NULL);
     for (;;) {
-        if (system(cmd) == 0)
+        if (run_shell(cmd) == 0)
             return 0;
         if (time(NULL) - start >= timeout_sec)
             return -1;
@@ -207,7 +218,7 @@ int fire_target_action(const char *method, const char *host,
                  "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
                  credential, username, host, command);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "ssh_key") == 0) {
         char *key_path = write_key_to_tmpfs(credential);
@@ -222,14 +233,14 @@ int fire_target_action(const char *method, const char *host,
                  "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
                  key_path, username, host, command);
-        int rc = system(cmd);
+        int rc = run_shell(cmd);
 
         unlink(key_path);
         free(key_path);
         return rc == 0 ? 0 : -1;
 
     } else if (strcmp(method, "command") == 0) {
-        return system(command) == 0 ? 0 : -1;
+        return run_shell(command) == 0 ? 0 : -1;
     }
 
     return set_error(CUTILS_ERR_INVALID, "unknown shutdown method: %s", method);
@@ -266,7 +277,7 @@ static int test_target_connectivity(const char *method, const char *host,
                  "sshpass -p '%s' ssh -o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s 'echo OK'",
                  credential, username, host);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "ssh_key") == 0) {
         char cmd[1024];
@@ -274,7 +285,7 @@ static int test_target_connectivity(const char *method, const char *host,
                  "ssh -i '%s' -o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s 'echo OK'",
                  credential, username, host);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "command") == 0) {
         return 0; /* can't test arbitrary commands */
