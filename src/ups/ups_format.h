@@ -35,4 +35,10 @@ int ups_decode_general_errors(uint16_t raw, const char **out, int max);
 int ups_decode_power_errors(uint32_t raw, const char **out, int max);
 int ups_decode_battery_errors(uint16_t raw, const char **out, int max);
 
+/* Battery test status (reg 23) — returns the lowercase result/source word
+ * suitable for an event body, or NULL when no result/source bit is set
+ * (poll fired before the UPS latched the outcome). */
+const char *ups_battery_test_result_str(uint16_t raw);
+const char *ups_battery_test_source_str(uint16_t raw);
+
 #endif
