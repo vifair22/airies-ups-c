@@ -554,14 +554,34 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
             }
 
             if (dry_run) {
-                /* Pre-flight rows; commit-6 replaces these with real
-                 * connectivity checks via test_target_connectivity. */
+                /* Per-target validation: round-trip an `echo OK` over the
+                 * configured ssh method so we catch missing sshpass, bad
+                 * credentials, host-down, and similar before the operator
+                 * relies on the workflow during a real outage. */
                 char step_target[96];
                 for (int t = 0; t < targets->nrows; t++) {
+                    const char *tname  = targets->rows[t][0];
+                    const char *method = targets->rows[t][1];
+                    const char *host   = targets->rows[t][2];
+                    const char *user   = targets->rows[t][3];
+                    const char *cred   = targets->rows[t][4];
                     snprintf(step_target, sizeof(step_target), "%s/%s",
-                             group_name, targets->rows[t][0]);
-                    report(mgr, group_name, targets->rows[t][0], "would execute");
-                    result_append(res, "phase1", step_target, 0, NULL);
+                             group_name, tname);
+
+                    int probe_rc = test_target_connectivity(method, host, user, cred);
+                    if (probe_rc == 0) {
+                        report(mgr, group_name, tname, "validated");
+                        result_append(res, "phase1", step_target, 0, NULL);
+                    } else {
+                        report(mgr, group_name, tname, "validation FAILED");
+                        char err[256];
+                        snprintf(err, sizeof(err),
+                                 "%s probe to %s@%s failed",
+                                 method ? method : "(unknown method)",
+                                 user ? user : "?",
+                                 host ? host : "?");
+                        result_append(res, "phase1", step_target, 1, err);
+                    }
                 }
             } else if (parallel) {
                 execute_group_parallel(mgr, group_name, targets, max_timeout, res);
@@ -587,8 +607,15 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
         result_append(res, "phase2", "ups", 2, NULL);
     } else if (strcmp(ups_mode, "command") == 0) {
         if (dry_run) {
-            log_info("UPS action: would send shutdown command");
-            result_append(res, "phase2", "ups", 0, NULL);
+            const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
+            if (sd) {
+                log_info("UPS action: would send '%s'", sd->name);
+                result_append(res, "phase2", "ups", 0, NULL);
+            } else {
+                log_error("UPS action: driver advertises no shutdown command");
+                result_append(res, "phase2", "ups", 1,
+                              "driver advertises no shutdown command");
+            }
         } else {
             log_info("UPS action: sending shutdown command");
             const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
@@ -659,8 +686,24 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
         result_append(res, "phase3", "controller", 2, NULL);
     } else if (ctrl_enabled) {
         if (dry_run) {
-            log_info("Controller: would execute 'systemctl poweroff'");
-            result_append(res, "phase3", "controller", 0, NULL);
+            /* Ask logind directly via D-Bus whether the calling user can
+             * power off without an interactive challenge. Returns one of
+             * "yes" (our polkit rule is in place), "no" (denied), or
+             * "challenge" (auth needed — i.e. polkit rule missing for
+             * this user). systemctl has no `can-poweroff` verb; the
+             * canonical check is org.freedesktop.login1.Manager.CanPowerOff. */
+            int can_rc = run_shell(
+                "busctl call org.freedesktop.login1 /org/freedesktop/login1 "
+                "org.freedesktop.login1.Manager CanPowerOff 2>/dev/null "
+                "| grep -q '\"yes\"'");
+            if (can_rc == 0) {
+                log_info("Controller: logind would authorize poweroff");
+                result_append(res, "phase3", "controller", 0, NULL);
+            } else {
+                log_error("Controller: logind refused poweroff (polkit grant missing?)");
+                result_append(res, "phase3", "controller", 1,
+                              "logind refused poweroff (polkit grant missing?)");
+            }
         } else {
             log_info("Controller: shutting down via systemctl poweroff");
             /* Goes through logind → systemd, gracefully stops services and
