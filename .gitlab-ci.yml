@@ -150,7 +150,7 @@ coverage:frontend:
 # Cross-compile to aarch64 against Debian multi-arch arm64 runtime libs. The
 # native pass inside `make cross` (which runs the C test suite again) is what
 # guarantees the cross step never starts with a broken tree.
-build:
+build:arm64:
   stage: build
   image: debian:trixie
   tags:
@@ -195,10 +195,10 @@ build:
       - build/airies-ups
     expire_in: 1 month
 
-# Native amd64 build of the daemon. Mirrors `build:` (which produces the
-# arm64 cross-compile for the Pis) and feeds package:deb:amd64. Skips the
-# cmocka run that `make all` bundles — the dedicated test: stage already
-# covered that.
+# Native amd64 build of the daemon. Mirrors `build:arm64` (which produces
+# the aarch64 cross-compile for the Pis) and feeds package:deb:amd64.
+# Skips the cmocka run that `make all` bundles — the dedicated test: stage
+# already covered that.
 build:amd64:
   stage: build
   image: debian:trixie
@@ -267,7 +267,7 @@ package:deb:amd64:
 package:deb:arm64:
   <<: *package_deb_template
   needs:
-    - build
+    - build:arm64
   variables:
     STRIP_PACKAGE: binutils-aarch64-linux-gnu
   script:
