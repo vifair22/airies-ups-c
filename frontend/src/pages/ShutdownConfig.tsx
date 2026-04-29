@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useApi, apiPost, apiPut, apiDelete } from '../hooks/useApi'
 import { Field } from '../components/Field'
+import { SecretField } from '../components/SecretField'
 import type { ShutdownGroup, ShutdownTarget, ShutdownTrigger, ShutdownSettings } from '../types/shutdown'
 
 const EMPTY_TARGET = {
@@ -401,7 +402,8 @@ function GroupCard({ group, targets, editing, onEdit, onCancelEdit, onSave, onDe
       <div className="px-4 py-2 border-t border-edge">
         {showAddTarget ? (
           <TargetForm target={newTarget} setTarget={setNewTarget as (t: TargetLike) => void}
-            onSubmit={onAddTarget} onCancel={onToggleAddTarget} submitLabel="Add Target" />
+            onSubmit={onAddTarget} onCancel={onToggleAddTarget} submitLabel="Add Target"
+            isEdit={false} />
         ) : (
           <button onClick={onToggleAddTarget} className="text-xs text-accent hover:text-accent-hover">
             + Add Target
@@ -438,11 +440,12 @@ function TargetRow({ target, onEdit, onDelete }: {
 function TargetEditRow({ target, onSave, onCancel }: {
   target: ShutdownTarget; onSave: (t: ShutdownTarget) => void; onCancel: () => void
 }) {
-  const [t, setT] = useState(target)
+  const [t, setT] = useState({ ...target, credential: '' })
   return (
     <div className="px-4 py-3">
       <TargetForm target={t} setTarget={setT as (t: TargetLike) => void}
-        onSubmit={() => onSave(t)} onCancel={onCancel} submitLabel="Save" />
+        onSubmit={() => onSave(t)} onCancel={onCancel} submitLabel="Save"
+        isEdit={true} />
     </div>
   )
 }
@@ -451,13 +454,16 @@ function TargetEditRow({ target, onSave, onCancel }: {
 
 type TargetLike = ShutdownTarget | typeof EMPTY_TARGET
 
-function TargetForm({ target, setTarget, onSubmit, onCancel, submitLabel }: {
+function TargetForm({ target, setTarget, onSubmit, onCancel, submitLabel, isEdit }: {
   target: TargetLike
   setTarget: (t: TargetLike) => void
   onSubmit: () => void; onCancel: () => void; submitLabel: string
+  isEdit: boolean
 }) {
   const t = target
   const set = (k: string, v: string | number) => setTarget({ ...target, [k]: v } as TargetLike)
+
+  const credPlaceholder = isEdit ? 'leave blank to keep existing' : ''
 
   return (
     <div className="space-y-3">
@@ -477,7 +483,17 @@ function TargetForm({ target, setTarget, onSubmit, onCancel, submitLabel }: {
           </select>
         </div>
         <Field label={t.method === 'command' ? 'Command' : 'Shutdown Command'} value={t.command} onChange={(v) => set('command', v)} />
-        <Field label={t.method === 'ssh_password' ? 'Password' : 'Key Path'} value={t.credential || ''} onChange={(v) => set('credential', v)} />
+        {t.method === 'ssh_password' && (
+          <SecretField label="Password" value={t.credential || ''}
+            onChange={(v) => set('credential', v)} placeholder={credPlaceholder} />
+        )}
+        {t.method === 'ssh_key' && (
+          <div className="sm:col-span-1">
+            <SecretField label="Private Key (PEM)" multiline rows={5}
+              value={t.credential || ''} onChange={(v) => set('credential', v)}
+              placeholder={credPlaceholder || 'paste contents of private key file'} />
+          </div>
+        )}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div>
