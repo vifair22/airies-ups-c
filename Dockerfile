@@ -51,11 +51,21 @@ RUN git clone --branch "${CUTILS_REF}" --depth 1 "${CUTILS_REPO}" /tmp/c-utils &
 WORKDIR /src
 COPY . .
 
+# Build tag composition. TARGETARCH is set automatically by buildx
+# per-platform (amd64 / arm64). BUILD_VARIANT is "nightly" / "dev" / ""
+# (empty on tagged-release builds). The binary's VERSION_STRING always
+# carries "docker.<arch>"; the channel suffix is appended only when set.
+ARG TARGETARCH
+ARG BUILD_VARIANT=""
+
 # Explicit build chain — `make all` would also run cmocka, which CI's test
 # stage already covers and doesn't belong in the image build.
-RUN make CUTILS_DIR=/tmp/c-utils frontend && \
-    make CUTILS_DIR=/tmp/c-utils embed-frontend embed-migrations && \
-    make CUTILS_DIR=/tmp/c-utils BUILD_TYPE=release EMBED=1 _build
+RUN set -eu; \
+    BUILD_TAG="docker.${TARGETARCH}"; \
+    if [ -n "$BUILD_VARIANT" ]; then BUILD_TAG="${BUILD_TAG}.${BUILD_VARIANT}"; fi; \
+    make CUTILS_DIR=/tmp/c-utils frontend; \
+    make CUTILS_DIR=/tmp/c-utils embed-frontend embed-migrations; \
+    make CUTILS_DIR=/tmp/c-utils BUILD_TYPE=release EMBED=1 BUILD_TAG="$BUILD_TAG" _build
 
 # ---------------------------------------------------------------------------
 # Runtime

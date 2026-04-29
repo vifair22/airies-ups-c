@@ -182,6 +182,18 @@ build:arm64:
   script:
     - export BUN_INSTALL="$HOME/.bun"
     - export PATH="$BUN_INSTALL/bin:$PATH"
+    # BUILD_TAG decorates the binary's compiled-in VERSION_STRING with
+    # packaging.arch[.channel]. Channel suffix is omitted on tag pipelines
+    # so a stable release reads "release.deb.arm64" rather than carrying
+    # a noisy nightly/dev marker.
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        export BUILD_TAG="deb.arm64"
+      elif [ "${CI_COMMIT_BRANCH:-}" = "master" ]; then
+        export BUILD_TAG="deb.arm64.nightly"
+      else
+        export BUILD_TAG="deb.arm64.dev"
+      fi
     - make cross
         CUTILS_DIR=/tmp/c-utils
         CROSS_PREFIX=aarch64-linux-gnu-
@@ -222,6 +234,15 @@ build:amd64:
   script:
     - export BUN_INSTALL="$HOME/.bun"
     - export PATH="$BUN_INSTALL/bin:$PATH"
+    # See build:arm64 for BUILD_TAG rationale.
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        export BUILD_TAG="deb.amd64"
+      elif [ "${CI_COMMIT_BRANCH:-}" = "master" ]; then
+        export BUILD_TAG="deb.amd64.nightly"
+      else
+        export BUILD_TAG="deb.amd64.dev"
+      fi
     - make CUTILS_DIR=/tmp/c-utils frontend
     - make CUTILS_DIR=/tmp/c-utils embed-frontend embed-migrations
     - make CUTILS_DIR=/tmp/c-utils BUILD_TYPE=release EMBED=1 _build
@@ -513,8 +534,21 @@ package:docker:
     - docker buildx create --use --name multi
   script:
     - SHA_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    # BUILD_VARIANT decorates the binary's compiled-in VERSION_STRING per
+    # platform. The Dockerfile composes BUILD_TAG=docker.<arch>.<variant>
+    # using buildx's auto-set TARGETARCH, so a single build-arg covers
+    # both amd64 and arm64 legs.
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        BUILD_VARIANT=""
+      elif [ "${CI_COMMIT_BRANCH:-}" = "master" ]; then
+        BUILD_VARIANT="nightly"
+      else
+        BUILD_VARIANT="dev"
+      fi
     # Smoke build — amd64 only, loaded into local docker so we can run it.
-    - docker buildx build --platform linux/amd64 --load -t "$SHA_TAG" .
+    - docker buildx build --build-arg BUILD_VARIANT="$BUILD_VARIANT"
+        --platform linux/amd64 --load -t "$SHA_TAG" .
     - docker run -d --rm --name smoke "$SHA_TAG"
     - sleep 5
     # If the daemon crashed, the container is gone; this grep fails the job.
@@ -530,7 +564,8 @@ package:docker:
         TAGS="-t $CI_REGISTRY_IMAGE:nightly -t $SHA_TAG"
       fi
       if [ -n "$TAGS" ]; then
-        docker buildx build --platform linux/amd64,linux/arm64 --push $TAGS .
+        docker buildx build --build-arg BUILD_VARIANT="$BUILD_VARIANT" \
+          --platform linux/amd64,linux/arm64 --push $TAGS .
       else
         echo "MR / branch pipeline — built and smoked, not pushing."
       fi
