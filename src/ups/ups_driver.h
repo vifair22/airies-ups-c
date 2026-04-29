@@ -423,6 +423,16 @@ typedef struct ups_driver {
     int (*read_inventory) (void *transport, ups_inventory_t *inv);
     int (*read_thresholds)(void *transport, uint16_t *transfer_high, uint16_t *transfer_low);
 
+    /* read_transfer_reason: optional fast single-register read of the input
+     * transfer-reason cause register. Used by the monitor's fast-poll thread
+     * to catch sub-poll-interval transitions (brief mains glitches that
+     * push the UPS out of HE mode but resolve within the main 2 s poll
+     * window — register 2 on the SRT/SMT firmware reverts to "Acceptable
+     * Input" once mains is good again, so the slow status read misses the
+     * actual cause). NULL means the driver has no separate cause register
+     * (HID drivers); the monitor skips the fast-poll thread for those. */
+    int (*read_transfer_reason)(void *transport, uint16_t *out);
+
     /* ---- Commands ----
      *
      * See ups_cmd_desc_t. Dispatched by name via ups_cmd_execute(). */

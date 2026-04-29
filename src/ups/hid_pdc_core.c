@@ -13,6 +13,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/hidraw.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -625,7 +626,15 @@ int hid_pdc_read_dynamic_standard(hid_pdc_transport_t *t, ups_data_t *data)
         data->output_voltage = data->input_voltage;
 
     data->load_pct         = hid_field_read_scaled(t->fd, t->pdc.percent_load);
-    data->output_frequency = hid_field_read_scaled(t->fd, t->pdc.output_frequency);
+
+    /* HID PDC has no required frequency usage and many consumer Back-UPS /
+     * CyberPower SKUs simply don't expose HID_USAGE_FREQUENCY. NaN signals
+     * "unavailable" so the API can omit the field and the UI can hide the
+     * metric, rather than rendering a misleading 0.00 Hz reading. */
+    if (t->pdc.output_frequency)
+        data->output_frequency = hid_field_read_scaled(t->fd, t->pdc.output_frequency);
+    else
+        data->output_frequency = (double)NAN;
 
     if (data->output_voltage > 0 && t->nominal_watts > 0)
         data->output_current = (data->load_pct / 100.0)
@@ -649,7 +658,7 @@ int hid_pdc_read_dynamic_standard(hid_pdc_transport_t *t, ups_data_t *data)
 
     /* No bypass or efficiency in standard HID PDC */
     data->bypass_voltage    = 0;
-    data->bypass_frequency  = 0;
+    data->bypass_frequency  = (double)NAN;
     data->efficiency        = 0.0;
     data->efficiency_reason = UPS_EFF_NOT_AVAILABLE;
 

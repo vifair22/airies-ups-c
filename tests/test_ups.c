@@ -34,6 +34,10 @@ static ups_data_t fake_read_dynamic_fill;
 static int  fake_read_inventory_calls;
 static int  fake_read_thresholds_calls;
 
+static int      fake_read_transfer_reason_calls;
+static int      fake_read_transfer_reason_return;
+static uint16_t fake_read_transfer_reason_fill;
+
 static int  fake_execute_calls;
 static int  fake_execute_off_calls;
 
@@ -81,6 +85,14 @@ static int fake_read_thresholds(void *t, uint16_t *h, uint16_t *l)
     if (h) *h = 0;
     if (l) *l = 0;
     return 0;
+}
+
+static int fake_read_transfer_reason(void *t, uint16_t *out)
+{
+    (void)t;
+    fake_read_transfer_reason_calls++;
+    if (out) *out = fake_read_transfer_reason_fill;
+    return fake_read_transfer_reason_return;
 }
 
 static int fake_cmd_execute(void *t)      { (void)t; fake_execute_calls++;     return 0; }
@@ -155,6 +167,7 @@ static void reset_driver(void)
         .read_dynamic      = fake_read_dynamic,
         .read_inventory    = fake_read_inventory,
         .read_thresholds   = fake_read_thresholds,
+        .read_transfer_reason = fake_read_transfer_reason,
         .commands          = fake_cmds,
         .commands_count    = sizeof(fake_cmds) / sizeof(fake_cmds[0]),
         .config_regs       = fake_regs,
@@ -171,6 +184,9 @@ static void reset_counters(void)
     memset(&fake_read_dynamic_fill, 0, sizeof(fake_read_dynamic_fill));
     fake_read_inventory_calls = 0;
     fake_read_thresholds_calls = 0;
+    fake_read_transfer_reason_calls = 0;
+    fake_read_transfer_reason_return = 0;
+    fake_read_transfer_reason_fill = 0;
     fake_execute_calls = 0;
     fake_execute_off_calls = 0;
     fake_connect_calls = 0;
@@ -564,6 +580,34 @@ static void test_read_thresholds_no_callback_not_supported(void **state)
     assert_int_equal(ups_read_thresholds(u, &hi, &lo), UPS_ERR_NOT_SUPPORTED);
 }
 
+static void test_read_transfer_reason_success(void **state)
+{
+    ups_t *u = *state;
+    fake_read_transfer_reason_fill = 3;  /* DistortedInput */
+    uint16_t out = 0xBEEF;
+    assert_int_equal(ups_read_transfer_reason(u, &out), 0);
+    assert_int_equal(fake_read_transfer_reason_calls, 1);
+    assert_int_equal(out, 3);
+    assert_int_equal(u->consecutive_errors, 0);
+}
+
+static void test_read_transfer_reason_error_increments_counter(void **state)
+{
+    ups_t *u = *state;
+    fake_read_transfer_reason_return = -1;
+    uint16_t out = 0;
+    assert_int_equal(ups_read_transfer_reason(u, &out), -1);
+    assert_int_equal(u->consecutive_errors,  1);
+}
+
+static void test_read_transfer_reason_no_callback_not_supported(void **state)
+{
+    ups_t *u = *state;
+    fake_driver.read_transfer_reason = NULL;
+    uint16_t out = 0;
+    assert_int_equal(ups_read_transfer_reason(u, &out), UPS_ERR_NOT_SUPPORTED);
+}
+
 /* Instrumented config_read so the success-path test can ride the same
  * infrastructure; the fake_config_read in test_config_validation.c is
  * in a different translation unit. */
@@ -843,6 +887,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_read_inventory_no_callback_not_supported, setup, teardown),
         cmocka_unit_test_setup_teardown(test_read_thresholds_success,            setup, teardown),
         cmocka_unit_test_setup_teardown(test_read_thresholds_no_callback_not_supported, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_read_transfer_reason_success,       setup, teardown),
+        cmocka_unit_test_setup_teardown(test_read_transfer_reason_error_increments_counter, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_read_transfer_reason_no_callback_not_supported, setup, teardown),
         cmocka_unit_test_setup_teardown(test_config_read_success,                setup, teardown),
         cmocka_unit_test_setup_teardown(test_config_read_no_callback_not_supported, setup, teardown),
 

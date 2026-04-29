@@ -318,6 +318,16 @@ int ups_read_status(ups_t *ups, ups_data_t *data)
     return rc;
 }
 
+int ups_read_transfer_reason(ups_t *ups, uint16_t *out)
+{
+    if (!ups->driver->read_transfer_reason) return UPS_ERR_NOT_SUPPORTED;
+    CUTILS_LOCK_GUARD(&ups->cmd_mutex);
+    if (!ups_ensure_transport(ups)) return UPS_ERR_IO;
+    int rc = ups->driver->read_transfer_reason(ups->transport, out);
+    if (rc != 0) ups_handle_error(ups); else ups_clear_errors(ups);
+    return rc;
+}
+
 int ups_read_dynamic(ups_t *ups, ups_data_t *data)
 {
     if (!ups->driver->read_dynamic) return UPS_ERR_NOT_SUPPORTED;

@@ -67,9 +67,9 @@ API_SRCS   = src/api/server.c src/api/auth.c \
              src/api/routes/shutdown.c src/api/routes/config.c \
              src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
-             src/monitor/retention.c \
              src/monitor/status_snapshot.c \
              src/monitor/config_snapshot.c \
+             src/monitor/xfer_ring.c \
              src/alerts/alerts.c \
              src/shutdown/shutdown.c \
              src/weather/weather.c
@@ -313,9 +313,9 @@ $(eval $(call build_test,test_config_snapshot,\
   tests/test_config_snapshot.c src/monitor/config_snapshot.c,\
   $(TEST_FULL_LIBS),$(TEST_DIR),))
 
-$(eval $(call build_test,test_retention,\
-  tests/test_retention.c src/monitor/retention.c,\
-  $(TEST_FULL_LIBS),$(TEST_DIR),))
+$(eval $(call build_test,test_xfer_ring,\
+  tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
+  $(TEST_COMMON_LIBS),$(TEST_DIR),))
 
 # --- Coverage builds (same definitions, --coverage flag) ---
 
@@ -359,13 +359,13 @@ $(eval $(call build_test,test_config_snapshot,\
   tests/test_config_snapshot.c src/monitor/config_snapshot.c,\
   $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
 
-$(eval $(call build_test,test_retention,\
-  tests/test_retention.c src/monitor/retention.c,\
-  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+$(eval $(call build_test,test_xfer_ring,\
+  tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
+  $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
 
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_retention
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_xfer_ring
 
 # --- Run targets ---
 
