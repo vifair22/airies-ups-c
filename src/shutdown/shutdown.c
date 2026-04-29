@@ -530,10 +530,14 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
     int ctrl_enabled = config_get_int(mgr->config, "shutdown.controller_enabled", 1);
     if (ctrl_enabled) {
         if (dry_run) {
-            log_info("Controller: would execute 'sudo shutdown -h now'");
+            log_info("Controller: would execute 'systemctl poweroff'");
         } else {
-            log_info("Controller: shutting down");
-            int shut_rc = system("sudo shutdown -h now");
+            log_info("Controller: shutting down via systemctl poweroff");
+            /* Goes through logind → systemd, gracefully stops services and
+             * syncs filesystems. The .deb ships a polkit rule granting the
+             * airies-ups system user org.freedesktop.login1.power-off; no
+             * sudo, no setuid binary, no root. */
+            int shut_rc = run_shell("systemctl poweroff");
             if (shut_rc != 0)
                 log_warn("controller shutdown command returned %d", shut_rc);
         }
