@@ -80,7 +80,7 @@ coverage:backend:
   needs:
     - test
   variables:
-    COVERAGE_LINE_THRESHOLD: "75"
+    COVERAGE_LINE_THRESHOLD: "80"
   before_script:
     - apt-get update -qq
     - apt-get install -y --no-install-recommends
