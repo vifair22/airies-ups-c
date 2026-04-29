@@ -305,6 +305,7 @@ static int execute_target(const char *method, const char *host,
 static int test_target_connectivity(const char *method, const char *host,
                                     const char *username, const char *credential)
 {
+    if (!method) return -1;
     if (strcmp(method, "ssh_password") == 0) {
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
@@ -574,12 +575,14 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                         result_append(res, "phase1", step_target, 0, NULL);
                     } else {
                         report(mgr, group_name, tname, "validation FAILED");
+                        /* method/host/user are NOT NULL per the schema;
+                         * test_target_connectivity also guards against a
+                         * null method up front. No need to ternary-defend
+                         * around them — doing so confused cppcheck into
+                         * thinking the call site might pass null. */
                         char err[256];
                         snprintf(err, sizeof(err),
-                                 "%s probe to %s@%s failed",
-                                 method ? method : "(unknown method)",
-                                 user ? user : "?",
-                                 host ? host : "?");
+                                 "%s probe to %s@%s failed", method, user, host);
                         result_append(res, "phase1", step_target, 1, err);
                     }
                 }
