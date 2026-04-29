@@ -361,6 +361,15 @@ int ups_read_inventory(ups_t *ups, ups_inventory_t *inv);
  * raw register counts. */
 int ups_read_thresholds(ups_t *ups, uint16_t *transfer_high, uint16_t *transfer_low);
 
+/* Single-register read of the input transfer reason cause register.
+ *
+ * Lighter than ups_read_status (one register vs the whole status block)
+ * so the monitor's fast-poll thread can call it every ~200 ms without
+ * hogging the bus. Returns UPS_ERR_NOT_SUPPORTED if the active driver
+ * has no separate cause register (HID drivers); callers should treat
+ * that as "no fast-poll path available" and fall back to the slow path. */
+int ups_read_transfer_reason(ups_t *ups, uint16_t *out);
+
 /* ===========================================================================
  *  Commands — descriptor-driven operator actions
  *

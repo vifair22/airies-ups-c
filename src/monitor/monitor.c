@@ -5,6 +5,7 @@
 #include <cutils/error.h>
 #include <cutils/mem.h>
 
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,17 +16,55 @@
 #define MAX_EVENT_CBS 4
 #define HE_REENGAGE_THRESHOLD 30
 
+/* --- Transfer-reason fast-poll constants ---
+ *
+ * The slow status poll (every poll_sec, default 2 s) reads the entire
+ * status block including register 2 (transfer_reason). On the SRT/SMT
+ * firmware, register 2 latches the cause briefly during a mains event,
+ * then reverts to AcceptableInput once mains is good again. Brief
+ * glitches (sub-second to ~1 s) push the UPS out of HE mode but resolve
+ * before the next slow poll, so we'd record the HE Mode Exit event
+ * with a stale "AcceptableInput" reason that's wrong.
+ *
+ * The fast-poll thread reads JUST register 2 every XFER_FAST_POLL_MS
+ * and pushes any change into a small ring buffer. When the slow poll
+ * detects a status-bit transition, it looks back over XFER_LOOKBACK_MS
+ * for a non-AcceptableInput entry — that's the actual cause to log. */
+#define XFER_RING_SIZE      16
+#define XFER_FAST_POLL_MS   200
+#define XFER_LOOKBACK_MS    5000
+#define XFER_REASON_ACCEPTABLE_INPUT  8u   /* matches transfer_reasons[8] */
+
+typedef struct {
+    uint64_t timestamp_ms;
+    uint16_t reason;
+} xfer_event_t;
+
 /* --- Monitor state --- */
 
 struct monitor {
     ups_t        *ups;
     cutils_db_t  *db;
     int           poll_sec;
-    int           telemetry_sec;
 
     /* Thread */
     pthread_t     thread;
     volatile int  running;
+
+    /* Transfer-reason fast-poll thread (only spawned when the active
+     * driver implements read_transfer_reason — HID drivers leave it
+     * NULL and skip this entirely). The ring buffer stores recent
+     * transitions of register 2 so event annotations can pick up
+     * causes that flickered on/off between slow polls. */
+    pthread_t       xfer_thread;
+    volatile int    xfer_running;
+    int             xfer_thread_started;
+    pthread_mutex_t xfer_mutex;
+    xfer_event_t    xfer_ring[XFER_RING_SIZE];
+    size_t          xfer_head;            /* next write index */
+    size_t          xfer_count;           /* valid entries (capped at SIZE) */
+    uint16_t        xfer_last_seen;       /* last value read (change detect) */
+    int             xfer_last_seen_valid; /* set after first successful read */
 
     /* Current state (protected by mutex) */
     pthread_mutex_t mutex;
@@ -56,14 +95,6 @@ struct monitor {
     int           he_inhibit;
     char          he_source[32];
     int           he_reengage_count;
-
-    /* Telemetry timing */
-    time_t        last_telemetry;
-
-    /* Retention */
-    retention_config_t retention;
-    int                retention_enabled;
-    time_t             last_retention;
 
     /* Event callbacks */
     monitor_event_fn event_fns[MAX_EVENT_CBS];
@@ -112,65 +143,93 @@ static void fire_event(monitor_t *mon, const char *severity,
     }
 }
 
+/* Monotonic millisecond timestamp for the xfer ring buffer. Monotonic
+ * (not wall-clock) so NTP slew or DST changes don't make the ring's
+ * timestamps go backwards mid-run. */
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+/* Fast-poll thread body: reads register 2 every XFER_FAST_POLL_MS, pushes
+ * any change into the ring. Only spawned when the driver supports the
+ * single-register read (SRT/SMT do; HID drivers don't). */
+static void *xfer_fast_poll_thread(void *arg)
+{
+    monitor_t *mon = arg;
+    while (mon->xfer_running) {
+        struct timespec sleep_ts = {
+            .tv_sec  = 0,
+            .tv_nsec = (long)XFER_FAST_POLL_MS * 1000000L,
+        };
+        nanosleep(&sleep_ts, NULL);
+        if (!mon->xfer_running) break;
+
+        uint16_t r;
+        /* ups_read_transfer_reason takes ups->cmd_mutex internally, so
+         * this serializes naturally with the slow poll, command writes,
+         * and any API-driven config writes. */
+        if (ups_read_transfer_reason(mon->ups, &r) != UPS_OK)
+            continue;
+
+        CUTILS_LOCK_GUARD(&mon->xfer_mutex);
+        if (mon->xfer_last_seen_valid && r == mon->xfer_last_seen)
+            continue;
+        mon->xfer_ring[mon->xfer_head].timestamp_ms = now_ms();
+        mon->xfer_ring[mon->xfer_head].reason       = r;
+        mon->xfer_head = (mon->xfer_head + 1) % XFER_RING_SIZE;
+        if (mon->xfer_count < XFER_RING_SIZE) mon->xfer_count++;
+        mon->xfer_last_seen       = r;
+        mon->xfer_last_seen_valid = 1;
+    }
+    return NULL;
+}
+
+/* Returns the most recent non-AcceptableInput transfer reason recorded in
+ * the last `lookback_ms` milliseconds. AcceptableInput (8) is the
+ * steady-state "no event" value — events fired right after a glitch
+ * resolves should report the *cause* (DistortedInput etc.), not the
+ * recovery transition. Returns UPS_TRANSFER_REASON_UNKNOWN if nothing
+ * relevant landed in the window — fire_event_xfer drops the suffix in
+ * that case, so the event surfaces with no misleading reason. */
+static uint16_t recent_transfer_cause(monitor_t *mon, uint32_t lookback_ms)
+{
+    CUTILS_LOCK_GUARD(&mon->xfer_mutex);
+    uint64_t now    = now_ms();
+    uint64_t cutoff = (now > lookback_ms) ? now - lookback_ms : 0;
+    uint16_t best       = UPS_TRANSFER_REASON_UNKNOWN;
+    uint64_t best_ts    = 0;
+    for (size_t i = 0; i < mon->xfer_count; i++) {
+        const xfer_event_t *e = &mon->xfer_ring[i];
+        if (e->timestamp_ms < cutoff) continue;
+        if (e->reason == XFER_REASON_ACCEPTABLE_INPUT) continue;
+        if (e->timestamp_ms > best_ts) {
+            best    = e->reason;
+            best_ts = e->timestamp_ms;
+        }
+    }
+    return best;
+}
+
 /* Same as fire_event, but appends " (reason: <XferReason>)" to the message
- * when the driver reports a known UPSStatusChangeCause value. Drivers that
- * don't support the cause register (Back-UPS HID) leave transfer_reason at
- * UPS_TRANSFER_REASON_UNKNOWN and the suffix is omitted. */
+ * when the fast-poll ring buffer has a recent non-AcceptableInput cause.
+ * Drivers without the fast-poll path (HID) and events with no recent
+ * cause both fall through to the plain fire_event. */
 static void fire_event_xfer(monitor_t *mon, const char *severity,
                             const char *category, const char *title,
-                            uint16_t transfer_reason, const char *message)
+                            const char *message)
 {
-    if (!ups_transfer_reason_known(transfer_reason)) {
+    uint16_t reason = recent_transfer_cause(mon, XFER_LOOKBACK_MS);
+    if (!ups_transfer_reason_known(reason)) {
         fire_event(mon, severity, category, title, message);
         return;
     }
     char buf[640];
     snprintf(buf, sizeof(buf), "%s (reason: %s)",
-             message, ups_transfer_reason_str(transfer_reason));
+             message, ups_transfer_reason_str(reason));
     fire_event(mon, severity, category, title, buf);
-}
-
-static void record_telemetry(monitor_t *mon, const ups_data_t *d)
-{
-    char ts[32];
-    time_t now = time(NULL);
-    struct tm tm;
-    gmtime_r(&now, &tm);
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
-
-    char status_s[16], charge_s[16], runtime_s[16], bv_s[16];
-    char load_s[16], ov_s[16], of_s[16], oc_s[16], iv_s[16], eff_s[16];
-    char mog_s[16], sog0_s[16], sog1_s[16], energy_s[16];
-
-    snprintf(status_s, sizeof(status_s), "%u", d->status);
-    snprintf(charge_s, sizeof(charge_s), "%.1f", d->charge_pct);
-    snprintf(runtime_s, sizeof(runtime_s), "%u", d->runtime_sec);
-    snprintf(bv_s, sizeof(bv_s), "%.1f", d->battery_voltage);
-    snprintf(load_s, sizeof(load_s), "%.1f", d->load_pct);
-    snprintf(ov_s, sizeof(ov_s), "%.1f", d->output_voltage);
-    snprintf(of_s, sizeof(of_s), "%.2f", d->output_frequency);
-    snprintf(oc_s, sizeof(oc_s), "%.1f", d->output_current);
-    snprintf(iv_s, sizeof(iv_s), "%.1f", d->input_voltage);
-    snprintf(eff_s, sizeof(eff_s), "%.1f", d->efficiency);
-    snprintf(mog_s, sizeof(mog_s), "%u", d->outlet_mog);
-    snprintf(sog0_s, sizeof(sog0_s), "%u", d->outlet_sog0);
-    snprintf(sog1_s, sizeof(sog1_s), "%u", d->outlet_sog1);
-    snprintf(energy_s, sizeof(energy_s), "%u", d->output_energy_wh);
-
-    const char *params[] = {
-        ts, status_s, charge_s, runtime_s, bv_s, load_s,
-        ov_s, of_s, oc_s, iv_s, eff_s,
-        mog_s, sog0_s, sog1_s, energy_s, NULL
-    };
-    /* Best-effort telemetry insert; next poll will append a fresh row
-     * regardless, so a transient DB error is self-healing. */
-    CUTILS_UNUSED(db_execute_non_query(mon->db,
-        "INSERT INTO telemetry (timestamp, status, charge_pct, runtime_sec, "
-        "battery_voltage, load_pct, output_voltage, output_frequency, "
-        "output_current, input_voltage, efficiency, "
-        "outlet_mog, outlet_sog0, outlet_sog1, output_energy_wh) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params, NULL));
 }
 
 static void format_status_line(const ups_data_t *d, char *buf, size_t len)
@@ -179,14 +238,22 @@ static void format_status_line(const ups_data_t *d, char *buf, size_t len)
     ups_status_str(d->status, status_str, sizeof(status_str));
     ups_efficiency_str((int)d->efficiency_reason, d->efficiency, eff_str, sizeof(eff_str));
 
+    char freq_str[16];
+    /* HID drivers leave output_frequency = NaN when the device doesn't
+     * expose HID_USAGE_FREQUENCY; print a placeholder rather than "nanHz". */
+    if (isnan(d->output_frequency))
+        snprintf(freq_str, sizeof(freq_str), "—Hz");
+    else
+        snprintf(freq_str, sizeof(freq_str), "%.1fHz", d->output_frequency);
+
     snprintf(buf, len,
              "Status: %s | Chg: %.0f%% | Rt: %um%us | Bv: %.1fV | "
-             "In: %.1fV | Out: %.1fV %.1fHz %.1fA | Load: %.0f%% | "
+             "In: %.1fV | Out: %.1fV %s %.1fA | Load: %.0f%% | "
              "Eff: %s | Xfer: %s",
              status_str, d->charge_pct,
              d->runtime_sec / 60, d->runtime_sec % 60,
              d->battery_voltage, d->input_voltage,
-             d->output_voltage, d->output_frequency, d->output_current,
+             d->output_voltage, freq_str, d->output_current,
              d->load_pct, eff_str,
              ups_transfer_reason_str(d->transfer_reason));
 }
@@ -304,8 +371,6 @@ static void *monitor_thread(void *arg)
         mon->was_connected = 1;
     }
 
-    mon->last_telemetry = time(NULL);
-
     /* Poll loop */
     while (mon->running) {
         sleep((unsigned int)mon->poll_sec);
@@ -384,7 +449,7 @@ static void *monitor_thread(void *arg)
                     log_info("UPS stably re-engaged HE mode, clearing inhibit");
                     monitor_he_inhibit_clear(mon);
                     fire_event_xfer(mon, "info", "status",
-                                    "HE Mode Restored", data.transfer_reason,
+                                    "HE Mode Restored",
                                     "HE mode re-engaged, inhibit cleared");
                 }
             } else {
@@ -411,68 +476,54 @@ static void *monitor_thread(void *arg)
                          "UPS switched to battery — charge %.0f%%, runtime %um%us",
                          data.charge_pct, data.runtime_sec / 60,
                          data.runtime_sec % 60);
-                fire_event_xfer(mon, "warning", "power", "On Battery",
-                                data.transfer_reason, msg);
+                fire_event_xfer(mon, "warning", "power", "On Battery", msg);
             }
             if (cleared & UPS_ST_ON_BATTERY)
                 fire_event_xfer(mon, "info", "power", "Utility Restored",
-                                data.transfer_reason,
                                 "UPS returned to utility power");
             if (set & UPS_ST_OUTPUT_OFF)
                 fire_event_xfer(mon, "error", "power", "Output Off",
-                                data.transfer_reason,
                                 "UPS output has been turned off");
             if (cleared & UPS_ST_OUTPUT_OFF)
                 fire_event_xfer(mon, "info", "power", "Output Restored",
-                                data.transfer_reason,
                                 "UPS output has been restored");
 
             /* Mode events */
             if (set & UPS_ST_HE_MODE)
                 fire_event_xfer(mon, "info", "mode", "HE Mode Entered",
-                                data.transfer_reason,
                                 "UPS entered high efficiency mode");
             if (cleared & UPS_ST_HE_MODE)
                 fire_event_xfer(mon, "info", "mode", "HE Mode Exited",
-                                data.transfer_reason,
                                 "UPS exited high efficiency mode");
             if (set & UPS_ST_BYPASS)
                 fire_event_xfer(mon, "warning", "mode", "Bypass Entered",
-                                data.transfer_reason,
                                 (data.status & UPS_ST_COMMANDED)
                                     ? "UPS entered commanded bypass — output is unprotected"
                                     : "UPS transferred to bypass due to internal fault");
             if (cleared & UPS_ST_BYPASS)
                 fire_event_xfer(mon, "info", "mode", "Bypass Exited",
-                                data.transfer_reason,
                                 "UPS returned to normal operation from bypass");
 
             /* Fault events */
             if (set & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
                 fire_event_xfer(mon, "error", "fault", "Fault Detected",
-                                data.transfer_reason,
                                 "UPS has entered a fault condition");
             if (cleared & (UPS_ST_FAULT | UPS_ST_FAULT_STATE))
                 fire_event_xfer(mon, "info", "fault", "Fault Cleared",
-                                data.transfer_reason,
                                 "UPS fault condition has been cleared");
             if (set & UPS_ST_OVERLOAD)
                 fire_event_xfer(mon, "error", "fault", "Overload",
-                                data.transfer_reason,
                                 "UPS output is overloaded");
             if (cleared & UPS_ST_OVERLOAD)
                 fire_event_xfer(mon, "info", "fault", "Overload Cleared",
-                                data.transfer_reason,
                                 "UPS overload condition has cleared");
 
             /* Test events */
             if (set & UPS_ST_TEST)
                 fire_event_xfer(mon, "info", "test", "Self-Test Started",
-                                data.transfer_reason,
                                 "UPS self-test is in progress");
             if (cleared & UPS_ST_TEST)
                 fire_event_xfer(mon, "info", "test", "Self-Test Ended",
-                                data.transfer_reason,
                                 "UPS self-test has completed");
 
             /* Shutdown trigger: on battery + shutdown imminent */
@@ -487,7 +538,7 @@ static void *monitor_thread(void *arg)
                          data.runtime_sec % 60);
                 log_error("SHUTDOWN TRIGGERED: %s", msg);
                 fire_event_xfer(mon, "critical", "shutdown",
-                                "Shutdown Triggered", data.transfer_reason, msg);
+                                "Shutdown Triggered", msg);
             }
 
             mon->prev_status = data.status;
@@ -515,20 +566,8 @@ static void *monitor_thread(void *arg)
         uint64_t sig = status_signature(&data);
         mon->prev_sig = sig;
 
-        /* Telemetry recording (downsampled) */
-        time_t now = time(NULL);
-        if (now - mon->last_telemetry >= mon->telemetry_sec) {
-            record_telemetry(mon, &data);
-            mon->last_telemetry = now;
-        }
-
-        /* Daily retention cleanup */
-        if (mon->retention_enabled && now - mon->last_retention >= 86400) {
-            retention_run(mon->db, &mon->retention);
-            mon->last_retention = now;
-        }
-
         /* Daily config register snapshot (catches LCD-initiated changes) */
+        time_t now = time(NULL);
         if (now - mon->last_config_snapshot >= 86400) {
             snapshot_config_registers(mon);
             mon->last_config_snapshot = now;
@@ -541,7 +580,7 @@ static void *monitor_thread(void *arg)
 /* --- Public API --- */
 
 monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
-                          int poll_interval_sec, int telemetry_interval_sec)
+                          int poll_interval_sec)
 {
     monitor_t *mon = calloc(1, sizeof(*mon));
     if (!mon) return NULL;
@@ -549,10 +588,10 @@ monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
     mon->ups = ups;
     mon->db = db;
     mon->poll_sec = poll_interval_sec > 0 ? poll_interval_sec : 2;
-    mon->telemetry_sec = telemetry_interval_sec > 0 ? telemetry_interval_sec : 30;
     mon->first_poll = 1;
 
     pthread_mutex_init(&mon->mutex, NULL);
+    pthread_mutex_init(&mon->xfer_mutex, NULL);
 
     /* Load persisted status snapshot synchronously so callers that need
      * it before monitor_start (e.g. main.c seeding the alert engine via
@@ -586,14 +625,6 @@ int monitor_on_event(monitor_t *mon, monitor_event_fn fn, void *userdata)
     return CUTILS_OK;
 }
 
-void monitor_set_retention(monitor_t *mon, const retention_config_t *cfg)
-{
-    mon->retention = *cfg;
-    mon->retention_enabled = 1;
-    mon->last_retention = time(NULL);
-    mon->last_config_snapshot = 0;  /* force snapshot on first pass */
-}
-
 int monitor_on_poll(monitor_t *mon, monitor_poll_fn fn, void *userdata)
 {
     if (mon->npoll_cbs >= MAX_EVENT_CBS)
@@ -612,8 +643,29 @@ int monitor_start(monitor_t *mon)
         mon->running = 0;
         return set_error(CUTILS_ERR, "failed to create monitor thread");
     }
-    log_info("monitor started (poll %ds, telemetry %ds)",
-             mon->poll_sec, mon->telemetry_sec);
+
+    /* Spawn the transfer-reason fast-poll thread only when the active
+     * driver supports the single-register read. HID drivers don't have
+     * a separate cause register and leave read_transfer_reason NULL —
+     * for those, we just rely on the slow status read's reason field
+     * (which is also fine, since HID drivers don't latch a cause). */
+    if (mon->ups->driver->read_transfer_reason) {
+        mon->xfer_running = 1;
+        rc = pthread_create(&mon->xfer_thread, NULL, xfer_fast_poll_thread, mon);
+        if (rc != 0) {
+            /* Non-fatal — slow poll still annotates events with whatever
+             * register 2 holds at poll time. Log and continue. */
+            mon->xfer_running = 0;
+            log_warn("transfer-reason fast-poll thread failed to start "
+                     "(events may show stale or missing reasons)");
+        } else {
+            mon->xfer_thread_started = 1;
+            log_info("transfer-reason fast-poll started (%dms cadence, %dms lookback)",
+                     XFER_FAST_POLL_MS, XFER_LOOKBACK_MS);
+        }
+    }
+
+    log_info("monitor started (poll %ds)", mon->poll_sec);
     return CUTILS_OK;
 }
 
@@ -621,6 +673,16 @@ void monitor_stop(monitor_t *mon)
 {
     if (!mon) return;
     mon->running = 0;
+    /* Stop the fast-poll thread first so it can't issue another bus read
+     * after the main monitor loop has finished its final poll. Joining
+     * before the main thread join is safe — the fast poller only takes
+     * the cmd_mutex via ups_read_transfer_reason and doesn't touch any
+     * monitor state the main thread owns. */
+    if (mon->xfer_thread_started) {
+        mon->xfer_running = 0;
+        pthread_join(mon->xfer_thread, NULL);
+        mon->xfer_thread_started = 0;
+    }
     pthread_join(mon->thread, NULL);
 
     /* Belt-and-suspenders: write a final snapshot reflecting the very
@@ -640,6 +702,7 @@ void monitor_stop(monitor_t *mon)
     }
 
     pthread_mutex_destroy(&mon->mutex);
+    pthread_mutex_destroy(&mon->xfer_mutex);
     free(mon);
 }
 

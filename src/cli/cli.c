@@ -129,7 +129,6 @@ static const help_entry_t HELP[] = {
       "Commands:\n"
       "  status                       Live UPS status\n"
       "  events                       Recent event journal\n"
-      "  telemetry                    Recent telemetry data\n"
       "  cmd <action>                 UPS commands\n"
       "\n"
       "Options:\n"
@@ -146,11 +145,6 @@ static const help_entry_t HELP[] = {
       "Usage: airies-ups events\n"
       "\n"
       "Show recent entries from the event journal.\n"
-    },
-    { "telemetry",
-      "Usage: airies-ups telemetry\n"
-      "\n"
-      "Show recent telemetry data points.\n"
     },
     { "cmd",
       "Usage: airies-ups cmd <action> [options]\n"

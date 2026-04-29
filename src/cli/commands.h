@@ -6,7 +6,6 @@
 
 int cmd_status(const char *sock, int argc, char **argv);
 int cmd_events(const char *sock, int argc, char **argv);
-int cmd_telemetry(const char *sock, int argc, char **argv);
 int cmd_cmd(const char *sock, int argc, char **argv);
 
 #endif
