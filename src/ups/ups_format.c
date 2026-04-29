@@ -146,3 +146,24 @@ int ups_decode_battery_errors(uint16_t raw, const char **out, int max)
     return decode_bits(raw, out, max, flags,
                        sizeof(flags) / sizeof(flags[0]));
 }
+
+/* --- Battery test status (reg 23) --- */
+
+const char *ups_battery_test_result_str(uint16_t raw)
+{
+    /* Failed takes precedence if both somehow appear: a coincident
+     * passed+failed report should always be treated as the worse result. */
+    if (raw & UPS_BATTEST_FAILED)  return "failed";
+    if (raw & UPS_BATTEST_REFUSED) return "refused";
+    if (raw & UPS_BATTEST_ABORTED) return "aborted";
+    if (raw & UPS_BATTEST_PASSED)  return "passed";
+    return NULL;
+}
+
+const char *ups_battery_test_source_str(uint16_t raw)
+{
+    if (raw & UPS_BATTEST_SRC_PROTOCOL) return "protocol";
+    if (raw & UPS_BATTEST_SRC_LOCAL_UI) return "local UI";
+    if (raw & UPS_BATTEST_SRC_INTERNAL) return "internal scheduler";
+    return NULL;
+}
