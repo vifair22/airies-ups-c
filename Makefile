@@ -7,7 +7,20 @@ BUILD_DIR  = build
 SEMVER     := $(shell cat release_version 2>/dev/null | tr -d '[:space:]')
 BUILD_TS   := $(shell date -u '+%Y%m%d.%H%M')
 BUILD_TYPE ?= release
-VERSION    := $(SEMVER)_$(BUILD_TS).$(BUILD_TYPE)
+# Host arch in Debian/Docker naming (amd64/arm64). `make cross` forces arm64
+# regardless of host so the cross-compiled binary self-identifies correctly.
+HOST_ARCH  := $(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+ifneq ($(filter cross,$(MAKECMDGOALS)),)
+  HOST_ARCH := arm64
+endif
+# BUILD_TAG decorates the binary's compiled-in VERSION_STRING. Defaults to
+# bare arch for local builds; CI overrides via env to "deb.<arch>",
+# "docker.<arch>", "deb.<arch>.nightly", "docker.<arch>.dev", etc., so the
+# packaging and channel are visible too. Exported so recursive sub-makes
+# (e.g. `make all` -> `make _build`) inherit it.
+BUILD_TAG  ?= $(HOST_ARCH)
+export BUILD_TAG
+VERSION    := $(SEMVER)_$(BUILD_TS).$(BUILD_TYPE).$(BUILD_TAG)
 VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 
 CC       := gcc
