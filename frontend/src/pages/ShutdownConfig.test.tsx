@@ -737,3 +737,114 @@ describe('ShutdownConfig — Layout', () => {
     expect(screen.getByText(/Execution runs top to bottom/)).toBeInTheDocument()
   })
 })
+
+/* ══════════════════════════════════════════════════════
+ *  Per-target Test buttons (Test SSH / Test Down)
+ * ══════════════════════════════════════════════════════ */
+
+/* Stub fetch so GET requests for groups/targets/settings load fixtures
+ * and POST requests to test_ssh/test_confirm return the supplied body
+ * (recorded so tests can inspect what the UI sent). */
+function stubProbe(probeBody: unknown) {
+  const calls: { url: string; body: unknown }[] = []
+  globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    if (init?.method === 'POST' && url.includes('/api/shutdown/targets/test_')) {
+      calls.push({
+        url,
+        body: init.body ? JSON.parse(init.body as string) : null,
+      })
+      return Promise.resolve({
+        ok: true, status: 200, statusText: 'OK',
+        json: () => Promise.resolve(probeBody),
+      })
+    }
+    if (url.includes('/api/shutdown/groups'))
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockGroups) })
+    if (url.includes('/api/shutdown/targets'))
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockTargets) })
+    if (url.includes('/api/shutdown/settings'))
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockSettings) })
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+  })
+  return calls
+}
+
+describe('ShutdownConfig — per-target Test buttons', () => {
+  it('renders Test SSH and Test Down buttons for each target', async () => {
+    mockAll()
+    renderWithRouter(<ShutdownConfig />)
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+    /* Two targets in the fixture -> two of each button. */
+    expect(screen.getAllByRole('button', { name: 'Test SSH' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Test Down' })).toHaveLength(2)
+  })
+
+  it('Test SSH posts the target id and renders ✓ on success', async () => {
+    const calls = stubProbe({ ok: true, error: '' })
+    renderWithRouter(<ShutdownConfig />)
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Test SSH' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Test SSH ✓' })).toBeInTheDocument()
+    })
+    /* First target in mockTargets has id=1; UI must round-trip it verbatim. */
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('/api/shutdown/targets/test_ssh')
+    expect(calls[0].body).toEqual({ id: 1 })
+  })
+
+  it('Test SSH renders ✗ + tooltip when the probe reports failure', async () => {
+    stubProbe({ ok: false, error: 'sshpass not found' })
+    renderWithRouter(<ShutdownConfig />)
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Test SSH' })[0])
+
+    const failed = await screen.findByRole('button', { name: 'Test SSH ✗' })
+    expect(failed).toHaveAttribute('title', 'sshpass not found')
+  })
+
+  it('Test Down posts to test_confirm with the second target id', async () => {
+    const calls = stubProbe({ ok: true, error: '' })
+    renderWithRouter(<ShutdownConfig />)
+    await waitFor(() => {
+      expect(screen.getByText('db-server')).toBeInTheDocument()
+    })
+
+    /* Click Test Down on the SECOND row to confirm per-row state isolation
+     * and that the right id (=2) flows through. */
+    await userEvent.click(screen.getAllByRole('button', { name: 'Test Down' })[1])
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Test Down ✓' })).toBeInTheDocument()
+    })
+    expect(calls[0].url).toContain('/api/shutdown/targets/test_confirm')
+    expect(calls[0].body).toEqual({ id: 2 })
+  })
+
+  it('per-row state is isolated — the other row stays idle', async () => {
+    stubProbe({ ok: true, error: '' })
+    renderWithRouter(<ShutdownConfig />)
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Test SSH' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Test SSH ✓' })).toBeInTheDocument()
+    })
+    /* Second row's Test SSH button should still read "Test SSH" (idle). */
+    const sshButtons = screen.getAllByRole('button', { name: /^Test SSH/ })
+    expect(sshButtons).toHaveLength(2)
+    expect(sshButtons[1]).toHaveTextContent(/^Test SSH$/)
+  })
+})
