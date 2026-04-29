@@ -520,6 +520,127 @@ static void test_battery_error_transition(void **state)
     assert_int_equal(found, 1);
 }
 
+/* --- alerts_seed_from_snapshot --- */
+
+static void test_seed_from_snapshot_mirrors_bit_state(void **state)
+{
+    (void)state;
+    alert_state_t s;
+    memset(&s, 0xFF, sizeof(s));
+
+    status_snapshot_t snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.status              = UPS_ST_OVERLOAD | UPS_ST_FAULT;
+    snap.bat_system_error    = UPS_BATERR_REPLACE;
+    snap.general_error       = 0xAB;
+    snap.power_system_error  = 0xDEAD;
+
+    alerts_seed_from_snapshot(&s, &snap);
+
+    assert_int_equal(s.overload, 1);
+    assert_int_equal(s.fault, 1);
+    assert_int_equal(s.bat_replace, 1);
+    assert_int_equal(s.prev_general_error, 0xAB);
+    assert_int_equal(s.prev_power_error,   0xDEAD);
+    assert_int_equal(s.prev_battery_error, UPS_BATERR_REPLACE);
+}
+
+static void test_seed_from_snapshot_clears_when_unset(void **state)
+{
+    (void)state;
+    alert_state_t s;
+    memset(&s, 0xFF, sizeof(s));
+
+    status_snapshot_t snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.status = UPS_ST_ONLINE;  /* no overload, no fault, no bat replace */
+
+    alerts_seed_from_snapshot(&s, &snap);
+
+    assert_int_equal(s.overload, 0);
+    assert_int_equal(s.fault, 0);
+    assert_int_equal(s.bat_replace, 0);
+}
+
+/* --- Clear-side transitions ---
+ *
+ * The "cleared" notifications fire when an error bit was previously set
+ * and is no longer present. Existing tests cover the set-side; these
+ * cover the clear-side branches. */
+
+static void test_battery_replace_clears(void **state)
+{
+    (void)state;
+    alert_state_t s;
+    alerts_init(&s);
+    s.bat_replace = 1;  /* seed: replace was previously asserted */
+    s.prev_battery_error = UPS_BATERR_REPLACE;
+    reset_notifs();
+
+    ups_data_t d = make_data();
+    d.bat_system_error = 0;  /* condition cleared */
+    alert_config_t acfg = make_config();
+    alert_thresholds_t thresh = make_thresholds();
+
+    alerts_check(&s, &d, &thresh, &acfg, capture_notify);
+
+    int found = 0;
+    for (int i = 0; i < g_notifs.count; i++)
+        if (strstr(g_notifs.titles[i], "Battery Error Cleared"))
+            found++;
+    /* Both the bit-alert path and the bat_system_error register decode
+     * fire "UPS Battery Error Cleared" — assert at least one. */
+    assert_true(found >= 1);
+    assert_int_equal(s.bat_replace, 0);
+}
+
+static void test_power_error_clears(void **state)
+{
+    (void)state;
+    alert_state_t s;
+    alerts_init(&s);
+    s.prev_power_error = 0x3;  /* two power-error bits previously set */
+    reset_notifs();
+
+    ups_data_t d = make_data();
+    d.power_system_error = 0;
+    alert_config_t acfg = make_config();
+    alert_thresholds_t thresh = make_thresholds();
+
+    alerts_check(&s, &d, &thresh, &acfg, capture_notify);
+
+    int found = 0;
+    for (int i = 0; i < g_notifs.count; i++)
+        if (strstr(g_notifs.titles[i], "Power System Error Cleared"))
+            found++;
+    /* Number of decoded bits depends on ups_decode_power_errors. Just
+     * assert at least one — the path is exercised. */
+    assert_true(found >= 1);
+    assert_int_equal(s.prev_power_error, 0);
+}
+
+static void test_battery_system_error_clears(void **state)
+{
+    (void)state;
+    alert_state_t s;
+    alerts_init(&s);
+    s.prev_battery_error = UPS_BATERR_CHARGER;
+    reset_notifs();
+
+    ups_data_t d = make_data();
+    d.bat_system_error = 0;
+    alert_config_t acfg = make_config();
+    alert_thresholds_t thresh = make_thresholds();
+
+    alerts_check(&s, &d, &thresh, &acfg, capture_notify);
+
+    int found = 0;
+    for (int i = 0; i < g_notifs.count; i++)
+        if (strstr(g_notifs.titles[i], "Battery Error Cleared"))
+            found++;
+    assert_true(found >= 1);
+}
+
 /* --- No thresholds (NULL) --- */
 
 static void test_null_thresholds_skips_voltage(void **state)
@@ -568,6 +689,13 @@ int main(void)
         cmocka_unit_test(test_general_error_transition),
         cmocka_unit_test(test_power_error_transition),
         cmocka_unit_test(test_battery_error_transition),
+        /* seed from snapshot */
+        cmocka_unit_test(test_seed_from_snapshot_mirrors_bit_state),
+        cmocka_unit_test(test_seed_from_snapshot_clears_when_unset),
+        /* clear-side transitions */
+        cmocka_unit_test(test_battery_replace_clears),
+        cmocka_unit_test(test_power_error_clears),
+        cmocka_unit_test(test_battery_system_error_clears),
         /* edge cases */
         cmocka_unit_test(test_null_thresholds_skips_voltage),
     };

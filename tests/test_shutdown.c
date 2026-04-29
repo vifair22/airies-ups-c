@@ -482,6 +482,105 @@ static void test_execute_dry_run_with_group(void **state)
 }
 
 /* =========================================================================
+ * shutdown_execute non-dry-run with command targets
+ *
+ * Exercises execute_group_sequential and execute_group_parallel without
+ * touching the network. method='command' + command='/bin/true' is a
+ * cheap subprocess; confirm_method='none' short-circuits the post-fire
+ * confirmation; ups_mode=none and controller_enabled=0 (defaults from
+ * setup) skip the trailing UPS + controller shutdown phases.
+ * ========================================================================= */
+
+static int insert_command_target(cutils_db_t *db, int group_id,
+                                 const char *target_name, const char *command)
+{
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
+        "credential, command, timeout_sec, order_in_group, confirm_method, "
+        "confirm_port, confirm_command, post_confirm_delay) "
+        "VALUES (%d, '%s', 'command', NULL, NULL, NULL, '%s', "
+        "5, 1, 'none', NULL, NULL, 0)",
+        group_id, target_name, command);
+    return db_exec_raw(db, sql);
+}
+
+static void test_execute_sequential_command_group(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('seq', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "a", "/bin/true"), CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "b", "/bin/false"), CUTILS_OK);
+
+    g_progress_count = 0;
+    shutdown_on_progress(ctx->mgr, test_progress_cb, &g_progress_count);
+
+    int rc = shutdown_execute(ctx->mgr, 0 /* not dry-run */);
+    assert_int_equal(rc, CUTILS_OK);
+    /* "starting" + "completed/failed" per target × 2 targets = 4 reports */
+    assert_true(g_progress_count >= 4);
+}
+
+static void test_execute_parallel_command_group(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('par', 1, 1, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "a", "/bin/true"), CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "b", "/bin/true"), CUTILS_OK);
+
+    g_progress_count = 0;
+    shutdown_on_progress(ctx->mgr, test_progress_cb, &g_progress_count);
+
+    int rc = shutdown_execute(ctx->mgr, 0);
+    assert_int_equal(rc, CUTILS_OK);
+    assert_true(g_progress_count >= 4);
+}
+
+static void test_execute_parallel_with_max_timeout(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    /* max_timeout=1s, target sleeps 5s. The group ceiling fires SIGTERM
+     * on the straggler and the wait-loop reaps it. Covers the timeout
+     * + kill branches in execute_group_parallel. */
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('slow', 1, 1, 1, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "slow", "sleep 5"),
+                     CUTILS_OK);
+
+    int rc = shutdown_execute(ctx->mgr, 0);
+    assert_int_equal(rc, CUTILS_OK);
+}
+
+static void test_execute_sequential_with_max_timeout(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    /* Sequential: max_timeout cuts off later targets entirely (no fork). */
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('seq_to', 1, 0, 1, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "fast", "/bin/true"), CUTILS_OK);
+    /* Sleep target makes the second iteration trip the 1s ceiling. */
+    assert_int_equal(insert_command_target(ctx->db, 1, "slow", "sleep 2"), CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "skipped", "/bin/true"), CUTILS_OK);
+
+    int rc = shutdown_execute(ctx->mgr, 0);
+    assert_int_equal(rc, CUTILS_OK);
+}
+
+/* =========================================================================
  * Trigger fire path + efficiency NaN gate
  *
  * The existing trigger tests all set delay_sec=9999 so they never reach
@@ -821,6 +920,11 @@ int main(void)
         /* execute */
         cmocka_unit_test_setup_teardown(test_execute_dry_run_no_groups, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_dry_run_with_group, setup, teardown),
+        /* execute non-dry-run command-method paths */
+        cmocka_unit_test_setup_teardown(test_execute_sequential_command_group, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_parallel_command_group, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_parallel_with_max_timeout, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_sequential_with_max_timeout, setup, teardown),
         /* trigger fire + efficiency nan */
         cmocka_unit_test_setup_teardown(test_trigger_fires_after_debounce, setup, teardown),
         cmocka_unit_test_setup_teardown(test_trigger_field_efficiency_invalid_reason_no_fire, setup, teardown),

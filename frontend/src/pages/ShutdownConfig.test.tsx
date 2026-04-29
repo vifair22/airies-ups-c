@@ -299,6 +299,196 @@ describe('ShutdownConfig — Targets', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 
+  it('confirmation method swaps form fields', async () => {
+    mockAll()
+    const { container } = renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getAllByText('+ Add Target').length).toBe(2)
+    })
+
+    await userEvent.click(screen.getAllByText('+ Add Target')[0])
+
+    /* default confirm_method='ping' — no port field */
+    expect(screen.queryByText('Port')).not.toBeInTheDocument()
+    expect(screen.queryByText('Confirm Command')).not.toBeInTheDocument()
+
+    const confirmSelect = container.querySelector('select[value="ping"]') as HTMLSelectElement
+        ?? Array.from(container.querySelectorAll('select')).find(s =>
+             Array.from(s.options).some(o => o.value === 'tcp_port'))!
+
+    /* tcp_port → Port number input appears */
+    await userEvent.selectOptions(confirmSelect, 'tcp_port')
+    expect(screen.getByText('Port')).toBeInTheDocument()
+
+    /* command → Confirm Command text input appears */
+    await userEvent.selectOptions(confirmSelect, 'command')
+    expect(screen.getByText('Confirm Command')).toBeInTheDocument()
+    expect(screen.queryByText('Port')).not.toBeInTheDocument()
+
+    /* none → both gone */
+    await userEvent.selectOptions(confirmSelect, 'none')
+    expect(screen.queryByText('Port')).not.toBeInTheDocument()
+    expect(screen.queryByText('Confirm Command')).not.toBeInTheDocument()
+  })
+
+  it('group edit save fires PUT', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (opts?.method === 'PUT' || opts?.method === 'POST' || opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      if (url.includes('/api/shutdown/groups')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockGroups) })
+      }
+      if (url.includes('/api/shutdown/targets')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockTargets) })
+      }
+      if (url.includes('/api/shutdown/settings')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockSettings) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Servers')).toBeInTheDocument()
+    })
+
+    /* First Edit button is the group edit (group header comes before targets) */
+    await userEvent.click(screen.getAllByText('Edit')[0])
+
+    /* Save without changes — exercises updateGroup */
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      const put = calls.find((call: unknown[]) => {
+        const [url, optsAny] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/groups') && optsAny?.method === 'PUT'
+      })
+      expect(put).toBeDefined()
+    })
+  })
+
+  it('group delete fires DELETE after confirm', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      if (url.includes('/api/shutdown/groups')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockGroups) })
+      }
+      if (url.includes('/api/shutdown/targets')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockTargets) })
+      }
+      if (url.includes('/api/shutdown/settings')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockSettings) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Servers')).toBeInTheDocument()
+    })
+
+    /* Click first Delete (group-level) — there are multiple Delete buttons */
+    await userEvent.click(screen.getAllByText('Delete')[0])
+
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      const del = calls.find((call: unknown[]) => {
+        const [url, optsAny] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/groups') && optsAny?.method === 'DELETE'
+      })
+      expect(del).toBeDefined()
+    })
+  })
+
+  it('target delete fires DELETE after confirm', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      if (url.includes('/api/shutdown/groups')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockGroups) })
+      }
+      if (url.includes('/api/shutdown/targets')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockTargets) })
+      }
+      if (url.includes('/api/shutdown/settings')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockSettings) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+
+    /* Second Delete button is the first target's */
+    await userEvent.click(screen.getAllByText('Delete')[1])
+
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      const del = calls.find((call: unknown[]) => {
+        const [url, optsAny] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/targets') && optsAny?.method === 'DELETE'
+      })
+      expect(del).toBeDefined()
+    })
+  })
+
+  it('updates a target via PUT', async () => {
+    /* Inline mockCrud so PUTs return ok */
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (opts?.method === 'POST' || opts?.method === 'PUT' || opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      if (url.includes('/api/shutdown/groups')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockGroups) })
+      }
+      if (url.includes('/api/shutdown/targets')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockTargets) })
+      }
+      if (url.includes('/api/shutdown/settings')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockSettings) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<ShutdownConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('web-server')).toBeInTheDocument()
+    })
+
+    /* Click Edit on the first target (second Edit button — first is group) */
+    const editButtons = screen.getAllByText('Edit')
+    await userEvent.click(editButtons[1])
+
+    /* TargetEditRow opened */
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+
+    /* Save without changes — preserves credential, exercises updateTarget */
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      const put = calls.find((call: unknown[]) => {
+        const [url, optsAny] = call as [string, RequestInit?]
+        return url.includes('/api/shutdown/targets') && optsAny?.method === 'PUT'
+      })
+      expect(put).toBeDefined()
+    })
+  })
+
   it('credential widget swaps with method', async () => {
     mockAll()
     const { container } = renderWithRouter(<ShutdownConfig />)

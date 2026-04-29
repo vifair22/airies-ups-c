@@ -306,6 +306,58 @@ describe('WeatherConfig — Config Form', () => {
     expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0)
   })
 
+  it('save button posts config to all setters', async () => {
+    let savePosts = 0
+    globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (url.includes('/api/weather/config') && opts?.method === 'POST') {
+        savePosts++
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      if (url.includes('/api/weather/status')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(enabledStatus) })
+      }
+      if (url.includes('/api/weather/config')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockConfig) })
+      }
+      if (url.includes('/api/config/ups')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockRegs) })
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+    })
+
+    renderWithRouter(<WeatherConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(savePosts).toBeGreaterThan(0)
+    })
+  })
+
+  it('changing severe value selection updates form state', async () => {
+    mockAll()
+    const { container } = renderWithRouter(<WeatherConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Severe Value')).toBeInTheDocument()
+    })
+
+    /* The severe value select is the first select right after "Severe Value" label.
+     * Its options are derived from mockRegs[0].options ([Low, Normal]). */
+    const selects = container.querySelectorAll('select')
+    const severeSelect = Array.from(selects).find(s =>
+      Array.from(s.options).some(o => o.text === 'Low')
+    ) as HTMLSelectElement | undefined
+    expect(severeSelect).toBeTruthy()
+
+    await userEvent.selectOptions(severeSelect!, '0')
+    expect((severeSelect as HTMLSelectElement).value).toBe('0')
+  })
+
   it('shows non-bitfield register controls when register is not bitfield type', async () => {
     const numericRegs = [
       { name: 'ups_transfer_high', display_name: 'Transfer High', type: 'number',

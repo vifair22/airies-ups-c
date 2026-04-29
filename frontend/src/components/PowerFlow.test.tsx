@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
-import { PowerFlowSRT, PowerFlowStandby } from './PowerFlow'
+import { PowerFlowSRT, PowerFlowStandby, PowerFlowLineInteractive } from './PowerFlow'
 import { ST } from '../types/ups'
 import type { PowerFlowProps } from '../types/ups'
 
@@ -532,5 +532,72 @@ describe('PowerFlowStandby', () => {
       })} />)
       expect(hasText(container, '--')).toBe(true)
     })
+  })
+})
+
+/* ──────────────────────────────────────────────────────
+ *  PowerFlowLineInteractive — AVR + Inverter + Battery
+ * ────────────────────────────────────────────────────── */
+
+describe('PowerFlowLineInteractive', () => {
+  it('renders as svg without crashing in online mode', () => {
+    const { container } = render(<PowerFlowLineInteractive {...props()} />)
+    expect(container.querySelector('svg')).toBeTruthy()
+  })
+
+  it('shows AVR Boost label when boost bit set', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ statusRaw: ST.ONLINE | ST.AVR_BOOST })} />
+    )
+    expect(hasText(container, 'Boost')).toBe(true)
+  })
+
+  it('shows AVR Trim label when trim bit set', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ statusRaw: ST.ONLINE | ST.AVR_TRIM })} />
+    )
+    expect(hasText(container, 'Trim')).toBe(true)
+  })
+
+  it('shows AVR Tracking when HE mode active', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ statusRaw: ST.ONLINE | ST.HE_MODE, canHE: true })} />
+    )
+    expect(hasText(container, 'Tracking')).toBe(true)
+  })
+
+  it('renders battery on-battery state', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({
+        statusRaw: ST.ON_BATTERY,
+        inputVoltage: 0,
+        batteryCharge: 87,
+      })} />
+    )
+    expect(container.querySelector('svg')).toBeTruthy()
+    /* On-battery activates the battery and inverter blocks; verify some
+     * flow lines are rendered. */
+    expect(getFlowLineCount(container)).toBeGreaterThan(0)
+  })
+
+  it('renders fault state', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ statusRaw: ST.ONLINE | ST.FAULT })} />
+    )
+    expect(container.querySelector('svg')).toBeTruthy()
+  })
+
+  it('renders output-off state', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ statusRaw: ST.ONLINE | ST.OUTPUT_OFF })} />
+    )
+    expect(container.querySelector('svg')).toBeTruthy()
+  })
+
+  it('renders battery-fault state', () => {
+    const { container } = render(
+      <PowerFlowLineInteractive {...props({ batteryError: 0x04 })} />
+    )
+    expect(container.querySelector('svg')).toBeTruthy()
   })
 })
