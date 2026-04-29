@@ -7,6 +7,7 @@ import type { ConfigEntry } from '../types/config'
 export default function AppConfig() {
   const { data: config, error, loading, refetch } = useApi<ConfigEntry[]>('/api/config/app')
   const [saving, setSaving] = useState<string | null>(null)
+  const [recentlySaved, setRecentlySaved] = useState<string | null>(null)
   const [restarting, setRestarting] = useState(false)
 
   if (loading) return <p className="text-muted">Loading...</p>
@@ -21,7 +22,17 @@ export default function AppConfig() {
       await apiPost('/api/restart', {})
       const poll = () => {
         fetch('/api/status')
-          .then(r => { if (r.ok) { setRestarting(false); setSaving(null); refetch() } else setTimeout(poll, 500) })
+          .then(r => {
+            if (r.ok) {
+              setRestarting(false)
+              setSaving(null)
+              setRecentlySaved(key)
+              setTimeout(() => setRecentlySaved((cur) => (cur === key ? null : cur)), 2000)
+              refetch()
+            } else {
+              setTimeout(poll, 500)
+            }
+          })
           .catch(() => setTimeout(poll, 500))
       }
       setTimeout(poll, 1500)
@@ -53,7 +64,8 @@ export default function AppConfig() {
               {config
                 .filter((c) => c.key.startsWith(group + '.'))
                 .map((c) => (
-                  <ConfigRow key={c.key} entry={c} saving={saving} onSave={handleSave} />
+                  <ConfigRow key={c.key} entry={c} saving={saving}
+                             recentlySaved={recentlySaved} onSave={handleSave} />
                 ))}
             </div>
           </div>
@@ -150,15 +162,18 @@ function PasswordChange() {
   )
 }
 
-function ConfigRow({ entry, saving, onSave }: {
+function ConfigRow({ entry, saving, recentlySaved, onSave }: {
   entry: ConfigEntry
   saving: string | null
+  recentlySaved: string | null
   onSave: (key: string, value: string) => void
 }) {
   const [val, setVal] = useState(entry.value)
   const changed = val !== entry.value
   const subKey = entry.key.split('.').slice(1).join('.')
   const isDefault = entry.value === entry.default_value
+  const isSaving = saving === entry.key
+  const justSaved = recentlySaved === entry.key
 
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3">
@@ -179,16 +194,14 @@ function ConfigRow({ entry, saving, onSave }: {
           type={entry.type === 'int' ? 'number' : 'text'}
           value={val}
           onChange={(e) => setVal(e.target.value)}
+          onBlur={() => { if (changed && !isSaving) onSave(entry.key, val) }}
           className="flex-1 sm:flex-none sm:w-28 bg-field border border-edge-strong rounded px-3 py-1.5 text-sm text-right font-mono"
         />
-        {changed && (
-          <button
-            onClick={() => onSave(entry.key, val)}
-            disabled={saving === entry.key}
-            className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs shrink-0 transition-colors">
-            {saving === entry.key ? '...' : 'Save'}
-          </button>
-        )}
+        <span className="text-xs w-20 text-right shrink-0">
+          {isSaving ? <span className="text-muted animate-pulse">saving…</span>
+            : justSaved ? <span className="text-green-400">saved ✓</span>
+            : null}
+        </span>
       </div>
     </div>
   )

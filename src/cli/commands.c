@@ -159,12 +159,6 @@ int cmd_events(const char *sock, int argc, char **argv)
     return api_get_print(sock, "/api/events");
 }
 
-int cmd_telemetry(const char *sock, int argc, char **argv)
-{
-    if (has_help_flag(argc, argv, 2)) { help_current(); return 0; }
-    return api_get_print(sock, "/api/telemetry");
-}
-
 int cmd_cmd(const char *sock, int argc, char **argv)
 {
     static const flag_spec_t global_flags[] = {

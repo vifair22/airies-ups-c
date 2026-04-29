@@ -55,20 +55,68 @@ describe('AppConfig', () => {
     })
   })
 
-  it('shows Save button when config value is changed', async () => {
-    mockApiResponses({ '/api/config/app': mockConfig })
+  it('autosaves on blur when config value is changed', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+      if (opts?.method === 'POST' && url.includes('/api/config/app')) {
+        return Promise.resolve({
+          ok: true, status: 200, json: () => Promise.resolve({ result: 'ok' }),
+        })
+      }
+      if (opts?.method === 'POST' && url.includes('/api/restart')) {
+        return Promise.resolve({
+          ok: true, status: 200, json: () => Promise.resolve({}),
+        })
+      }
+      return Promise.resolve({
+        ok: true, status: 200, json: () => Promise.resolve(mockConfig),
+      })
+    })
+    globalThis.fetch = fetchMock
+
     renderWithRouter(<AppConfig />)
 
     await waitFor(() => {
       expect(screen.getByText('device')).toBeInTheDocument()
     })
 
-    /* Change the device value */
     const deviceInput = screen.getByDisplayValue('/dev/ttyUSB0')
     await userEvent.clear(deviceInput)
     await userEvent.type(deviceInput, '/dev/ttyUSB1')
+    /* Blur the input — onBlur should trigger the POST to /api/config/app */
+    deviceInput.blur()
 
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/config/app',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+  })
+
+  it('does not save on blur when value is unchanged', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(mockConfig) })
+    )
+    globalThis.fetch = fetchMock
+
+    renderWithRouter(<AppConfig />)
+
+    await waitFor(() => {
+      expect(screen.getByText('device')).toBeInTheDocument()
+    })
+
+    /* Focus + blur without changing the value — should be a no-op. */
+    const deviceInput = screen.getByDisplayValue('/dev/ttyUSB0')
+    deviceInput.focus()
+    deviceInput.blur()
+
+    /* Allow any pending promises to resolve. */
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const postCalls = fetchMock.mock.calls.filter(
+      (call) => call[1]?.method === 'POST'
+    )
+    expect(postCalls).toHaveLength(0)
   })
 
   it('shows default value hint', async () => {

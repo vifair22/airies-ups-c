@@ -6,6 +6,7 @@
 #include <cutils/json.h>
 #include <cutils/mem.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -100,7 +101,14 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
         CHECK_ADD(json_resp_add_u32(resp, "battery.runtime_sec", data.runtime_sec));
 
         CHECK_ADD(json_resp_add_f64(resp, "output.voltage",   data.output_voltage));
-        CHECK_ADD(json_resp_add_f64(resp, "output.frequency", data.output_frequency));
+        /* NaN signals "this driver doesn't expose frequency" (some HID
+         * Back-UPS / CyberPower SKUs lack HID_USAGE_FREQUENCY entirely).
+         * Emit JSON null so the UI can hide the metric instead of
+         * rendering a misleading 0.00 Hz. */
+        if (isnan(data.output_frequency))
+            CHECK_ADD(json_resp_add_null(resp, "output.frequency"));
+        else
+            CHECK_ADD(json_resp_add_f64(resp, "output.frequency", data.output_frequency));
         CHECK_ADD(json_resp_add_f64(resp, "output.current",   data.output_current));
         CHECK_ADD(json_resp_add_f64(resp, "output.load_pct",  data.load_pct));
         CHECK_ADD(json_resp_add_u32(resp, "output.energy_wh", data.output_energy_wh));
@@ -110,7 +118,10 @@ static int build_status_into_resp(route_ctx_t *ctx, cutils_json_resp_t *resp)
         CHECK_ADD(json_resp_add_u32(resp, "outlets.sog1", data.outlet_sog1));
 
         CHECK_ADD(json_resp_add_f64(resp, "bypass.voltage",      data.bypass_voltage));
-        CHECK_ADD(json_resp_add_f64(resp, "bypass.frequency",    data.bypass_frequency));
+        if (isnan(data.bypass_frequency))
+            CHECK_ADD(json_resp_add_null(resp, "bypass.frequency"));
+        else
+            CHECK_ADD(json_resp_add_f64(resp, "bypass.frequency", data.bypass_frequency));
         CHECK_ADD(json_resp_add_u32(resp, "bypass.status",       data.bypass_status));
         CHECK_ADD(json_resp_add_i32(resp, "bypass.voltage_high",
             config_get_int(ctx->config, "bypass.voltage_high", 140)));
@@ -309,77 +320,6 @@ static api_response_t handle_events(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_telemetry(const api_request_t *req, void *ud)
-{
-    route_ctx_t *ctx = ud;
-
-    const char *from_param  = api_query_param(req, "from");
-    const char *to_param    = api_query_param(req, "to");
-    const char *limit_param = api_query_param(req, "limit");
-
-    int limit = limit_param ? atoi(limit_param) : 500;
-    if (limit <= 0 || limit > 10000) limit = 500;
-
-    char limit_s[16];
-    snprintf(limit_s, sizeof(limit_s), "%d", limit);
-
-    CUTILS_AUTO_DBRES db_result_t *result = NULL;
-    int rc;
-
-    if (from_param && to_param) {
-        const char *params[] = { from_param, to_param, limit_s, NULL };
-        rc = db_execute(ctx->db,
-            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
-            "load_pct, output_voltage, output_frequency, output_current, "
-            "input_voltage, efficiency "
-            "FROM telemetry WHERE timestamp >= ? AND timestamp <= ? "
-            "ORDER BY id ASC LIMIT ?",
-            params, &result);
-    } else if (from_param) {
-        const char *params[] = { from_param, limit_s, NULL };
-        rc = db_execute(ctx->db,
-            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
-            "load_pct, output_voltage, output_frequency, output_current, "
-            "input_voltage, efficiency "
-            "FROM telemetry WHERE timestamp >= ? ORDER BY id ASC LIMIT ?",
-            params, &result);
-    } else {
-        const char *params[] = { limit_s, NULL };
-        rc = db_execute(ctx->db,
-            "SELECT timestamp, status, charge_pct, runtime_sec, battery_voltage, "
-            "load_pct, output_voltage, output_frequency, output_current, "
-            "input_voltage, efficiency "
-            "FROM telemetry ORDER BY id DESC LIMIT ?",
-            params, &result);
-    }
-
-    if (rc != CUTILS_OK || !result)
-        return api_error(500, "failed to query telemetry");
-
-    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
-    if (json_resp_new_array(&resp) != CUTILS_OK)
-        return api_error(500, cutils_get_error());
-
-    for (int i = 0; i < result->nrows; i++) {
-        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t pt;
-        ADD_OR_FAIL(json_resp_array_append_begin(resp, "", &pt));
-        ADD_OR_FAIL(json_elem_add_str(&pt, "timestamp",        result->rows[i][0]));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "status",           atof(result->rows[i][1])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "charge_pct",       atof(result->rows[i][2])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "runtime_sec",      atof(result->rows[i][3])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "battery_voltage",  atof(result->rows[i][4])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "load_pct",         atof(result->rows[i][5])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_voltage",   atof(result->rows[i][6])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_frequency", atof(result->rows[i][7])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "output_current",   atof(result->rows[i][8])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "input_voltage",    atof(result->rows[i][9])));
-        ADD_OR_FAIL(json_elem_add_f64(&pt, "efficiency",       atof(result->rows[i][10])));
-        json_elem_commit(&pt);
-    }
-
-    return finalize_ok(resp);
-}
-
 static api_response_t handle_commands(const api_request_t *req, void *ud)
 {
     (void)req;
@@ -456,7 +396,6 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/commands",     API_GET,  handle_commands,  ctx);
     api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,       ctx);
     api_server_route(srv, "/api/events",       API_GET,  handle_events,    ctx);
-    api_server_route(srv, "/api/telemetry",    API_GET,  handle_telemetry, ctx);
     api_server_route(srv, "/api/restart",      API_POST, handle_restart,   ctx);
 
     /* Domain modules */

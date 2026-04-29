@@ -138,6 +138,17 @@ static int smt_detect(void *transport)
 
 /* --- Reads --- */
 
+/* Single-register read of the input transfer reason. Used by the monitor's
+ * fast-poll thread; see srt_read_transfer_reason for the rationale. */
+static int smt_read_transfer_reason(void *transport, uint16_t *out)
+{
+    uint16_t reg;
+    if (modbus_read_registers(mb(transport), SMT_REG_STATUS + 2, 1, &reg) != 1)
+        return -1;
+    *out = reg;
+    return 0;
+}
+
 static int smt_read_status(void *transport, ups_data_t *data)
 {
     uint16_t regs[SMT_REG_STATUS_LEN];
@@ -1356,6 +1367,7 @@ const ups_driver_t ups_driver_smt = {
     .read_dynamic        = smt_read_dynamic,
     .read_inventory      = smt_read_inventory,
     .read_thresholds     = smt_read_thresholds,
+    .read_transfer_reason = smt_read_transfer_reason,
     .commands            = smt_commands,
     .commands_count      = sizeof(smt_commands) / sizeof(smt_commands[0]),
     .config_read         = smt_config_read,

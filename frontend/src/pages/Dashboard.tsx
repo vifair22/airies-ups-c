@@ -325,7 +325,9 @@ export default function Dashboard() {
             unit="VAC"
           />
           <div className="mt-2">
-            <Metric label="Frequency" value={out?.frequency.toFixed(2) ?? '--'} unit="Hz" />
+            {out?.frequency != null && (
+              <Metric label="Frequency" value={out.frequency.toFixed(2)} unit="Hz" />
+            )}
             {s.outlets && (
               <>
                 <OutletBadge label="Main (MOG)" raw={s.outlets.mog} />
@@ -366,7 +368,7 @@ export default function Dashboard() {
           batteryError={s.errors?.battery_system ?? 0}
           loadPct={out?.load_pct ?? 0}
           efficiency={s.efficiency ?? -1}
-          outputFrequency={out?.frequency ?? 0}
+          outputFrequency={out?.frequency ?? null}
         />
       )}
       {isLineInteractive && (
@@ -379,7 +381,7 @@ export default function Dashboard() {
           batteryError={s.errors?.battery_system ?? 0}
           loadPct={out?.load_pct ?? 0}
           efficiency={s.efficiency ?? -1}
-          outputFrequency={out?.frequency ?? 0}
+          outputFrequency={out?.frequency ?? null}
           canHE={canHE}
         />
       )}
@@ -393,7 +395,7 @@ export default function Dashboard() {
           batteryError={s.errors?.battery_system ?? 0}
           loadPct={out?.load_pct ?? 0}
           efficiency={s.efficiency ?? -1}
-          outputFrequency={out?.frequency ?? 0}
+          outputFrequency={out?.frequency ?? null}
         />
       )}
 
@@ -448,7 +450,9 @@ export default function Dashboard() {
         <Plane title="Output" badge={outBadge} styles={outStyle}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
             <Metric label="Voltage" value={out?.voltage.toFixed(1) ?? '--'} unit="VAC" />
-            <Metric label="Frequency" value={out?.frequency.toFixed(2) ?? '--'} unit="Hz" />
+            {out?.frequency != null && (
+              <Metric label="Frequency" value={out.frequency.toFixed(2)} unit="Hz" />
+            )}
             <Metric label="Current" value={out?.current.toFixed(1) ?? '--'} unit="A" />
             <Metric label="Real Power" value={out && nomW ? fmtWatts(out.load_pct, nomW) : '--'} />
             <Metric label="Apparent" value={out && nomVA ? fmtVA(out.load_pct, nomVA) : '--'} />

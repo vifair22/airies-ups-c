@@ -16,7 +16,6 @@ typedef struct {
 static const cmd_entry_t COMMANDS[] = {
     { "status",    cmd_status },
     { "events",    cmd_events },
-    { "telemetry", cmd_telemetry },
     { "cmd",       cmd_cmd },
 };
 

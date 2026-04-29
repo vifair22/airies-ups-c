@@ -107,6 +107,19 @@ static int srt_detect(void *transport)
 
 /* --- Reads --- */
 
+/* Single-register read of the input transfer reason. Used by the monitor's
+ * fast-poll thread to catch transitions that the slow main poll misses —
+ * register 2 latches the cause briefly during mains events, then reverts
+ * to AcceptableInput once input is good again. */
+static int srt_read_transfer_reason(void *transport, uint16_t *out)
+{
+    uint16_t reg;
+    if (modbus_read_registers(mb(transport), SRT_REG_STATUS + 2, 1, &reg) != 1)
+        return -1;
+    *out = reg;
+    return 0;
+}
+
 static int srt_read_status(void *transport, ups_data_t *data)
 {
     uint16_t regs[SRT_REG_STATUS_LEN];
@@ -916,6 +929,7 @@ const ups_driver_t ups_driver_srt = {
     .read_dynamic        = srt_read_dynamic,
     .read_inventory      = srt_read_inventory,
     .read_thresholds     = srt_read_thresholds,
+    .read_transfer_reason = srt_read_transfer_reason,
     .commands            = srt_commands,
     .commands_count      = sizeof(srt_commands) / sizeof(srt_commands[0]),
     .config_read         = srt_config_read,

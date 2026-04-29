@@ -60,7 +60,16 @@ export default function UpsConfig() {
     </div>
   )
 
-  const groups = [...new Set(regs.map((r) => r.group || 'other'))]
+  /* Hide the input transfer_reason register when it's sitting at the
+   * steady-state "acceptable_input" value. The SRT/SMT firmware updates
+   * this register only on actual input transfers; in normal operation
+   * it just shows "Acceptable Input" forever, which is noisy and
+   * misleading. The events table still records meaningful transitions
+   * via the fast-poll thread, so we don't lose visibility. */
+  const visibleRegs = regs.filter(
+    (r) => !(r.name === 'transfer_reason' && r.setting === 'acceptable_input')
+  )
+  const groups = [...new Set(visibleRegs.map((r) => r.group || 'other'))]
 
   const handleWrite = async (name: string, value: number) => {
     setSaving(name)
@@ -136,7 +145,7 @@ export default function UpsConfig() {
                     {group.replace(/_/g, ' ')}
                   </td>
                 </tr>
-                {regs
+                {visibleRegs
                   .filter((r) => (r.group || 'other') === group)
                   .map((reg) => (
                     <RegRow
@@ -247,8 +256,14 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail, 
           <div className="flex gap-1.5 items-center justify-end">
             {reg.type === 'bitfield' && reg.options ? (
               <select
+                autoFocus
                 value={editVal}
                 onChange={(e) => setEditVal(e.target.value)}
+                onBlur={() => {
+                  if (editVal !== String(reg.raw_value) && saving !== reg.name)
+                    onWrite(reg.name, parseInt(editVal))
+                  setEditing(false)
+                }}
                 className="bg-field border border-edge-strong rounded px-2 py-1 text-xs"
               >
                 {reg.options.map((o) => (
@@ -258,16 +273,22 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail, 
             ) : (
               <>
                 <input
+                  autoFocus
                   type="number"
                   value={editVal}
                   onChange={(e) => setEditVal(e.target.value)}
+                  onBlur={() => {
+                    if (editVal !== String(reg.raw_value) && saving !== reg.name)
+                      onWrite(reg.name, parseInt(editVal))
+                    setEditing(false)
+                  }}
                   min={reg.min}
                   max={reg.max}
                   step={reg.step ?? 1}
                   className="bg-field border border-edge-strong rounded px-2 py-1 text-xs w-20 text-right"
                 />
                 {/* Range hint — visible while editing so the operator
-                    sees the constraint before clicking Save. The same
+                    sees the constraint before they tab out. The same
                     bounds are enforced server-side via the descriptor's
                     meta.scalar.{min,max} (see ups_config_validate). */}
                 {reg.min !== undefined && reg.max !== undefined && (
@@ -277,14 +298,11 @@ function RegRow({ reg, displayValue, saving, onWrite, feedback, feedbackDetail, 
                 )}
               </>
             )}
+            {/* preventDefault on mouseDown stops the input/select from
+                blurring (which would trigger autosave) before this
+                onClick can run — Cancel must bail out without saving. */}
             <button
-              onClick={() => { onWrite(reg.name, parseInt(editVal)); setEditing(false) }}
-              disabled={saving === reg.name}
-              className="text-xs text-green-400 hover:text-green-300"
-            >
-              {saving === reg.name ? '...' : 'Save'}
-            </button>
-            <button
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setEditing(false)}
               className="text-xs text-muted hover:text-muted"
             >

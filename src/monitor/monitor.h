@@ -2,7 +2,6 @@
 #define MONITOR_H
 
 #include "ups/ups.h"
-#include "monitor/retention.h"
 #include "monitor/status_snapshot.h"
 #include <cutils/db.h>
 #include <cutils/config.h>
@@ -10,7 +9,6 @@
 /* --- UPS Monitor Subsystem ---
  *
  * Polls UPS status and dynamic blocks at a configurable interval.
- * Records telemetry to DB (downsampled).
  * Detects state changes and writes events to the journal.
  * Tracks HE inhibit state.
  * Exposes current UPS state for API queries. */
@@ -26,13 +24,9 @@ typedef void (*monitor_event_fn)(const char *severity, const char *category,
 /* Create and start the monitor.
  * ups must be connected.
  * poll_interval_sec: how often to read UPS (typically 2).
- * telemetry_interval_sec: how often to write to DB (typically 30).
  * Returns NULL on failure. */
 monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
-                          int poll_interval_sec, int telemetry_interval_sec);
-
-/* Set retention policy. If not called, no retention cleanup runs. */
-void monitor_set_retention(monitor_t *mon, const retention_config_t *cfg);
+                          int poll_interval_sec);
 
 /* Register an event callback (state changes, alerts, shutdown triggers).
  * Multiple callbacks supported (up to 4). */
