@@ -84,7 +84,7 @@ describe('UpsConfig', () => {
     })
 
     await userEvent.click(screen.getByText('Edit'))
-    expect(screen.getByText('Save')).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toBeInTheDocument()
     expect(screen.getByText('Cancel')).toBeInTheDocument()
   })
 
@@ -106,15 +106,15 @@ describe('UpsConfig', () => {
     })
 
     await userEvent.click(screen.getByText('Edit'))
-    expect(screen.getByText('Save')).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toBeInTheDocument()
 
     await userEvent.click(screen.getByText('Cancel'))
     /* Should return to display mode */
     expect(screen.getByText('Edit')).toBeInTheDocument()
-    expect(screen.queryByText('Save')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
   })
 
-  it('saves register value and shows feedback', async () => {
+  it('autosaves register value on blur and shows feedback', async () => {
     globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
       if (opts?.method === 'POST' && url.includes('/api/config/ups')) {
         return Promise.resolve({
@@ -136,11 +136,10 @@ describe('UpsConfig', () => {
 
     await userEvent.click(screen.getByText('Edit'))
 
-    /* For bitfield type, there's a select dropdown */
     const select = screen.getByRole('combobox')
     await userEvent.selectOptions(select, '0')
-
-    await userEvent.click(screen.getByText('Save'))
+    /* Blur the select — onBlur autosaves the new value. */
+    select.blur()
 
     await waitFor(() => {
       expect(screen.getByText('saved')).toBeInTheDocument()
@@ -210,7 +209,7 @@ describe('UpsConfig', () => {
     /* Clicking the Edit button inside the Action cell must not trigger the
      * row-level expansion handler (marked data-no-toggle). */
     await userEvent.click(screen.getByText('Edit'))
-    expect(screen.getByText('Save')).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toBeInTheDocument()
     expect(screen.queryByText('Change history')).not.toBeInTheDocument()
   })
 })

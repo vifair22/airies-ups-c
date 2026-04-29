@@ -17,11 +17,11 @@ export interface UpsStatus {
   status?: { raw: number; text: string }
   battery?: { charge_pct: number; voltage: number; runtime_sec: number }
   output?: {
-    voltage: number; frequency: number; current: number
+    voltage: number; frequency: number | null; current: number
     load_pct: number; energy_wh: number
   }
   outlets?: { mog: number; sog0: number; sog1: number }
-  bypass?: { voltage: number; frequency: number; status: number }
+  bypass?: { voltage: number; frequency: number | null; status: number }
   input?: { voltage: number; status: number; transfer_high?: number; transfer_low?: number; warn_offset?: number }
   errors?: {
     general: number; power_system: number; battery_system: number
@@ -68,7 +68,7 @@ export interface PowerFlowProps {
   batteryError: number
   loadPct: number
   efficiency: number
-  outputFrequency: number
+  outputFrequency: number | null
   sensitivity?: 'normal' | 'reduced' | 'low'
   canHE?: boolean
 }

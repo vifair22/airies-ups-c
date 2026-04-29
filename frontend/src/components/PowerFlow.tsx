@@ -299,9 +299,14 @@ export function PowerFlowSRT({
           borderColor={dcBorder}
         />
 
+        {/* Hide the frequency reading entirely when the driver doesn't
+         * expose it (HID Back-UPS / CyberPower SKUs without
+         * HID_USAGE_FREQUENCY signal this with outputFrequency = null). */}
         <StageBlock {...inv} w={bw} h={bh} label="INVERTER"
-          value={inverterTracking ? 'Tracking' : inverterActive ? fmtV(outputFrequency) : undefined}
-          unit={inverterActive ? 'Hz' : undefined}
+          value={inverterTracking ? 'Tracking'
+            : inverterActive && outputFrequency != null ? fmtV(outputFrequency)
+            : undefined}
+          unit={inverterActive && outputFrequency != null ? 'Hz' : undefined}
           borderColor={invBorder}
           color={inverterTracking ? C.heStandby : undefined}
         />
