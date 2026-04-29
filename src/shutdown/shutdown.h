@@ -79,6 +79,12 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
  * Returns 0 on success. */
 int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name);
 
+/* Test that the target's configured down-detect method can currently
+ * observe the host as up — i.e., a real shutdown's wait-for-down loop
+ * would have something valid to watch. method="none" is trivially ok.
+ * Returns 0 if reachable, set_error()'d non-zero otherwise. */
+int shutdown_test_target_confirm(shutdown_mgr_t *mgr, const char *target_name);
+
 /* Evaluate trigger conditions against current UPS data.
  * Called from the monitor poll loop. If conditions are met for the
  * configured debounce period, executes the shutdown workflow.

@@ -114,62 +114,59 @@ static int confirm_ping(const char *host, int timeout_sec)
     return 0;
 }
 
+/* Single-shot TCP reachability check. Returns 1 if a connection can be
+ * established within ~2 seconds, 0 if the port refuses, can't be resolved,
+ * or the connect attempt times out. Used by both the wait-for-down poll
+ * loop (confirm_tcp_port) and the per-target reachability probe
+ * (test_target_confirm). */
+static int tcp_port_open(const char *host, int port)
+{
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    struct addrinfo hints = { .ai_socktype = SOCK_STREAM };
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return 0;
+
+    int fd = socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { freeaddrinfo(res); return 0; }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    int reachable = 0;
+    int cr = connect(fd, res->ai_addr, res->ai_addrlen);
+    if (cr == 0) {
+        reachable = 1;
+    } else if (errno == EINPROGRESS) {
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        struct timeval tv = { .tv_sec = 2 };
+        if (select(fd + 1, NULL, &wfds, NULL, &tv) > 0) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            reachable = (err == 0);
+        }
+    }
+
+    close(fd);
+    freeaddrinfo(res);
+    return reachable;
+}
+
 /* Wait for a TCP port to become unreachable (connect refused or timeout).
  * Returns 0 if confirmed down, -1 if still reachable at timeout. */
 static int confirm_tcp_port(const char *host, int port, int timeout_sec)
 {
     time_t start = time(NULL);
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    for (;;) {
-        struct addrinfo hints = { .ai_socktype = SOCK_STREAM };
-        struct addrinfo *res = NULL;
-        int gai = getaddrinfo(host, port_str, &hints, &res);
-        if (gai != 0) return 0; /* can't resolve = down */
-
-        int fd = socket(res->ai_family, SOCK_STREAM, 0);
-        if (fd < 0) { freeaddrinfo(res); return 0; }
-
-        /* Non-blocking connect with 2s timeout */
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-        int cr = connect(fd, res->ai_addr, res->ai_addrlen);
-        if (cr == 0) {
-            /* Connected immediately — still up */
-            close(fd);
-            freeaddrinfo(res);
-        } else if (errno == EINPROGRESS) {
-            fd_set wfds;
-            FD_ZERO(&wfds);
-            FD_SET(fd, &wfds);
-            struct timeval tv = { .tv_sec = 2 };
-            int sel = select(fd + 1, NULL, &wfds, NULL, &tv);
-            if (sel > 0) {
-                int err = 0;
-                socklen_t len = sizeof(err);
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                close(fd);
-                freeaddrinfo(res);
-                if (err != 0) return 0; /* connect failed = down */
-                /* err == 0 means connected = still up */
-            } else {
-                close(fd);
-                freeaddrinfo(res);
-                return 0; /* select timeout = can't connect = down */
-            }
-        } else {
-            /* Connect failed immediately = down */
-            close(fd);
-            freeaddrinfo(res);
-            return 0;
-        }
-
+    while (tcp_port_open(host, port)) {
         if (time(NULL) - start >= timeout_sec)
             return -1;
         sleep(5);
     }
+    return 0;
 }
 
 /* Wait for a command to return 0 (meaning target is confirmed down).
@@ -326,6 +323,28 @@ static int test_target_connectivity(const char *method, const char *host,
         return 0; /* can't test arbitrary commands */
     }
 
+    return -1;
+}
+
+/* Single-shot reachability probe over the configured down-detect method.
+ * Inverse of confirm_target_down: validates the operator can OBSERVE the
+ * target's current up state via the configured mechanism, so that during
+ * a real run the wait-for-down loop has something to observe.
+ *
+ * Returns 0 if reachable (i.e. the down-detect mechanism would correctly
+ * report "still up" right now), -1 if not. method="none" is trivially ok
+ * since there's nothing to verify. */
+static int test_target_confirm(const char *method, const char *host,
+                               int port, const char *cmd)
+{
+    if (!method || strcmp(method, "none") == 0)
+        return 0;
+    if (strcmp(method, "ping") == 0)
+        return is_host_online(host) ? 0 : -1;
+    if (strcmp(method, "tcp_port") == 0)
+        return tcp_port_open(host, port) ? 0 : -1;
+    if (strcmp(method, "command") == 0 && cmd && cmd[0])
+        return system(cmd) == 0 ? 0 : -1;
     return -1;
 }
 
@@ -873,6 +892,37 @@ int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name)
         log_info("target '%s': connectivity OK", target_name);
     else
         log_error("target '%s': connectivity FAILED", target_name);
+
+    return rc;
+}
+
+int shutdown_test_target_confirm(shutdown_mgr_t *mgr, const char *target_name)
+{
+    const char *params[] = { target_name, NULL };
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
+
+    int rc = db_execute(mgr->db,
+        "SELECT confirm_method, host, confirm_port, confirm_command "
+        "FROM shutdown_targets WHERE name = ?",
+        params, &result);
+
+    if (rc != CUTILS_OK || !result || result->nrows == 0)
+        return set_error(CUTILS_ERR_NOT_FOUND, "target '%s' not found", target_name);
+
+    const char *method = result->rows[0][0];
+    const char *host   = result->rows[0][1];
+    int port = result->rows[0][2] ? atoi(result->rows[0][2]) : 0;
+    const char *cmd    = result->rows[0][3];
+
+    log_info("testing target '%s' down-detect (%s on %s)",
+             target_name, method, host ? host : "?");
+    rc = test_target_confirm(method, host, port, cmd);
+
+    if (rc == 0)
+        log_info("target '%s': down-detect OK (host reachable)", target_name);
+    else
+        log_error("target '%s': down-detect FAILED (host not reachable via %s)",
+                  target_name, method ? method : "?");
 
     return rc;
 }
