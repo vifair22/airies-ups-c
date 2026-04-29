@@ -102,6 +102,21 @@
 #define UPS_BATERR_GENERAL       (1 << 8)
 #define UPS_BATERR_COMM          (1 << 9)
 
+/* ReplaceBatteryTestStatus_BF (reg 23) — stored in ups_data.bat_test_status.
+ * Result bits (PASSED..ABORTED) are mutually exclusive in practice; same for
+ * source bits (PROTOCOL/LOCAL_UI/INTERNAL). PENDING and IN_PROGRESS are
+ * transient — once UPS_ST_TEST falls, expect exactly one result bit set
+ * (or none, if the UPS hasn't latched the outcome yet on this poll). */
+#define UPS_BATTEST_PENDING      (1 << 0)
+#define UPS_BATTEST_IN_PROGRESS  (1 << 1)
+#define UPS_BATTEST_PASSED       (1 << 2)
+#define UPS_BATTEST_FAILED       (1 << 3)
+#define UPS_BATTEST_REFUSED      (1 << 4)
+#define UPS_BATTEST_ABORTED      (1 << 5)
+#define UPS_BATTEST_SRC_PROTOCOL (1 << 6)
+#define UPS_BATTEST_SRC_LOCAL_UI (1 << 7)
+#define UPS_BATTEST_SRC_INTERNAL (1 << 8)
+
 /* ---------------------------------------------------------------------------
  *  Return codes
  * --------------------------------------------------------------------------- */

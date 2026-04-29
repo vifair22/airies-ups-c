@@ -242,6 +242,69 @@ static void test_decode_battery_errors_multiple(void **state)
     assert_string_equal(out[2], "CommunicationError");
 }
 
+/* --- ups_battery_test_result_str --- */
+
+static void test_battery_test_result_passed(void **state)
+{
+    (void)state;
+    /* Real-world: passed often appears together with the source bit. */
+    assert_string_equal(ups_battery_test_result_str(
+                            UPS_BATTEST_PASSED | UPS_BATTEST_SRC_PROTOCOL),
+                        "passed");
+}
+
+static void test_battery_test_result_failed(void **state)
+{
+    (void)state;
+    assert_string_equal(ups_battery_test_result_str(UPS_BATTEST_FAILED), "failed");
+}
+
+static void test_battery_test_result_refused_aborted(void **state)
+{
+    (void)state;
+    assert_string_equal(ups_battery_test_result_str(UPS_BATTEST_REFUSED), "refused");
+    assert_string_equal(ups_battery_test_result_str(UPS_BATTEST_ABORTED), "aborted");
+}
+
+static void test_battery_test_result_failed_takes_precedence(void **state)
+{
+    (void)state;
+    /* Coincident passed + failed should always read as failed — see the
+     * "always treat as worse result" rationale in ups_format.c. */
+    assert_string_equal(ups_battery_test_result_str(
+                            UPS_BATTEST_PASSED | UPS_BATTEST_FAILED),
+                        "failed");
+}
+
+static void test_battery_test_result_none(void **state)
+{
+    (void)state;
+    /* No terminal bit: poll fired before the UPS latched the outcome. */
+    assert_null(ups_battery_test_result_str(0));
+    assert_null(ups_battery_test_result_str(UPS_BATTEST_IN_PROGRESS));
+    assert_null(ups_battery_test_result_str(UPS_BATTEST_PENDING));
+}
+
+/* --- ups_battery_test_source_str --- */
+
+static void test_battery_test_source_all(void **state)
+{
+    (void)state;
+    assert_string_equal(ups_battery_test_source_str(UPS_BATTEST_SRC_PROTOCOL),
+                        "protocol");
+    assert_string_equal(ups_battery_test_source_str(UPS_BATTEST_SRC_LOCAL_UI),
+                        "local UI");
+    assert_string_equal(ups_battery_test_source_str(UPS_BATTEST_SRC_INTERNAL),
+                        "internal scheduler");
+}
+
+static void test_battery_test_source_none(void **state)
+{
+    (void)state;
+    assert_null(ups_battery_test_source_str(0));
+    assert_null(ups_battery_test_source_str(UPS_BATTEST_PASSED));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -270,6 +333,14 @@ int main(void)
         cmocka_unit_test(test_decode_battery_errors_none),
         cmocka_unit_test(test_decode_battery_errors_single),
         cmocka_unit_test(test_decode_battery_errors_multiple),
+        /* battery test status */
+        cmocka_unit_test(test_battery_test_result_passed),
+        cmocka_unit_test(test_battery_test_result_failed),
+        cmocka_unit_test(test_battery_test_result_refused_aborted),
+        cmocka_unit_test(test_battery_test_result_failed_takes_precedence),
+        cmocka_unit_test(test_battery_test_result_none),
+        cmocka_unit_test(test_battery_test_source_all),
+        cmocka_unit_test(test_battery_test_source_none),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
