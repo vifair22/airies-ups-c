@@ -528,7 +528,19 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
     /* --- Phase 3: Controller shutdown --- */
 
     int ctrl_enabled = config_get_int(mgr->config, "shutdown.controller_enabled", 1);
-    if (ctrl_enabled) {
+#ifdef VERSION_STRING
+    /* Docker builds stamp ".docker.<arch>" into VERSION_STRING via the
+     * BUILD_TAG plumbing. A container can't power off its host kernel —
+     * `systemctl poweroff` would either no-op or kill only the container.
+     * Hard-skip Phase 3 regardless of shutdown.controller_enabled so a
+     * misconfigured container can't surprise an operator. */
+    int is_docker_build = (strstr(VERSION_STRING, ".docker.") != NULL);
+#else
+    int is_docker_build = 0;
+#endif
+    if (is_docker_build) {
+        log_info("Controller: skipped (docker build cannot power off host)");
+    } else if (ctrl_enabled) {
         if (dry_run) {
             log_info("Controller: would execute 'systemctl poweroff'");
         } else {
