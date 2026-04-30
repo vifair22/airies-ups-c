@@ -29,8 +29,12 @@ VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 # overrides COMMON_CFLAGS wholesale to inject CROSS_SYSROOT_INCLUDES,
 # which would otherwise drop that define. Replicate it here so the
 # override stays self-contained.
+#
+# Quoting matches c-utils's own Makefile: -DFOO=\"...\" (backslash-escaped
+# quotes, no surrounding shell quotes) so the value composes cleanly when
+# we splat it into the single-quoted COMMON_CFLAGS override below.
 CUTILS_SEMVER       := $(shell cat $(CUTILS_DIR)/release_version 2>/dev/null | tr -d '[:space:]')
-CUTILS_VERSION_DEF  := -DCUTILS_VERSION_STRING='"$(CUTILS_SEMVER)_$(BUILD_TS).release"'
+CUTILS_VERSION_DEF  := -DCUTILS_VERSION_STRING=\"$(CUTILS_SEMVER)_$(BUILD_TS).release\"
 
 CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
