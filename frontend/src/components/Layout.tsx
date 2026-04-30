@@ -137,9 +137,26 @@ export default function Layout() {
             className="block w-full text-left text-xs text-faint hover:text-muted transition-colors py-2 md:py-0">
             Logout
           </button>
-          <span className="text-[10px] text-faint font-mono">
-            UI {__APP_VERSION__}{version?.daemon ? ` · Daemon ${version.daemon}` : ''}
-          </span>
+          {(() => {
+            /* The daemon's VERSION_STRING is "<semver>_<YYYYMMDD>.<HHMM>.<type>.<tag>"
+             * — too wide for the 208px sidebar, and underscores/dots are not
+             * line-break opportunities so it forced a horizontal scrollbar.
+             * Show only the semver here; full stamp surfaces in the title
+             * tooltip for the operator who occasionally needs the build
+             * timestamp / tag. */
+            const semver = (s?: string) => s ? s.split('_')[0] : ''
+            const ui      = __APP_VERSION__
+            const daemon  = version?.daemon
+            const tooltip = daemon
+              ? `UI: ${ui}\nDaemon: ${daemon}`
+              : `UI: ${ui}`
+            return (
+              <span className="text-[10px] text-faint font-mono block truncate"
+                    title={tooltip}>
+                UI {ui}{daemon ? ` · Daemon ${semver(daemon)}` : ''}
+              </span>
+            )
+          })()}
         </div>
       </aside>
 
