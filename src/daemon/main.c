@@ -4,6 +4,7 @@
 #include <cutils/push.h>
 #include <cutils/appguard.h>
 #include <cutils/error_loop.h>
+#include <cutils/version.h>
 
 #include "ups/ups.h"
 #include "api/server.h"
@@ -151,6 +152,14 @@ static void on_monitor_poll(const ups_data_t *data, void *userdata)
 
 int main(int argc, char *argv[])
 {
+    /* Line-buffer stdout/stderr so log lines flush on every '\n'. Without
+     * this, libc block-buffers stdout when journald hands us a pipe, which
+     * lets the parent's partial buffer interleave with a forked child's
+     * stdout — journald then flushes the partial bytes as a binary blob
+     * with `_LINE_BREAK=pid-change`. Must run before any I/O. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+
     appguard_set_argv(argc, argv);
 
     /* --- Phase 1: AppGuard (config, DB, migrations, logging, push) --- */
@@ -159,6 +168,13 @@ int main(int argc, char *argv[])
     appguard_t *guard = appguard_init(&ag_cfg);
     if (!guard)
         return 1;
+
+    /* Field-diagnostic breadcrumb: pin the c-utils version stamp into
+     * the journal at startup. Lets us tell at a glance which lib build
+     * a misbehaving Pi is actually running without SSH'ing in to grep
+     * the binary. Daemon's own VERSION_STRING is already journaled by
+     * appguard_init's banner. */
+    log_info("c-utils %s", cutils_version());
 
     cutils_config_t *cfg = appguard_config(guard);
     cutils_db_t *db = appguard_db(guard);
@@ -246,7 +262,7 @@ int main(int argc, char *argv[])
                          alert_ctx.thresh.transfer_low);
             /* Shutdown orchestrator (created before monitor starts so
              * the poll callback can evaluate trigger conditions) */
-            shutdown = shutdown_create(db, ups, cfg);
+            shutdown = shutdown_create(db, ups, cfg, mon);
             alert_ctx.shutdown = shutdown;
 
             monitor_on_poll(mon, on_monitor_poll, &alert_ctx);
@@ -311,9 +327,13 @@ int main(int argc, char *argv[])
 
     if (restart_requested) {
         log_info("restarting via appguard_restart");
+        /* appguard_restart shuts the guard down internally on every
+         * return path (success exec's, failure paths free first). The
+         * guard pointer is invalid after this call regardless of return
+         * value, so we must not call appguard_shutdown again below. */
         appguard_restart(guard);
-        /* only reached if execv fails */
-        log_error("restart failed, exiting");
+        fprintf(stderr, "airies-ups: restart failed, exiting\n");
+        return 1;
     }
 
     appguard_shutdown(guard);

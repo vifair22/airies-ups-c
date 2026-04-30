@@ -97,8 +97,9 @@ static int setup(void **state)
     assert_int_equal(config_set_db(cfg, "shutdown.ups_mode", "none"), CUTILS_OK);
     assert_int_equal(config_set_db(cfg, "shutdown.controller_enabled", "0"), CUTILS_OK);
 
-    /* Create shutdown manager (ups=NULL is safe with ups_mode=none) */
-    shutdown_mgr_t *mgr = shutdown_create(db, NULL, cfg);
+    /* Create shutdown manager (ups=NULL is safe with ups_mode=none;
+     * monitor=NULL skips event emission, which the tests don't exercise) */
+    shutdown_mgr_t *mgr = shutdown_create(db, NULL, cfg, NULL);
     if (!mgr) { db_close(db); config_free(cfg); return -1; }
 
     test_ctx_t *ctx = calloc(1, sizeof(*ctx));
@@ -397,7 +398,7 @@ static void test_trigger_all_data_fields(void **state)
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
         /* Reset trigger state by creating a fresh manager */
         shutdown_free(ctx->mgr);
-        ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
+        ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
 
         assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", fields[i]), CUTILS_OK);
         shutdown_check_trigger(ctx->mgr, &d);
@@ -406,7 +407,7 @@ static void test_trigger_all_data_fields(void **state)
 
     /* Test unknown field name — should not trigger */
     shutdown_free(ctx->mgr);
-    ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
+    ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
     assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "nonexistent_field"), CUTILS_OK);
     shutdown_check_trigger(ctx->mgr, &d);
 }
@@ -418,7 +419,7 @@ static void test_create_free(void **state)
     test_ctx_t *ctx = *state;
     /* The setup/teardown already tests create+free, but verify no crash
      * on a second create/free cycle */
-    shutdown_mgr_t *mgr2 = shutdown_create(ctx->db, NULL, ctx->cfg);
+    shutdown_mgr_t *mgr2 = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
     assert_non_null(mgr2);
     shutdown_free(mgr2);
 }
@@ -688,6 +689,83 @@ static void test_shutdown_test_target_unknown_method_fails(void **state)
     assert_int_equal(shutdown_test_target(ctx->mgr, "weird"), -1);
 }
 
+/* --- shutdown_test_target_confirm: per-target down-detect probe --- */
+
+static int insert_target_with_confirm(cutils_db_t *db, const char *target_name,
+                                      const char *confirm_method,
+                                      const char *confirm_command)
+{
+    int rc = db_exec_raw(db,
+        "INSERT OR IGNORE INTO shutdown_groups (id, name, execution_order, "
+        "parallel, max_timeout_sec, post_group_delay) "
+        "VALUES (1, 'g', 1, 0, 0, 0)");
+    if (rc != CUTILS_OK) return rc;
+
+    char sql[768];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO shutdown_targets (group_id, name, method, host, username, "
+        "credential, command, timeout_sec, order_in_group, confirm_method, "
+        "confirm_port, confirm_command, post_confirm_delay) "
+        "VALUES (1, '%s', 'command', 'h', 'u', 'c', '/bin/true', 30, 1, "
+        "'%s', 0, '%s', 0)",
+        target_name, confirm_method, confirm_command ? confirm_command : "");
+    return db_exec_raw(db, sql);
+}
+
+static void test_shutdown_test_target_confirm_not_found(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "does_not_exist"),
+                     CUTILS_ERR_NOT_FOUND);
+}
+
+static void test_shutdown_test_target_confirm_none_method_ok(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(insert_target_with_confirm(ctx->db, "cm_none", "none", ""),
+                     CUTILS_OK);
+    /* method='none' has nothing to validate -> trivially ok. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_none"), 0);
+}
+
+static void test_shutdown_test_target_confirm_command_success(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_ok", "command", "/bin/true"),
+        CUTILS_OK);
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_ok"), 0);
+}
+
+static void test_shutdown_test_target_confirm_command_failure(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_bad", "command", "/bin/false"),
+        CUTILS_OK);
+    /* command exits non-zero -> reachability probe fails. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_bad"), -1);
+}
+
+static void test_shutdown_test_target_confirm_command_empty_fails(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_empty", "command", ""),
+        CUTILS_OK);
+    /* No command stored -> can't probe -> -1. */
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_empty"), -1);
+}
+
+static void test_shutdown_test_target_confirm_unknown_method_fails(void **state)
+{
+    test_ctx_t *ctx = *state;
+    assert_int_equal(
+        insert_target_with_confirm(ctx->db, "cm_weird", "magic", ""),
+        CUTILS_OK);
+    assert_int_equal(shutdown_test_target_confirm(ctx->mgr, "cm_weird"), -1);
+}
+
 /* =========================================================================
  * shutdown_execute UPS-action phase — swap mgr->ups for a fake
  *
@@ -760,7 +838,7 @@ static void free_fake_ups(ups_t *u)
  * sharing the fixture's db + cfg. */
 static shutdown_mgr_t *make_mgr_with_fake_ups(test_ctx_t *ctx, ups_t *fake)
 {
-    shutdown_mgr_t *m = shutdown_create(ctx->db, fake, ctx->cfg);
+    shutdown_mgr_t *m = shutdown_create(ctx->db, fake, ctx->cfg, NULL);
     assert_non_null(m);
     return m;
 }
@@ -897,6 +975,153 @@ static void test_fire_target_action_unknown_method(void **state)
     assert_int_equal(rc, CUTILS_ERR_INVALID);
 }
 
+/* =========================================================================
+ * shutdown_execute_ex — per-step result aggregation
+ *
+ * The setup() defaults (ups_mode=none, controller_enabled=0) emit two
+ * phase2/phase3 skipped rows, so even a no-groups workflow has 2 result
+ * rows — gives every test a known baseline to inspect.
+ * ========================================================================= */
+
+static const shutdown_step_result_t *find_step(const shutdown_result_t *res,
+                                               const char *phase,
+                                               const char *target_substr)
+{
+    if (!res) return NULL;
+    for (size_t i = 0; i < res->n_steps; i++) {
+        const shutdown_step_result_t *s = &res->steps[i];
+        if (strcmp(s->phase, phase) != 0) continue;
+        if (target_substr && !strstr(s->target, target_substr)) continue;
+        return s;
+    }
+    return NULL;
+}
+
+static void test_execute_ex_no_groups_emits_phase2_phase3(void **state)
+{
+    test_ctx_t *ctx = *state;
+    shutdown_result_t *res = NULL;
+    int rc = shutdown_execute_ex(ctx->mgr, 0, &res);
+
+    assert_int_equal(rc, CUTILS_OK);
+    assert_non_null(res);
+    /* No phase1 rows (no groups). Phase 2 + 3 always emit one row each. */
+    assert_int_equal(res->n_steps, 2);
+    assert_non_null(find_step(res, "phase2", "ups"));
+    assert_non_null(find_step(res, "phase3", "controller"));
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_phase2_skipped_when_mode_none(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* setup() pins ups_mode=none. Phase 2 row should be ok=2 (skipped). */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p2 = find_step(res, "phase2", "ups");
+    assert_non_null(p2);
+    assert_int_equal(p2->ok, 2);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_phase3_skipped_when_disabled(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* setup() pins controller_enabled=0. Phase 3 row should be ok=2. */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p3 = find_step(res, "phase3", "controller");
+    assert_non_null(p3);
+    assert_int_equal(p3->ok, 2);
+    assert_int_equal(res->n_failed, 0);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_sequential_failure_captured(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('seq', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "good", "/bin/true"),  CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "bad",  "/bin/false"), CUTILS_OK);
+
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *good = find_step(res, "phase1", "/good");
+    const shutdown_step_result_t *bad  = find_step(res, "phase1", "/bad");
+    assert_non_null(good);
+    assert_non_null(bad);
+    assert_int_equal(good->ok, 0);
+    assert_int_equal(bad->ok,  1);
+    assert_int_equal(res->n_failed, 1);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_parallel_failure_captured(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('par', 1, 1, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "good", "/bin/true"),  CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "bad",  "/bin/false"), CUTILS_OK);
+
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *good = find_step(res, "phase1", "/good");
+    const shutdown_step_result_t *bad  = find_step(res, "phase1", "/bad");
+    assert_non_null(good);
+    assert_non_null(bad);
+    assert_int_equal(good->ok, 0);
+    assert_int_equal(bad->ok,  1);
+    /* Parallel can't reach the child's cutils_get_error across the fork,
+     * so the parent records a generic message — verify the prefix. */
+    assert_true(strstr(bad->error, "step failed") != NULL);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_dry_run_validates_command_target(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('g', 1, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "t", "/bin/true"), CUTILS_OK);
+
+    /* Dry run; method='command' validation passes (can't probe shell cmds). */
+    shutdown_result_t *res = NULL;
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 1, &res), CUTILS_OK);
+
+    const shutdown_step_result_t *p1 = find_step(res, "phase1", "/t");
+    assert_non_null(p1);
+    assert_int_equal(p1->ok, 0);
+    shutdown_result_free(res);
+}
+
+static void test_execute_ex_null_out_is_safe(void **state)
+{
+    test_ctx_t *ctx = *state;
+    /* NULL out param: behaves like shutdown_execute, no crash, no leak. */
+    assert_int_equal(shutdown_execute_ex(ctx->mgr, 0, NULL), CUTILS_OK);
+}
+
+static void test_shutdown_result_free_handles_null(void **state)
+{
+    (void)state;
+    shutdown_result_free(NULL);   /* no-op, no crash */
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -932,6 +1157,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_not_found, setup, teardown),
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_command_method_ok, setup, teardown),
         cmocka_unit_test_setup_teardown(test_shutdown_test_target_unknown_method_fails, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_not_found, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_none_method_ok, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_success, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_failure, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_command_empty_fails, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_shutdown_test_target_confirm_unknown_method_fails, setup, teardown),
         /* ups action phase */
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_none_skips_ups_action, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_ups_mode_unknown_warns, setup, teardown),
@@ -942,6 +1173,15 @@ int main(void)
         cmocka_unit_test(test_fire_target_action_command_success),
         cmocka_unit_test(test_fire_target_action_command_failure),
         cmocka_unit_test(test_fire_target_action_unknown_method),
+        /* shutdown_execute_ex result aggregation */
+        cmocka_unit_test_setup_teardown(test_execute_ex_no_groups_emits_phase2_phase3, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_phase2_skipped_when_mode_none, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_phase3_skipped_when_disabled, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_sequential_failure_captured, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_parallel_failure_captured, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_dry_run_validates_command_target, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_execute_ex_null_out_is_safe, setup, teardown),
+        cmocka_unit_test(test_shutdown_result_free_handles_null),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

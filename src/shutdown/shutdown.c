@@ -22,6 +22,7 @@ struct shutdown_mgr {
     cutils_db_t        *db;
     ups_t              *ups;
     cutils_config_t    *config;
+    monitor_t          *monitor;            /* optional event sink (NULL = no-op) */
     shutdown_progress_fn progress_fn;
     void               *progress_ud;
 
@@ -30,12 +31,70 @@ struct shutdown_mgr {
     int                 triggered;          /* 1 = workflow already fired, don't re-trigger */
 };
 
+/* Mirror a workflow milestone into the events table. NULL monitor is the
+ * no-op path used by unit tests; production always has a monitor wired
+ * via main.c. The events table INSERT inside monitor_fire_event is
+ * synchronous, so milestones land before subsequent phases run — this
+ * matters for the controller-poweroff path, where the daemon may be
+ * SIGTERM'd by systemd shortly after returning. */
+static void emit_event(shutdown_mgr_t *mgr, const char *severity,
+                       const char *title, const char *message)
+{
+    if (!mgr || !mgr->monitor) return;
+    monitor_fire_event(mgr->monitor, severity, "shutdown", title, message);
+}
+
 /* Internal helpers, non-static so the unit tests can exercise them via
  * extern prototypes. Not part of any public header. */
 char *write_key_to_tmpfs(const char *key_material);
 int fire_target_action(const char *method, const char *host,
                        const char *username, const char *credential,
                        const char *command);
+
+/* Flush stdio before forking a child so the child can't pick up half-
+ * written buffered bytes from the parent (which journald renders as
+ * `_LINE_BREAK=pid-change` blobs and drops on the floor). Wraps system(3)
+ * so every shell-out path through this module gets the same treatment. */
+static int run_shell(const char *cmd)
+{
+    fflush(stdout);
+    fflush(stderr);
+    return system(cmd);
+}
+
+/* --- Result accumulator ---
+ *
+ * Phase routines append rows here as they run; the API serializes the
+ * final array back to the caller so the UI can show a per-step pass/
+ * fail breakdown instead of a single "shutdown initiated" toast. */
+
+static void result_append(shutdown_result_t *res, const char *phase,
+                          const char *target, int ok, const char *err)
+{
+    if (!res) return;
+    size_t cap = res->n_steps + 1;
+    shutdown_step_result_t *grow = realloc(res->steps, cap * sizeof(*grow));
+    if (!grow) return;          /* out of memory: drop the row, keep going */
+    res->steps = grow;
+
+    shutdown_step_result_t *row = &res->steps[res->n_steps];
+    memset(row, 0, sizeof(*row));
+    snprintf(row->phase,  sizeof(row->phase),  "%s", phase  ? phase  : "");
+    snprintf(row->target, sizeof(row->target), "%s", target ? target : "");
+    row->ok = ok;
+    if (ok == 1)
+        snprintf(row->error, sizeof(row->error), "%s", err ? err : "");
+
+    res->n_steps++;
+    if (ok == 1) res->n_failed++;
+}
+
+void shutdown_result_free(shutdown_result_t *res)
+{
+    if (!res) return;
+    free(res->steps);
+    free(res);
+}
 
 /* --- Progress reporting --- */
 
@@ -53,7 +112,7 @@ static int is_host_online(const char *host)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "ping -c 1 -W 1 %s >/dev/null 2>&1", host);
-    return system(cmd) == 0;
+    return run_shell(cmd) == 0;
 }
 
 /* Wait for host to stop responding to ping. Returns 0 if confirmed down,
@@ -69,62 +128,59 @@ static int confirm_ping(const char *host, int timeout_sec)
     return 0;
 }
 
+/* Single-shot TCP reachability check. Returns 1 if a connection can be
+ * established within ~2 seconds, 0 if the port refuses, can't be resolved,
+ * or the connect attempt times out. Used by both the wait-for-down poll
+ * loop (confirm_tcp_port) and the per-target reachability probe
+ * (test_target_confirm). */
+static int tcp_port_open(const char *host, int port)
+{
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    struct addrinfo hints = { .ai_socktype = SOCK_STREAM };
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return 0;
+
+    int fd = socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { freeaddrinfo(res); return 0; }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    int reachable = 0;
+    int cr = connect(fd, res->ai_addr, res->ai_addrlen);
+    if (cr == 0) {
+        reachable = 1;
+    } else if (errno == EINPROGRESS) {
+        fd_set wfds;
+        FD_ZERO(&wfds);
+        FD_SET(fd, &wfds);
+        struct timeval tv = { .tv_sec = 2 };
+        if (select(fd + 1, NULL, &wfds, NULL, &tv) > 0) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            reachable = (err == 0);
+        }
+    }
+
+    close(fd);
+    freeaddrinfo(res);
+    return reachable;
+}
+
 /* Wait for a TCP port to become unreachable (connect refused or timeout).
  * Returns 0 if confirmed down, -1 if still reachable at timeout. */
 static int confirm_tcp_port(const char *host, int port, int timeout_sec)
 {
     time_t start = time(NULL);
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    for (;;) {
-        struct addrinfo hints = { .ai_socktype = SOCK_STREAM };
-        struct addrinfo *res = NULL;
-        int gai = getaddrinfo(host, port_str, &hints, &res);
-        if (gai != 0) return 0; /* can't resolve = down */
-
-        int fd = socket(res->ai_family, SOCK_STREAM, 0);
-        if (fd < 0) { freeaddrinfo(res); return 0; }
-
-        /* Non-blocking connect with 2s timeout */
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-        int cr = connect(fd, res->ai_addr, res->ai_addrlen);
-        if (cr == 0) {
-            /* Connected immediately — still up */
-            close(fd);
-            freeaddrinfo(res);
-        } else if (errno == EINPROGRESS) {
-            fd_set wfds;
-            FD_ZERO(&wfds);
-            FD_SET(fd, &wfds);
-            struct timeval tv = { .tv_sec = 2 };
-            int sel = select(fd + 1, NULL, &wfds, NULL, &tv);
-            if (sel > 0) {
-                int err = 0;
-                socklen_t len = sizeof(err);
-                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                close(fd);
-                freeaddrinfo(res);
-                if (err != 0) return 0; /* connect failed = down */
-                /* err == 0 means connected = still up */
-            } else {
-                close(fd);
-                freeaddrinfo(res);
-                return 0; /* select timeout = can't connect = down */
-            }
-        } else {
-            /* Connect failed immediately = down */
-            close(fd);
-            freeaddrinfo(res);
-            return 0;
-        }
-
+    while (tcp_port_open(host, port)) {
         if (time(NULL) - start >= timeout_sec)
             return -1;
         sleep(5);
     }
+    return 0;
 }
 
 /* Wait for a command to return 0 (meaning target is confirmed down).
@@ -133,7 +189,7 @@ static int confirm_command(const char *cmd, int timeout_sec)
 {
     time_t start = time(NULL);
     for (;;) {
-        if (system(cmd) == 0)
+        if (run_shell(cmd) == 0)
             return 0;
         if (time(NULL) - start >= timeout_sec)
             return -1;
@@ -207,7 +263,7 @@ int fire_target_action(const char *method, const char *host,
                  "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
                  credential, username, host, command);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "ssh_key") == 0) {
         char *key_path = write_key_to_tmpfs(credential);
@@ -222,14 +278,14 @@ int fire_target_action(const char *method, const char *host,
                  "-o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s %s",
                  key_path, username, host, command);
-        int rc = system(cmd);
+        int rc = run_shell(cmd);
 
         unlink(key_path);
         free(key_path);
         return rc == 0 ? 0 : -1;
 
     } else if (strcmp(method, "command") == 0) {
-        return system(command) == 0 ? 0 : -1;
+        return run_shell(command) == 0 ? 0 : -1;
     }
 
     return set_error(CUTILS_ERR_INVALID, "unknown shutdown method: %s", method);
@@ -260,13 +316,14 @@ static int execute_target(const char *method, const char *host,
 static int test_target_connectivity(const char *method, const char *host,
                                     const char *username, const char *credential)
 {
+    if (!method) return -1;
     if (strcmp(method, "ssh_password") == 0) {
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
                  "sshpass -p '%s' ssh -o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s 'echo OK'",
                  credential, username, host);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "ssh_key") == 0) {
         char cmd[1024];
@@ -274,7 +331,7 @@ static int test_target_connectivity(const char *method, const char *host,
                  "ssh -i '%s' -o StrictHostKeyChecking=no "
                  "-o ConnectTimeout=5 %s@%s 'echo OK'",
                  credential, username, host);
-        return system(cmd) == 0 ? 0 : -1;
+        return run_shell(cmd) == 0 ? 0 : -1;
 
     } else if (strcmp(method, "command") == 0) {
         return 0; /* can't test arbitrary commands */
@@ -283,12 +340,41 @@ static int test_target_connectivity(const char *method, const char *host,
     return -1;
 }
 
+/* Single-shot reachability probe over the configured down-detect method.
+ * Inverse of confirm_target_down: validates the operator can OBSERVE the
+ * target's current up state via the configured mechanism, so that during
+ * a real run the wait-for-down loop has something to observe.
+ *
+ * Returns 0 if reachable (i.e. the down-detect mechanism would correctly
+ * report "still up" right now), -1 if not. method="none" is trivially ok
+ * since there's nothing to verify. */
+static int test_target_confirm(const char *method, const char *host,
+                               int port, const char *cmd)
+{
+    if (!method || strcmp(method, "none") == 0)
+        return 0;
+    if (strcmp(method, "ping") == 0)
+        return is_host_online(host) ? 0 : -1;
+    if (strcmp(method, "tcp_port") == 0)
+        return tcp_port_open(host, port) ? 0 : -1;
+    if (strcmp(method, "command") == 0 && cmd && cmd[0])
+        return system(cmd) == 0 ? 0 : -1;
+    return -1;
+}
+
 /* --- Group execution with timeout --- */
 
 /* Execute targets in parallel with optional group-level timeout.
- * Kills stragglers with SIGTERM if the group ceiling is reached. */
+ * Kills stragglers with SIGTERM if the group ceiling is reached.
+ *
+ * The forked child reports its target's pass/fail to the parent via its
+ * exit status (0 = ok, 1 = failed) — the parent reads WEXITSTATUS on
+ * waitpid and appends a result row. The child's specific error message
+ * (cutils_get_error) lives only in its address space; the parent sees
+ * "step failed (see daemon log)" and the journal carries the detail. */
 static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
-                                   db_result_t *targets, int max_timeout)
+                                   db_result_t *targets, int max_timeout,
+                                   shutdown_result_t *res)
 {
     int n = targets->nrows;
     pid_t *pids = calloc((size_t)n, sizeof(pid_t));
@@ -301,7 +387,7 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
         report(mgr, group_name, targets->rows[t][0], "starting");
         pids[t] = fork();
         if (pids[t] == 0) {
-            execute_target(
+            int rc = execute_target(
                 targets->rows[t][1], targets->rows[t][2],
                 targets->rows[t][3], targets->rows[t][4],
                 targets->rows[t][5], atoi(targets->rows[t][6]),
@@ -309,16 +395,17 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
                 targets->rows[t][8] ? atoi(targets->rows[t][8]) : 0, /* confirm_port */
                 targets->rows[t][9],                           /* confirm_command */
                 atoi(targets->rows[t][10]));                   /* post_confirm_delay */
-            _exit(0);
+            _exit(rc == 0 ? 0 : 1);
         }
     }
 
     /* Wait for all children, respecting group timeout */
     time_t start = time(NULL);
     int *done = calloc((size_t)n, sizeof(int));
-    if (!done) {
+    int *outcome = calloc((size_t)n, sizeof(int)); /* 0=ok 1=fail 2=killed */
+    if (!done || !outcome) {
         log_error("allocation failed for done array");
-        free(pids);
+        free(pids); free(done); free(outcome);
         return;
     }
 
@@ -330,9 +417,10 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
             pid_t w = waitpid(pids[t], &status, WNOHANG);
             if (w > 0) {
                 done[t] = 1;
+                int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                outcome[t] = ok ? 0 : 1;
                 report(mgr, group_name, targets->rows[t][0],
-                       WIFEXITED(status) && WEXITSTATUS(status) == 0
-                       ? "completed" : "failed");
+                       ok ? "completed" : "failed");
             } else {
                 all_done = 0;
             }
@@ -345,37 +433,63 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
             for (int t = 0; t < n; t++) {
                 if (!done[t] && pids[t] > 0) {
                     kill(pids[t], SIGTERM);
+                    outcome[t] = 2;
                     report(mgr, group_name, targets->rows[t][0], "killed (timeout)");
                 }
             }
             /* Reap killed children */
             for (int t = 0; t < n; t++) {
-                if (!done[t] && pids[t] > 0)
+                if (!done[t] && pids[t] > 0) {
                     waitpid(pids[t], NULL, 0);
+                    done[t] = 1;
+                }
             }
             break;
         }
         sleep(1);
     }
 
+    /* Append result rows in target-order (post-execution to avoid racing
+     * the accumulator with the polling loop above). */
+    char step_target[96];
+    for (int t = 0; t < n; t++) {
+        snprintf(step_target, sizeof(step_target), "%s/%s",
+                 group_name, targets->rows[t][0]);
+        if (outcome[t] == 0)
+            result_append(res, "phase1", step_target, 0, NULL);
+        else if (outcome[t] == 2)
+            result_append(res, "phase1", step_target, 1,
+                          "killed: group timeout exceeded");
+        else
+            result_append(res, "phase1", step_target, 1,
+                          "step failed (see daemon log)");
+    }
+
     free(done);
+    free(outcome);
     free(pids);
 }
 
 /* Execute targets sequentially with optional group-level timeout. */
 static void execute_group_sequential(shutdown_mgr_t *mgr, const char *group_name,
-                                     db_result_t *targets, int max_timeout)
+                                     db_result_t *targets, int max_timeout,
+                                     shutdown_result_t *res)
 {
     time_t start = time(NULL);
+    char step_target[96];
 
     for (int t = 0; t < targets->nrows; t++) {
+        const char *tname = targets->rows[t][0];
+        snprintf(step_target, sizeof(step_target), "%s/%s", group_name, tname);
+
         if (max_timeout > 0 && time(NULL) - start >= max_timeout) {
             log_warn("group '%s' hit %ds ceiling, skipping remaining targets",
                      group_name, max_timeout);
-            break;
+            result_append(res, "phase1", step_target, 2, NULL);
+            continue;
         }
 
-        report(mgr, group_name, targets->rows[t][0], "starting");
+        report(mgr, group_name, tname, "starting");
         int ret = execute_target(
             targets->rows[t][1], targets->rows[t][2],
             targets->rows[t][3], targets->rows[t][4],
@@ -384,21 +498,24 @@ static void execute_group_sequential(shutdown_mgr_t *mgr, const char *group_name
             targets->rows[t][8] ? atoi(targets->rows[t][8]) : 0,
             targets->rows[t][9],
             atoi(targets->rows[t][10]));
-        report(mgr, group_name, targets->rows[t][0],
-               ret == 0 ? "completed" : "failed");
+        report(mgr, group_name, tname, ret == 0 ? "completed" : "failed");
+        result_append(res, "phase1", step_target,
+                      ret == 0 ? 0 : 1,
+                      ret == 0 ? NULL : cutils_get_error());
     }
 }
 
 /* --- Public API --- */
 
 shutdown_mgr_t *shutdown_create(cutils_db_t *db, ups_t *ups,
-                                cutils_config_t *config)
+                                cutils_config_t *config, monitor_t *mon)
 {
     shutdown_mgr_t *mgr = calloc(1, sizeof(*mgr));
     if (!mgr) return NULL;
     mgr->db = db;
     mgr->ups = ups;
     mgr->config = config;
+    mgr->monitor = mon;
     return mgr;
 }
 
@@ -416,10 +533,37 @@ void shutdown_on_progress(shutdown_mgr_t *mgr, shutdown_progress_fn fn,
 
 int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
 {
+    return shutdown_execute_ex(mgr, dry_run, NULL);
+}
+
+int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
+                        shutdown_result_t **out)
+{
     log_info("=== SHUTDOWN WORKFLOW %s ===", dry_run ? "(DRY RUN)" : "STARTED");
+    {
+        char buf[96];
+        snprintf(buf, sizeof(buf),
+                 dry_run ? "Pre-flight validation across all phases"
+                         : "Executing shutdown workflow");
+        emit_event(mgr, dry_run ? "warning" : "critical",
+                   dry_run ? "Dry Run Started" : "Shutdown Workflow Started",
+                   buf);
+    }
     time_t start = time(NULL);
 
+    /* Always alloc the result accumulator — the per-phase event summaries
+     * read n_failed deltas off it whether or not the caller asked for the
+     * struct via `out`. Freed at end if `out` is NULL. */
+    shutdown_result_t *res = calloc(1, sizeof(*res));
+    if (!res) {
+        log_error("allocation failed for shutdown result");
+        /* Continue without accumulating — workflow correctness wins
+         * over reporting fidelity. */
+    }
+
     /* --- Phase 1: User-defined groups --- */
+    size_t phase1_total       = 0;
+    size_t phase1_failed_at_0 = res ? res->n_failed : 0;
 
     CUTILS_AUTO_DBRES db_result_t *groups = NULL;
     int rc = db_execute(mgr->db,
@@ -450,15 +594,49 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
                 "FROM shutdown_targets WHERE group_id = ? ORDER BY order_in_group",
                 tparams, &targets);
 
-            if (rc != CUTILS_OK || !targets || targets->nrows == 0) continue;
+            if (rc != CUTILS_OK || !targets || targets->nrows == 0) {
+                log_warn("group '%s' has no targets — skipping", group_name);
+                continue;
+            }
+
+            phase1_total += (size_t)targets->nrows;
 
             if (dry_run) {
-                for (int t = 0; t < targets->nrows; t++)
-                    report(mgr, group_name, targets->rows[t][0], "would execute");
+                /* Per-target validation: round-trip an `echo OK` over the
+                 * configured ssh method so we catch missing sshpass, bad
+                 * credentials, host-down, and similar before the operator
+                 * relies on the workflow during a real outage. */
+                char step_target[96];
+                for (int t = 0; t < targets->nrows; t++) {
+                    const char *tname  = targets->rows[t][0];
+                    const char *method = targets->rows[t][1];
+                    const char *host   = targets->rows[t][2];
+                    const char *user   = targets->rows[t][3];
+                    const char *cred   = targets->rows[t][4];
+                    snprintf(step_target, sizeof(step_target), "%s/%s",
+                             group_name, tname);
+
+                    int probe_rc = test_target_connectivity(method, host, user, cred);
+                    if (probe_rc == 0) {
+                        report(mgr, group_name, tname, "validated");
+                        result_append(res, "phase1", step_target, 0, NULL);
+                    } else {
+                        report(mgr, group_name, tname, "validation FAILED");
+                        /* method/host/user are NOT NULL per the schema;
+                         * test_target_connectivity also guards against a
+                         * null method up front. No need to ternary-defend
+                         * around them — doing so confused cppcheck into
+                         * thinking the call site might pass null. */
+                        char err[256];
+                        snprintf(err, sizeof(err),
+                                 "%s probe to %s@%s failed", method, user, host);
+                        result_append(res, "phase1", step_target, 1, err);
+                    }
+                }
             } else if (parallel) {
-                execute_group_parallel(mgr, group_name, targets, max_timeout);
+                execute_group_parallel(mgr, group_name, targets, max_timeout, res);
             } else {
-                execute_group_sequential(mgr, group_name, targets, max_timeout);
+                execute_group_sequential(mgr, group_name, targets, max_timeout, res);
             }
 
             if (post_group_delay > 0 && !dry_run) {
@@ -468,24 +646,53 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
         }
     }
 
+    /* Phase 1 summary event. Skip if no targets ran — emitting a "0 ok,
+     * 0 failed" row would be noise on every workflow that has no Phase 1
+     * groups configured. */
+    if (phase1_total > 0) {
+        size_t phase1_failed = res ? res->n_failed - phase1_failed_at_0 : 0;
+        size_t phase1_ok     = phase1_total - phase1_failed;
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "%zu of %zu target%s succeeded",
+                 phase1_ok, phase1_total, phase1_total == 1 ? "" : "s");
+        emit_event(mgr, phase1_failed > 0 ? "error" : "info",
+                   "Phase 1 Complete", buf);
+    }
+
     /* --- Phase 2: UPS action --- */
 
     const char *ups_mode = config_get_str(mgr->config, "shutdown.ups_mode");
     if (!ups_mode) ups_mode = "command";
     int ups_delay = config_get_int(mgr->config, "shutdown.ups_delay", 5);
+    size_t phase2_failed_at_0 = res ? res->n_failed : 0;
 
     if (strcmp(ups_mode, "none") == 0) {
         log_info("UPS action: none (skipped)");
+        result_append(res, "phase2", "ups", 2, NULL);
     } else if (strcmp(ups_mode, "command") == 0) {
         if (dry_run) {
-            log_info("UPS action: would send shutdown command");
+            const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
+            if (sd) {
+                log_info("UPS action: would send '%s'", sd->name);
+                result_append(res, "phase2", "ups", 0, NULL);
+            } else {
+                log_error("UPS action: driver advertises no shutdown command");
+                result_append(res, "phase2", "ups", 1,
+                              "driver advertises no shutdown command");
+            }
         } else {
             log_info("UPS action: sending shutdown command");
             const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
-            if (sd && ups_cmd_execute(mgr->ups, sd->name, 0) == 0)
+            if (sd && ups_cmd_execute(mgr->ups, sd->name, 0) == 0) {
                 log_info("UPS shutdown command accepted");
-            else
+                result_append(res, "phase2", "ups", 0, NULL);
+            } else {
                 log_error("UPS shutdown command FAILED");
+                result_append(res, "phase2", "ups", 1,
+                              sd ? cutils_get_error()
+                                 : "UPS shutdown command not supported by driver");
+            }
         }
     } else if (strcmp(ups_mode, "register") == 0) {
         const char *reg_name = config_get_str(mgr->config, "shutdown.ups_register");
@@ -493,22 +700,54 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
         if (dry_run) {
             log_info("UPS action: would write %d to register '%s'",
                      raw_val, reg_name ? reg_name : "");
+            result_append(res, "phase2", "ups",
+                          (reg_name && reg_name[0]) ? 0 : 1,
+                          (reg_name && reg_name[0]) ? NULL
+                              : "shutdown.ups_register is empty");
         } else if (reg_name && reg_name[0]) {
             log_info("UPS action: writing %d to register '%s'", raw_val, reg_name);
             const ups_config_reg_t *reg = ups_find_config_reg(mgr->ups, reg_name);
             if (reg && reg->writable) {
-                if (ups_config_write(mgr->ups, reg, (uint16_t)raw_val) == 0)
+                if (ups_config_write(mgr->ups, reg, (uint16_t)raw_val) == 0) {
                     log_info("UPS register write accepted");
-                else
+                    result_append(res, "phase2", "ups", 0, NULL);
+                } else {
                     log_error("UPS register write FAILED");
+                    result_append(res, "phase2", "ups", 1, cutils_get_error());
+                }
             } else {
                 log_error("UPS register '%s' not found or not writable", reg_name);
+                result_append(res, "phase2", "ups", 1,
+                              "register not found or not writable");
             }
         } else {
             log_error("UPS action mode is 'register' but no register name configured");
+            result_append(res, "phase2", "ups", 1,
+                          "shutdown.ups_register is empty");
         }
     } else {
         log_warn("unknown UPS action mode: '%s'", ups_mode);
+        result_append(res, "phase2", "ups", 1, "unknown shutdown.ups_mode");
+    }
+
+    /* Phase 2 summary event. */
+    {
+        size_t phase2_failed = res ? res->n_failed - phase2_failed_at_0 : 0;
+        char buf[160];
+        if (strcmp(ups_mode, "none") == 0) {
+            snprintf(buf, sizeof(buf), "Skipped (mode=none)");
+        } else if (dry_run) {
+            snprintf(buf, sizeof(buf),
+                     "%s (dry-run, mode=%s)",
+                     phase2_failed ? "Pre-flight FAILED" : "Pre-flight ok",
+                     ups_mode);
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "%s (mode=%s)",
+                     phase2_failed ? "FAILED" : "Command accepted",
+                     ups_mode);
+        }
+        emit_event(mgr, phase2_failed ? "error" : "info", "UPS Action", buf);
     }
 
     if (ups_delay > 0 && strcmp(ups_mode, "none") != 0 && !dry_run)
@@ -517,24 +756,113 @@ int shutdown_execute(shutdown_mgr_t *mgr, int dry_run)
     /* --- Phase 3: Controller shutdown --- */
 
     int ctrl_enabled = config_get_int(mgr->config, "shutdown.controller_enabled", 1);
-    if (ctrl_enabled) {
+#ifdef VERSION_STRING
+    /* Docker builds stamp ".docker.<arch>" into VERSION_STRING via the
+     * BUILD_TAG plumbing. A container can't power off its host kernel —
+     * `systemctl poweroff` would either no-op or kill only the container.
+     * Hard-skip Phase 3 regardless of shutdown.controller_enabled so a
+     * misconfigured container can't surprise an operator. */
+    int is_docker_build = (strstr(VERSION_STRING, ".docker.") != NULL);
+#else
+    int is_docker_build = 0;
+#endif
+    /* Phase 3 also drives the terminal event for the workflow. The exact
+     * shape depends on the branch we take:
+     *   - dry-run / docker / controller_enabled=0 → daemon survives, we
+     *     emit "Shutdown Workflow Complete" or "Dry Run Complete" with
+     *     the elapsed time
+     *   - real + controller_enabled=1 + poweroff accepted → daemon is
+     *     about to be SIGTERM'd by systemd; "Controller Poweroff Initiated"
+     *     is the last event we trust to land
+     *   - real + controller_enabled=1 + poweroff failed → daemon survives,
+     *     we emit "Controller Poweroff Failed" plus a final "Workflow
+     *     Complete" with the failure noted */
+    int real_poweroff_initiated = 0;
+    int real_poweroff_failed    = 0;
+
+    if (is_docker_build) {
+        log_info("Controller: skipped (docker build cannot power off host)");
+        result_append(res, "phase3", "controller", 2, NULL);
+    } else if (ctrl_enabled) {
         if (dry_run) {
-            log_info("Controller: would execute 'sudo shutdown -h now'");
+            /* Ask logind directly via D-Bus whether the calling user can
+             * power off without an interactive challenge. Returns one of
+             * "yes" (our polkit rule is in place), "no" (denied), or
+             * "challenge" (auth needed — i.e. polkit rule missing for
+             * this user). systemctl has no `can-poweroff` verb; the
+             * canonical check is org.freedesktop.login1.Manager.CanPowerOff. */
+            int can_rc = run_shell(
+                "busctl call org.freedesktop.login1 /org/freedesktop/login1 "
+                "org.freedesktop.login1.Manager CanPowerOff 2>/dev/null "
+                "| grep -q '\"yes\"'");
+            if (can_rc == 0) {
+                log_info("Controller: logind would authorize poweroff");
+                result_append(res, "phase3", "controller", 0, NULL);
+            } else {
+                log_error("Controller: logind refused poweroff (polkit grant missing?)");
+                result_append(res, "phase3", "controller", 1,
+                              "logind refused poweroff (polkit grant missing?)");
+            }
         } else {
-            log_info("Controller: shutting down");
-            int shut_rc = system("sudo shutdown -h now");
-            if (shut_rc != 0)
+            log_info("Controller: shutting down via systemctl poweroff");
+            /* Emit BEFORE the syscall: once systemctl returns, we're
+             * racing systemd's SIGTERM and any later DB writes may not
+             * survive. monitor_fire_event's INSERT is synchronous, so
+             * by the time this returns the row is queued in the SQLite
+             * journal — surviving the kill in all but the rarest cases. */
+            emit_event(mgr, "critical", "Controller Poweroff Initiated",
+                       "systemctl poweroff handed off to systemd");
+
+            /* Goes through logind → systemd, gracefully stops services and
+             * syncs filesystems. The .deb ships a polkit rule granting the
+             * airies-ups system user org.freedesktop.login1.power-off; no
+             * sudo, no setuid binary, no root. */
+            int shut_rc = run_shell("systemctl poweroff");
+            if (shut_rc != 0) {
                 log_warn("controller shutdown command returned %d", shut_rc);
+                char buf[64];
+                snprintf(buf, sizeof(buf), "systemctl poweroff exited %d", shut_rc);
+                result_append(res, "phase3", "controller", 1, buf);
+                emit_event(mgr, "error", "Controller Poweroff Failed", buf);
+                real_poweroff_failed = 1;
+            } else {
+                result_append(res, "phase3", "controller", 0, NULL);
+                real_poweroff_initiated = 1;
+            }
         }
     } else {
         log_info("Controller: shutdown disabled (skipped)");
+        result_append(res, "phase3", "controller", 2, NULL);
     }
 
     char msg[128];
-    snprintf(msg, sizeof(msg), "=== SHUTDOWN WORKFLOW COMPLETE in %lds ===",
-             time(NULL) - start);
+    long elapsed = (long)(time(NULL) - start);
+    snprintf(msg, sizeof(msg), "=== SHUTDOWN WORKFLOW COMPLETE in %lds ===", elapsed);
     log_info("%s", msg);
 
+    /* Terminal "complete" event — emit only when we have a future to live
+     * for. After "Controller Poweroff Initiated" the daemon is about to
+     * die, and an additional event is both noise and a write race with
+     * systemd's SIGTERM. */
+    if (!real_poweroff_initiated) {
+        size_t total_failed = res ? res->n_failed : 0;
+        char fbuf[160];
+        snprintf(fbuf, sizeof(fbuf), "Elapsed %lds, %zu failure%s",
+                 elapsed, total_failed, total_failed == 1 ? "" : "s");
+        const char *title = dry_run ? "Dry Run Complete"
+                                    : (real_poweroff_failed
+                                          ? "Shutdown Workflow Halted"
+                                          : "Shutdown Workflow Complete");
+        const char *sev = (total_failed > 0 || real_poweroff_failed)
+                              ? "error" : "info";
+        emit_event(mgr, sev, title, fbuf);
+    }
+
+    if (out) {
+        *out = res;
+    } else {
+        shutdown_result_free(res);
+    }
     return CUTILS_OK;
 }
 
@@ -628,6 +956,14 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
     }
 
     if (!condition_met) {
+        if (mgr->trigger_first_met != 0) {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "Shutdown trigger condition cleared before %ds debounce elapsed",
+                     delay_sec);
+            log_info("%s", buf);
+            emit_event(mgr, "info", "Shutdown Trigger Cleared", buf);
+        }
         mgr->trigger_first_met = 0;
         return;
     }
@@ -636,7 +972,11 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
     time_t now = time(NULL);
     if (mgr->trigger_first_met == 0) {
         mgr->trigger_first_met = now;
-        log_warn("shutdown trigger condition met, debouncing %ds", delay_sec);
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "Shutdown trigger condition met, debouncing %ds", delay_sec);
+        log_warn("%s", buf);
+        emit_event(mgr, "warning", "Shutdown Trigger Armed", buf);
         return;
     }
 
@@ -674,6 +1014,37 @@ int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name)
         log_info("target '%s': connectivity OK", target_name);
     else
         log_error("target '%s': connectivity FAILED", target_name);
+
+    return rc;
+}
+
+int shutdown_test_target_confirm(shutdown_mgr_t *mgr, const char *target_name)
+{
+    const char *params[] = { target_name, NULL };
+    CUTILS_AUTO_DBRES db_result_t *result = NULL;
+
+    int rc = db_execute(mgr->db,
+        "SELECT confirm_method, host, confirm_port, confirm_command "
+        "FROM shutdown_targets WHERE name = ?",
+        params, &result);
+
+    if (rc != CUTILS_OK || !result || result->nrows == 0)
+        return set_error(CUTILS_ERR_NOT_FOUND, "target '%s' not found", target_name);
+
+    const char *method = result->rows[0][0];
+    const char *host   = result->rows[0][1];
+    int port = result->rows[0][2] ? atoi(result->rows[0][2]) : 0;
+    const char *cmd    = result->rows[0][3];
+
+    log_info("testing target '%s' down-detect (%s on %s)",
+             target_name, method, host ? host : "?");
+    rc = test_target_confirm(method, host, port, cmd);
+
+    if (rc == 0)
+        log_info("target '%s': down-detect OK (host reachable)", target_name);
+    else
+        log_error("target '%s': down-detect FAILED (host not reachable via %s)",
+                  target_name, method ? method : "?");
 
     return rc;
 }

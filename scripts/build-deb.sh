@@ -48,6 +48,7 @@ install -d \
     "$STAGE/usr/bin" \
     "$STAGE/usr/lib/systemd/system" \
     "$STAGE/usr/lib/udev/rules.d" \
+    "$STAGE/usr/share/polkit-1/rules.d" \
     "$STAGE/usr/share/doc/airies-ups"
 
 install -m 0755 "$REPO_ROOT/$BINDIR/airies-upsd" "$STAGE/usr/bin/airies-upsd"
@@ -63,6 +64,8 @@ install -m 0644 "$PKG_DIR/airies-ups.service" \
                 "$STAGE/usr/lib/systemd/system/airies-ups.service"
 install -m 0644 "$REPO_ROOT/99-airies-ups-ftdi.rules" \
                 "$STAGE/usr/lib/udev/rules.d/99-airies-ups-ftdi.rules"
+install -m 0644 "$PKG_DIR/polkit/50-airies-ups.rules" \
+                "$STAGE/usr/share/polkit-1/rules.d/50-airies-ups.rules"
 install -m 0644 "$PKG_DIR/copyright" \
                 "$STAGE/usr/share/doc/airies-ups/copyright"
 
