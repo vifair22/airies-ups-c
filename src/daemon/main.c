@@ -319,9 +319,13 @@ int main(int argc, char *argv[])
 
     if (restart_requested) {
         log_info("restarting via appguard_restart");
+        /* appguard_restart shuts the guard down internally on every
+         * return path (success exec's, failure paths free first). The
+         * guard pointer is invalid after this call regardless of return
+         * value, so we must not call appguard_shutdown again below. */
         appguard_restart(guard);
-        /* only reached if execv fails */
-        log_error("restart failed, exiting");
+        fprintf(stderr, "airies-ups: restart failed, exiting\n");
+        return 1;
     }
 
     appguard_shutdown(guard);
