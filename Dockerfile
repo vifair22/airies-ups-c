@@ -43,9 +43,17 @@ ENV PATH=/root/.bun/bin:$PATH
 
 # c-utils statically linked into the binary. Ref is overridable so CI can
 # pin a specific commit per pipeline if needed; defaults to master.
+#
+# CUTILS_SHA is a cache-busting hint: BuildKit keys this RUN layer on the
+# literal command string, so without the SHA in the command, master moving
+# forward never invalidates the cached clone. CI resolves the current
+# c-utils master HEAD via `git ls-remote` and passes it here, so the layer
+# hash tracks upstream master.
 ARG CUTILS_REPO=https://git.airies.net/vifair22/c-utils.git
 ARG CUTILS_REF=master
-RUN git clone --branch "${CUTILS_REF}" --depth 1 "${CUTILS_REPO}" /tmp/c-utils && \
+ARG CUTILS_SHA=
+RUN echo "c-utils @ ${CUTILS_REF} (sha hint: ${CUTILS_SHA:-none})" && \
+    git clone --branch "${CUTILS_REF}" --depth 1 "${CUTILS_REPO}" /tmp/c-utils && \
     make -C /tmp/c-utils
 
 WORKDIR /src
