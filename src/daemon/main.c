@@ -4,6 +4,7 @@
 #include <cutils/push.h>
 #include <cutils/appguard.h>
 #include <cutils/error_loop.h>
+#include <cutils/version.h>
 
 #include "ups/ups.h"
 #include "api/server.h"
@@ -167,6 +168,13 @@ int main(int argc, char *argv[])
     appguard_t *guard = appguard_init(&ag_cfg);
     if (!guard)
         return 1;
+
+    /* Field-diagnostic breadcrumb: pin the c-utils version stamp into
+     * the journal at startup. Lets us tell at a glance which lib build
+     * a misbehaving Pi is actually running without SSH'ing in to grep
+     * the binary. Daemon's own VERSION_STRING is already journaled by
+     * appguard_init's banner. */
+    log_info("c-utils %s", cutils_version());
 
     cutils_config_t *cfg = appguard_config(guard);
     cutils_db_t *db = appguard_db(guard);

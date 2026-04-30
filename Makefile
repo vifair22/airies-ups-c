@@ -23,6 +23,19 @@ export BUILD_TAG
 VERSION    := $(SEMVER)_$(BUILD_TS).$(BUILD_TYPE).$(BUILD_TAG)
 VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 
+# c-utils 1.0.0+ requires CUTILS_VERSION_STRING to be -D-defined or its
+# build fails via #error. The native c-utils make composes this from
+# release_version + a UTC timestamp + BUILD_TYPE; the cross rule below
+# overrides COMMON_CFLAGS wholesale to inject CROSS_SYSROOT_INCLUDES,
+# which would otherwise drop that define. Replicate it here so the
+# override stays self-contained.
+#
+# Quoting matches c-utils's own Makefile: -DFOO=\"...\" (backslash-escaped
+# quotes, no surrounding shell quotes) so the value composes cleanly when
+# we splat it into the single-quoted COMMON_CFLAGS override below.
+CUTILS_SEMVER       := $(shell cat $(CUTILS_DIR)/release_version 2>/dev/null | tr -d '[:space:]')
+CUTILS_VERSION_DEF  := -DCUTILS_VERSION_STRING=\"$(CUTILS_SEMVER)_$(BUILD_TS).release\"
+
 CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
 LIBS     := -L$(CUTILS_DIR)/build -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
@@ -126,7 +139,7 @@ cross: frontend frontend-test embed-frontend embed-migrations
 	$(MAKE) -C $(CUTILS_DIR) \
 		CC="$(CROSS_CC)" \
 		AR="$(CROSS_AR)" \
-		"COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON $(CROSS_SYSROOT_INCLUDES)"
+		'COMMON_CFLAGS=-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection -Iinclude -Ilib/cJSON $(CROSS_SYSROOT_INCLUDES) $(CUTILS_VERSION_DEF)'
 	@echo "=== Cross-compiling airies-ups for aarch64 ==="
 	$(MAKE) BUILD_VARIANT=cross-aarch64-embed EMBED=1 CC="$(CROSS_CC)" \
 		CFLAGS='-std=c11 -D_POSIX_C_SOURCE=200809L $(WARN_FLAGS) -fstack-protector-strong -fstack-clash-protection $(CROSS_INCLUDES) -DVERSION_STRING="\"$(VERSION)\"" -O2 -DEMBED_FRONTEND' \
