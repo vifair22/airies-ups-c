@@ -254,7 +254,7 @@ int main(int argc, char *argv[])
                          alert_ctx.thresh.transfer_low);
             /* Shutdown orchestrator (created before monitor starts so
              * the poll callback can evaluate trigger conditions) */
-            shutdown = shutdown_create(db, ups, cfg);
+            shutdown = shutdown_create(db, ups, cfg, mon);
             alert_ctx.shutdown = shutdown;
 
             monitor_on_poll(mon, on_monitor_poll, &alert_ctx);

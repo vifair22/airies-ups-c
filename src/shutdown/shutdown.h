@@ -2,6 +2,7 @@
 #define SHUTDOWN_H
 
 #include "ups/ups.h"
+#include "monitor/monitor.h"
 #include <cutils/db.h>
 #include <cutils/config.h>
 
@@ -51,9 +52,16 @@ typedef struct {
 
 void shutdown_result_free(shutdown_result_t *res);
 
-/* Create the shutdown manager. */
+/* Create the shutdown manager.
+ *
+ * `mon` is the optional event sink: when non-NULL, workflow milestones
+ * (trigger arm/clear, workflow start, per-phase outcome, terminal event)
+ * are mirrored into the events table via monitor_fire_event so the UI's
+ * Events page records them alongside battery/power events. Per-target
+ * detail stays in the daemon log. Pass NULL in unit tests or any context
+ * where the monitor isn't wired — event emission no-ops cleanly. */
 shutdown_mgr_t *shutdown_create(cutils_db_t *db, ups_t *ups,
-                                cutils_config_t *config);
+                                cutils_config_t *config, monitor_t *mon);
 
 /* Free the shutdown manager. */
 void shutdown_free(shutdown_mgr_t *mgr);
