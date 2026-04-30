@@ -161,16 +161,26 @@ extern const db_migration_t app_migrations[];
 static inline appguard_config_t app_appguard_config(void)
 {
     appguard_config_t cfg = {
-        .app_name           = "airies-ups",
-        .config_path        = NULL,  /* auto-detect: config.yaml next to binary */
-        .on_first_run       = CFG_FIRST_RUN_CONTINUE,
-        .file_keys          = app_file_keys,
-        .db_keys            = app_db_keys,
-        .sections           = app_sections,
-        .enable_pushover    = 1,
-        .log_retention_days = 30,
-        .log_level          = LOG_INFO,
-        .migrations         = app_migrations,
+        .app_name               = "airies-ups",
+        /* NULL → c-utils resolves $AIRIES_UPS_CONFIG_PATH first, then
+         * falls back to "config.yaml" in CWD. The systemd unit and
+         * Dockerfile both set the env var; bare-metal dev runs land on
+         * the CWD fallback. */
+        .config_path            = NULL,
+        .on_first_run           = CFG_FIRST_RUN_CONTINUE,
+        .file_keys              = app_file_keys,
+        .db_keys                = app_db_keys,
+        .sections               = app_sections,
+        .enable_pushover        = 1,
+        .log_retention_days     = 30,
+        .log_level              = LOG_INFO,
+        /* When systemd starts us with StandardOutput=journal, c-utils
+         * detects JOURNAL_STREAM and switches the console writer to
+         * journald-native format: no timestamp (journald stamps every
+         * line), no ANSI color, RFC 5424 <N> priority prefix so
+         * `journalctl -p err` filters correctly. No-op outside systemd. */
+        .log_systemd_autodetect = 1,
+        .migrations             = app_migrations,
     };
     return cfg;
 }

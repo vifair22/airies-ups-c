@@ -476,13 +476,47 @@ static void *monitor_thread(void *arg)
                 fire_event_xfer(mon, "info", "fault", "Overload Cleared",
                                 "UPS overload condition has cleared");
 
-            /* Test events */
+            /* Test events. On completion, decode bat_test_status (reg 23)
+             * to surface the outcome in the event title and severity. The
+             * UPS occasionally hasn't latched the result bits yet at the
+             * moment UPS_ST_TEST falls — in that case fall back to a
+             * generic "Self-Test Ended" event; the next poll's transition
+             * (if any) will not re-fire because UPS_ST_TEST already
+             * cleared. */
             if (set & UPS_ST_TEST)
                 fire_event_xfer(mon, "info", "test", "Self-Test Started",
                                 "UPS self-test is in progress");
-            if (cleared & UPS_ST_TEST)
-                fire_event_xfer(mon, "info", "test", "Self-Test Ended",
-                                "UPS self-test has completed");
+            if (cleared & UPS_ST_TEST) {
+                const char *result = ups_battery_test_result_str(data.bat_test_status);
+                const char *source = ups_battery_test_source_str(data.bat_test_status);
+                const char *severity = "info";
+                const char *title    = "Self-Test Ended";
+                char body[256];
+
+                if (result && strcmp(result, "passed") == 0) {
+                    title = "Self-Test Passed";
+                } else if (result && strcmp(result, "failed") == 0) {
+                    severity = "error";
+                    title    = "Self-Test Failed";
+                } else if (result && strcmp(result, "refused") == 0) {
+                    severity = "warning";
+                    title    = "Self-Test Refused";
+                } else if (result && strcmp(result, "aborted") == 0) {
+                    severity = "warning";
+                    title    = "Self-Test Aborted";
+                }
+
+                if (result && source)
+                    snprintf(body, sizeof(body), "Result: %s (triggered by %s)",
+                             result, source);
+                else if (result)
+                    snprintf(body, sizeof(body), "Result: %s", result);
+                else
+                    snprintf(body, sizeof(body),
+                             "UPS self-test has completed (result not yet latched)");
+
+                fire_event_xfer(mon, severity, "test", title, body);
+            }
 
             /* Shutdown trigger: on battery + shutdown imminent */
             if ((data.status & UPS_ST_ON_BATTERY) &&

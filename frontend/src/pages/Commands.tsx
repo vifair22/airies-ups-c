@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi, apiPost } from '../hooks/useApi'
-import { ConfirmModal } from '../components/Modal'
+import { ConfirmModal, WideModal } from '../components/Modal'
 import { useToast, ToastContainer } from '../components/Toast'
 import type { UpsStatus } from '../types/ups'
-import type { CmdDesc, CmdResult } from '../types/commands'
+import type { CmdDesc, CmdResult, ShutdownStep } from '../types/commands'
 
 /* ── Simple command button ── */
 
@@ -99,41 +99,137 @@ function ToggleCmd({ cmd, statusRaw, onResult }: {
 
 /* ── Shutdown workflow (special case — app-level, not a UPS command) ── */
 
+const phaseLabels: Record<ShutdownStep['phase'], string> = {
+  phase1: 'Hosts',
+  phase2: 'UPS',
+  phase3: 'Controller',
+}
+
+function StatusPill({ ok }: { ok: ShutdownStep['ok'] }) {
+  const cls =
+    ok === 0 ? 'bg-green-500/15 text-green-700 border-green-600'
+    : ok === 1 ? 'bg-red-500/15 text-red-700 border-red-600'
+    : 'bg-field text-muted border-edge-strong'
+  const label = ok === 0 ? 'ok' : ok === 1 ? 'failed' : 'skipped'
+  return (
+    <span className={`text-xs font-mono px-2 py-0.5 rounded border ${cls}`}>{label}</span>
+  )
+}
+
+function ShutdownResultModal({ result, dryRun, onClose }: {
+  result: CmdResult; dryRun: boolean; onClose: () => void
+}) {
+  const steps   = result.steps   ?? []
+  const total   = result.n_steps  ?? steps.length
+  const failed  = result.n_failed ?? steps.filter(s => s.ok === 1).length
+  const allOk   = result.all_ok ?? failed === 0
+
+  const headline = dryRun
+    ? (allOk ? 'Dry run complete — no problems detected'
+             : `Dry run found ${failed} problem${failed === 1 ? '' : 's'}`)
+    : (allOk ? 'Shutdown initiated'
+             : `Shutdown completed with ${failed} failure${failed === 1 ? '' : 's'}`)
+
+  return (
+    <WideModal onClose={onClose}>
+      <h3 className={`text-lg font-semibold mb-1 ${allOk ? 'text-primary' : 'text-red-400'}`}>
+        {headline}
+      </h3>
+      <p className="text-xs text-muted mb-4">
+        {total} step{total === 1 ? '' : 's'} executed
+        {dryRun && ' — no destructive actions taken'}
+      </p>
+
+      {steps.length === 0 ? (
+        <p className="text-sm text-muted">No steps were configured or run.</p>
+      ) : (
+        <div className="border border-edge rounded overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-field text-xs uppercase tracking-wider text-muted">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">Phase</th>
+                <th className="text-left px-3 py-2 font-medium">Target</th>
+                <th className="text-left px-3 py-2 font-medium">Status</th>
+                <th className="text-left px-3 py-2 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {steps.map((s, i) => (
+                <tr key={i} className="border-t border-edge/60">
+                  <td className="px-3 py-2 text-muted">{phaseLabels[s.phase] ?? s.phase}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{s.target}</td>
+                  <td className="px-3 py-2"><StatusPill ok={s.ok} /></td>
+                  <td className="px-3 py-2 text-xs text-muted">{s.error || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="flex justify-end mt-4">
+        <button onClick={onClose}
+          className="px-4 py-2 rounded text-sm border border-edge-strong bg-field hover:bg-field-hover transition-colors">
+          Close
+        </button>
+      </div>
+    </WideModal>
+  )
+}
+
 function ShutdownWorkflow({ onResult }: { onResult: (msg: string, type: 'success' | 'error') => void }) {
-  const [modal, setModal] = useState<'dry' | 'real' | null>(null)
+  const [confirm, setConfirm] = useState<'dry' | 'real' | null>(null)
   const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<{ data: CmdResult; dryRun: boolean } | null>(null)
 
   const execute = async (dryRun: boolean) => {
     setLoading(true)
     const res = await apiPost<CmdResult>('/api/cmd', { action: 'shutdown_workflow', dry_run: dryRun })
-    onResult(res.result || res.error || 'done', res.error ? 'error' : 'success')
-    setModal(null)
+    setConfirm(null)
     setLoading(false)
+
+    if (res.error) {
+      onResult(res.error, 'error')
+      return
+    }
+    /* Always open the result modal — even on full success there's value
+     * in seeing which steps ran (or were skipped, e.g. docker controller
+     * skip). Falls back to a toast only if the response carries no
+     * structured payload (older daemon, or non-shutdown route reused). */
+    if (res.steps) {
+      setResult({ data: res, dryRun })
+    } else {
+      onResult(res.result || 'done', 'success')
+    }
   }
 
   return (
     <>
       <div className="flex gap-2">
-        <button onClick={() => setModal('dry')}
+        <button onClick={() => setConfirm('dry')}
           className="px-4 py-2 rounded text-sm border bg-field hover:bg-field-hover border-edge-strong transition-colors">
           Dry Run
         </button>
-        <button onClick={() => setModal('real')}
+        <button onClick={() => setConfirm('real')}
           className="px-4 py-2 rounded text-sm border bg-red-700 hover:bg-red-600 text-white border-red-800 transition-colors">
           Shutdown
         </button>
       </div>
-      {modal === 'dry' && (
+      {confirm === 'dry' && (
         <ConfirmModal title="Run Shutdown Dry Run?"
-          body="This will simulate the shutdown workflow without actually shutting anything down. Useful for verifying the shutdown target configuration."
+          body="This will validate every step of the shutdown workflow — connectivity to each configured host, the UPS shutdown command, and controller poweroff permission — without executing any destructive action."
           confirmLabel="Run Dry Run" confirmVariant="default"
-          onConfirm={() => execute(true)} onCancel={() => setModal(null)} loading={loading} />
+          onConfirm={() => execute(true)} onCancel={() => setConfirm(null)} loading={loading} />
       )}
-      {modal === 'real' && (
+      {confirm === 'real' && (
         <ConfirmModal title="Confirm Shutdown"
           body="This will execute the full shutdown workflow: shut down all configured remote hosts, send shutdown command to UPS, then shut down this system. This action cannot be undone remotely."
           confirmLabel="Shutdown Now" confirmVariant="danger"
-          onConfirm={() => execute(false)} onCancel={() => setModal(null)} loading={loading} />
+          onConfirm={() => execute(false)} onCancel={() => setConfirm(null)} loading={loading} />
+      )}
+      {result && (
+        <ShutdownResultModal result={result.data} dryRun={result.dryRun}
+          onClose={() => setResult(null)} />
       )}
     </>
   )

@@ -416,9 +416,53 @@ function GroupCard({ group, targets, editing, onEdit, onCancelEdit, onSave, onDe
 
 /* --- Target display row --- */
 
+type ProbeState = { status: 'idle' | 'running' | 'ok' | 'fail'; error?: string }
+
+function ProbeButton({ label, state, onClick }: {
+  label: string; state: ProbeState; onClick: () => void
+}) {
+  const cls =
+    state.status === 'running' ? 'text-muted cursor-wait'
+    : state.status === 'ok'    ? 'text-green-400 hover:text-green-300'
+    : state.status === 'fail'  ? 'text-red-400  hover:text-red-300'
+    :                            'text-muted    hover:text-primary'
+  const suffix =
+    state.status === 'running' ? '…'
+    : state.status === 'ok'    ? ' ✓'
+    : state.status === 'fail'  ? ' ✗'
+    :                            ''
+  return (
+    <button
+      onClick={onClick}
+      disabled={state.status === 'running'}
+      title={state.error || ''}
+      className={`text-xs shrink-0 ${cls}`}>
+      {label}{suffix}
+    </button>
+  )
+}
+
 function TargetRow({ target, onEdit, onDelete }: {
   target: ShutdownTarget; onEdit: () => void; onDelete: () => void
 }) {
+  const [ssh,     setSsh]     = useState<ProbeState>({ status: 'idle' })
+  const [confirm, setConfirm] = useState<ProbeState>({ status: 'idle' })
+
+  const probe = async (
+    url: string,
+    setState: (s: ProbeState) => void,
+  ) => {
+    setState({ status: 'running' })
+    try {
+      const res = await apiPost<{ ok: boolean; error?: string }>(url, { id: target.id })
+      setState(res.ok
+        ? { status: 'ok' }
+        : { status: 'fail', error: res.error || 'probe failed' })
+    } catch (e) {
+      setState({ status: 'fail', error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
   return (
     <div className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
       <span className="font-medium w-full sm:w-28 sm:shrink-0">{target.name}</span>
@@ -429,6 +473,12 @@ function TargetRow({ target, onEdit, onDelete }: {
       {target.post_confirm_delay > 0 && (
         <span className="text-[10px] text-faint shrink-0">+{target.post_confirm_delay}s</span>
       )}
+      <ProbeButton label="Test SSH"
+        state={ssh}
+        onClick={() => probe('/api/shutdown/targets/test_ssh', setSsh)} />
+      <ProbeButton label="Test Down"
+        state={confirm}
+        onClick={() => probe('/api/shutdown/targets/test_confirm', setConfirm)} />
       <button onClick={onEdit} className="text-xs text-muted hover:text-primary shrink-0">Edit</button>
       <button onClick={onDelete} className="text-xs text-red-400 hover:text-red-300 shrink-0">Delete</button>
     </div>
