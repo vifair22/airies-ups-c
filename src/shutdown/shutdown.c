@@ -22,6 +22,7 @@ struct shutdown_mgr {
     cutils_db_t        *db;
     ups_t              *ups;
     cutils_config_t    *config;
+    monitor_t          *monitor;            /* optional event sink (NULL = no-op) */
     shutdown_progress_fn progress_fn;
     void               *progress_ud;
 
@@ -29,6 +30,19 @@ struct shutdown_mgr {
     time_t              trigger_first_met;  /* when condition first became true (0=not met) */
     int                 triggered;          /* 1 = workflow already fired, don't re-trigger */
 };
+
+/* Mirror a workflow milestone into the events table. NULL monitor is the
+ * no-op path used by unit tests; production always has a monitor wired
+ * via main.c. The events table INSERT inside monitor_fire_event is
+ * synchronous, so milestones land before subsequent phases run — this
+ * matters for the controller-poweroff path, where the daemon may be
+ * SIGTERM'd by systemd shortly after returning. */
+static void emit_event(shutdown_mgr_t *mgr, const char *severity,
+                       const char *title, const char *message)
+{
+    if (!mgr || !mgr->monitor) return;
+    monitor_fire_event(mgr->monitor, severity, "shutdown", title, message);
+}
 
 /* Internal helpers, non-static so the unit tests can exercise them via
  * extern prototypes. Not part of any public header. */
@@ -494,13 +508,14 @@ static void execute_group_sequential(shutdown_mgr_t *mgr, const char *group_name
 /* --- Public API --- */
 
 shutdown_mgr_t *shutdown_create(cutils_db_t *db, ups_t *ups,
-                                cutils_config_t *config)
+                                cutils_config_t *config, monitor_t *mon)
 {
     shutdown_mgr_t *mgr = calloc(1, sizeof(*mgr));
     if (!mgr) return NULL;
     mgr->db = db;
     mgr->ups = ups;
     mgr->config = config;
+    mgr->monitor = mon;
     return mgr;
 }
 
@@ -525,19 +540,30 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                         shutdown_result_t **out)
 {
     log_info("=== SHUTDOWN WORKFLOW %s ===", dry_run ? "(DRY RUN)" : "STARTED");
+    {
+        char buf[96];
+        snprintf(buf, sizeof(buf),
+                 dry_run ? "Pre-flight validation across all phases"
+                         : "Executing shutdown workflow");
+        emit_event(mgr, dry_run ? "warning" : "critical",
+                   dry_run ? "Dry Run Started" : "Shutdown Workflow Started",
+                   buf);
+    }
     time_t start = time(NULL);
 
-    shutdown_result_t *res = NULL;
-    if (out) {
-        res = calloc(1, sizeof(*res));
-        if (!res) {
-            log_error("allocation failed for shutdown result");
-            /* Continue without accumulating — workflow correctness wins
-             * over reporting fidelity. */
-        }
+    /* Always alloc the result accumulator — the per-phase event summaries
+     * read n_failed deltas off it whether or not the caller asked for the
+     * struct via `out`. Freed at end if `out` is NULL. */
+    shutdown_result_t *res = calloc(1, sizeof(*res));
+    if (!res) {
+        log_error("allocation failed for shutdown result");
+        /* Continue without accumulating — workflow correctness wins
+         * over reporting fidelity. */
     }
 
     /* --- Phase 1: User-defined groups --- */
+    size_t phase1_total       = 0;
+    size_t phase1_failed_at_0 = res ? res->n_failed : 0;
 
     CUTILS_AUTO_DBRES db_result_t *groups = NULL;
     int rc = db_execute(mgr->db,
@@ -572,6 +598,8 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                 log_warn("group '%s' has no targets — skipping", group_name);
                 continue;
             }
+
+            phase1_total += (size_t)targets->nrows;
 
             if (dry_run) {
                 /* Per-target validation: round-trip an `echo OK` over the
@@ -618,11 +646,26 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
         }
     }
 
+    /* Phase 1 summary event. Skip if no targets ran — emitting a "0 ok,
+     * 0 failed" row would be noise on every workflow that has no Phase 1
+     * groups configured. */
+    if (phase1_total > 0) {
+        size_t phase1_failed = res ? res->n_failed - phase1_failed_at_0 : 0;
+        size_t phase1_ok     = phase1_total - phase1_failed;
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "%zu of %zu target%s succeeded",
+                 phase1_ok, phase1_total, phase1_total == 1 ? "" : "s");
+        emit_event(mgr, phase1_failed > 0 ? "error" : "info",
+                   "Phase 1 Complete", buf);
+    }
+
     /* --- Phase 2: UPS action --- */
 
     const char *ups_mode = config_get_str(mgr->config, "shutdown.ups_mode");
     if (!ups_mode) ups_mode = "command";
     int ups_delay = config_get_int(mgr->config, "shutdown.ups_delay", 5);
+    size_t phase2_failed_at_0 = res ? res->n_failed : 0;
 
     if (strcmp(ups_mode, "none") == 0) {
         log_info("UPS action: none (skipped)");
@@ -687,6 +730,26 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
         result_append(res, "phase2", "ups", 1, "unknown shutdown.ups_mode");
     }
 
+    /* Phase 2 summary event. */
+    {
+        size_t phase2_failed = res ? res->n_failed - phase2_failed_at_0 : 0;
+        char buf[160];
+        if (strcmp(ups_mode, "none") == 0) {
+            snprintf(buf, sizeof(buf), "Skipped (mode=none)");
+        } else if (dry_run) {
+            snprintf(buf, sizeof(buf),
+                     "%s (dry-run, mode=%s)",
+                     phase2_failed ? "Pre-flight FAILED" : "Pre-flight ok",
+                     ups_mode);
+        } else {
+            snprintf(buf, sizeof(buf),
+                     "%s (mode=%s)",
+                     phase2_failed ? "FAILED" : "Command accepted",
+                     ups_mode);
+        }
+        emit_event(mgr, phase2_failed ? "error" : "info", "UPS Action", buf);
+    }
+
     if (ups_delay > 0 && strcmp(ups_mode, "none") != 0 && !dry_run)
         sleep((unsigned)ups_delay);
 
@@ -703,6 +766,20 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
 #else
     int is_docker_build = 0;
 #endif
+    /* Phase 3 also drives the terminal event for the workflow. The exact
+     * shape depends on the branch we take:
+     *   - dry-run / docker / controller_enabled=0 → daemon survives, we
+     *     emit "Shutdown Workflow Complete" or "Dry Run Complete" with
+     *     the elapsed time
+     *   - real + controller_enabled=1 + poweroff accepted → daemon is
+     *     about to be SIGTERM'd by systemd; "Controller Poweroff Initiated"
+     *     is the last event we trust to land
+     *   - real + controller_enabled=1 + poweroff failed → daemon survives,
+     *     we emit "Controller Poweroff Failed" plus a final "Workflow
+     *     Complete" with the failure noted */
+    int real_poweroff_initiated = 0;
+    int real_poweroff_failed    = 0;
+
     if (is_docker_build) {
         log_info("Controller: skipped (docker build cannot power off host)");
         result_append(res, "phase3", "controller", 2, NULL);
@@ -728,6 +805,14 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
             }
         } else {
             log_info("Controller: shutting down via systemctl poweroff");
+            /* Emit BEFORE the syscall: once systemctl returns, we're
+             * racing systemd's SIGTERM and any later DB writes may not
+             * survive. monitor_fire_event's INSERT is synchronous, so
+             * by the time this returns the row is queued in the SQLite
+             * journal — surviving the kill in all but the rarest cases. */
+            emit_event(mgr, "critical", "Controller Poweroff Initiated",
+                       "systemctl poweroff handed off to systemd");
+
             /* Goes through logind → systemd, gracefully stops services and
              * syncs filesystems. The .deb ships a polkit rule granting the
              * airies-ups system user org.freedesktop.login1.power-off; no
@@ -738,8 +823,11 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                 char buf[64];
                 snprintf(buf, sizeof(buf), "systemctl poweroff exited %d", shut_rc);
                 result_append(res, "phase3", "controller", 1, buf);
+                emit_event(mgr, "error", "Controller Poweroff Failed", buf);
+                real_poweroff_failed = 1;
             } else {
                 result_append(res, "phase3", "controller", 0, NULL);
+                real_poweroff_initiated = 1;
             }
         }
     } else {
@@ -748,11 +836,33 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
     }
 
     char msg[128];
-    snprintf(msg, sizeof(msg), "=== SHUTDOWN WORKFLOW COMPLETE in %lds ===",
-             time(NULL) - start);
+    long elapsed = (long)(time(NULL) - start);
+    snprintf(msg, sizeof(msg), "=== SHUTDOWN WORKFLOW COMPLETE in %lds ===", elapsed);
     log_info("%s", msg);
 
-    if (out) *out = res;
+    /* Terminal "complete" event — emit only when we have a future to live
+     * for. After "Controller Poweroff Initiated" the daemon is about to
+     * die, and an additional event is both noise and a write race with
+     * systemd's SIGTERM. */
+    if (!real_poweroff_initiated) {
+        size_t total_failed = res ? res->n_failed : 0;
+        char fbuf[160];
+        snprintf(fbuf, sizeof(fbuf), "Elapsed %lds, %zu failure%s",
+                 elapsed, total_failed, total_failed == 1 ? "" : "s");
+        const char *title = dry_run ? "Dry Run Complete"
+                                    : (real_poweroff_failed
+                                          ? "Shutdown Workflow Halted"
+                                          : "Shutdown Workflow Complete");
+        const char *sev = (total_failed > 0 || real_poweroff_failed)
+                              ? "error" : "info";
+        emit_event(mgr, sev, title, fbuf);
+    }
+
+    if (out) {
+        *out = res;
+    } else {
+        shutdown_result_free(res);
+    }
     return CUTILS_OK;
 }
 
@@ -846,6 +956,14 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
     }
 
     if (!condition_met) {
+        if (mgr->trigger_first_met != 0) {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "Shutdown trigger condition cleared before %ds debounce elapsed",
+                     delay_sec);
+            log_info("%s", buf);
+            emit_event(mgr, "info", "Shutdown Trigger Cleared", buf);
+        }
         mgr->trigger_first_met = 0;
         return;
     }
@@ -854,7 +972,11 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
     time_t now = time(NULL);
     if (mgr->trigger_first_met == 0) {
         mgr->trigger_first_met = now;
-        log_warn("shutdown trigger condition met, debouncing %ds", delay_sec);
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "Shutdown trigger condition met, debouncing %ds", delay_sec);
+        log_warn("%s", buf);
+        emit_event(mgr, "warning", "Shutdown Trigger Armed", buf);
         return;
     }
 
