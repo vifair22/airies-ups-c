@@ -534,6 +534,12 @@ package:docker:
     - docker buildx create --use --name multi
   script:
     - SHA_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    # Resolve c-utils master HEAD so the Dockerfile's clone layer cache
+    # tracks upstream — without this, BuildKit keys the clone RUN on its
+    # literal command and never re-runs it when c-utils master moves.
+    - apk add --no-cache git >/dev/null
+    - CUTILS_SHA=$(git ls-remote "$C_UTILS_REPO" HEAD | cut -f1)
+    - echo "Pinning c-utils to master @ $CUTILS_SHA"
     # BUILD_VARIANT decorates the binary's compiled-in VERSION_STRING per
     # platform. The Dockerfile composes BUILD_TAG=docker.<arch>.<variant>
     # using buildx's auto-set TARGETARCH, so a single build-arg covers
@@ -548,6 +554,7 @@ package:docker:
       fi
     # Smoke build — amd64 only, loaded into local docker so we can run it.
     - docker buildx build --build-arg BUILD_VARIANT="$BUILD_VARIANT"
+        --build-arg CUTILS_SHA="$CUTILS_SHA"
         --platform linux/amd64 --load -t "$SHA_TAG" .
     - docker run -d --rm --name smoke "$SHA_TAG"
     - sleep 5
@@ -565,6 +572,7 @@ package:docker:
       fi
       if [ -n "$TAGS" ]; then
         docker buildx build --build-arg BUILD_VARIANT="$BUILD_VARIANT" \
+          --build-arg CUTILS_SHA="$CUTILS_SHA" \
           --platform linux/amd64,linux/arm64 --push $TAGS .
       else
         echo "MR / branch pipeline — built and smoked, not pushing."
