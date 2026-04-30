@@ -1,8 +1,16 @@
 /* Stub driver symbols so ups.c links without pulling in real drivers.
  * Each test binary that includes ups.c needs these to satisfy the
- * extern references in the ups_drivers[] registry. */
+ * extern references in the ups_drivers[] registry.
+ *
+ * Also stubs out monitor_fire_event so shutdown.c links without pulling
+ * in the whole monitor module + its libmodbus/threading deps. The
+ * shutdown unit tests never wire a monitor (mgr->monitor is always NULL)
+ * so the real implementation is unreachable from these binaries — the
+ * stub exists purely to satisfy the linker, since `if (!mgr->monitor)
+ * return;` is a runtime check, not a compile-time one. */
 
 #include "ups/ups_driver.h"
+#include "monitor/monitor.h"
 
 const ups_driver_t ups_driver_srt = {
     .name      = "srt_stub",
@@ -31,3 +39,10 @@ const ups_driver_t ups_driver_cyberpower_hid = {
     .topology  = UPS_TOPO_LINE_INTERACTIVE,
     .caps      = 0,
 };
+
+void monitor_fire_event(monitor_t *mon, const char *severity,
+                        const char *category, const char *title,
+                        const char *message)
+{
+    (void)mon; (void)severity; (void)category; (void)title; (void)message;
+}

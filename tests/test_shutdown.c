@@ -97,8 +97,9 @@ static int setup(void **state)
     assert_int_equal(config_set_db(cfg, "shutdown.ups_mode", "none"), CUTILS_OK);
     assert_int_equal(config_set_db(cfg, "shutdown.controller_enabled", "0"), CUTILS_OK);
 
-    /* Create shutdown manager (ups=NULL is safe with ups_mode=none) */
-    shutdown_mgr_t *mgr = shutdown_create(db, NULL, cfg);
+    /* Create shutdown manager (ups=NULL is safe with ups_mode=none;
+     * monitor=NULL skips event emission, which the tests don't exercise) */
+    shutdown_mgr_t *mgr = shutdown_create(db, NULL, cfg, NULL);
     if (!mgr) { db_close(db); config_free(cfg); return -1; }
 
     test_ctx_t *ctx = calloc(1, sizeof(*ctx));
@@ -397,7 +398,7 @@ static void test_trigger_all_data_fields(void **state)
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
         /* Reset trigger state by creating a fresh manager */
         shutdown_free(ctx->mgr);
-        ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
+        ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
 
         assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", fields[i]), CUTILS_OK);
         shutdown_check_trigger(ctx->mgr, &d);
@@ -406,7 +407,7 @@ static void test_trigger_all_data_fields(void **state)
 
     /* Test unknown field name — should not trigger */
     shutdown_free(ctx->mgr);
-    ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg);
+    ctx->mgr = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
     assert_int_equal(config_set_db(ctx->cfg, "shutdown.trigger_field", "nonexistent_field"), CUTILS_OK);
     shutdown_check_trigger(ctx->mgr, &d);
 }
@@ -418,7 +419,7 @@ static void test_create_free(void **state)
     test_ctx_t *ctx = *state;
     /* The setup/teardown already tests create+free, but verify no crash
      * on a second create/free cycle */
-    shutdown_mgr_t *mgr2 = shutdown_create(ctx->db, NULL, ctx->cfg);
+    shutdown_mgr_t *mgr2 = shutdown_create(ctx->db, NULL, ctx->cfg, NULL);
     assert_non_null(mgr2);
     shutdown_free(mgr2);
 }
@@ -837,7 +838,7 @@ static void free_fake_ups(ups_t *u)
  * sharing the fixture's db + cfg. */
 static shutdown_mgr_t *make_mgr_with_fake_ups(test_ctx_t *ctx, ups_t *fake)
 {
-    shutdown_mgr_t *m = shutdown_create(ctx->db, fake, ctx->cfg);
+    shutdown_mgr_t *m = shutdown_create(ctx->db, fake, ctx->cfg, NULL);
     assert_non_null(m);
     return m;
 }
