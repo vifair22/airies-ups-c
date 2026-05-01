@@ -38,6 +38,7 @@ static const char *const PUBLIC_ENDPOINTS[] = {
 static void hex_encode(const unsigned char *in, size_t len, char *out)
 {
     for (size_t i = 0; i < len; i++)
+        /* nosemgrep: flawfinder.sprintf-1.vsprintf-1.swprintf-1.vswprintf-1._stprintf-1._vstprintf-1 -- caller sizes `out` as len*2+1; each iteration writes 2 hex chars + NUL within bounds */
         sprintf(out + i * 2, "%02x", in[i]);
     out[len * 2] = '\0';
 }
@@ -48,6 +49,7 @@ static int hex_decode(const char *in, unsigned char *out, size_t max_len)
     if (len > max_len) len = max_len;
     for (size_t i = 0; i < len; i++) {
         unsigned int byte;
+        /* nosemgrep: flawfinder.fscanf-1.sscanf-1.vsscanf-1.vfscanf-1._ftscanf-1.fwscanf-1.vfwscanf-1.vswscanf-1 -- literal format with %2x width specifier reads exactly 2 hex chars */
         if (sscanf(in + i * 2, "%2x", &byte) != 1) return -1;
         out[i] = (unsigned char)byte;
     }
@@ -97,6 +99,7 @@ static int verify_password(const char *password, const char *stored)
 
     int iterations = 0;
     char salt_hex[64] = "", hash_hex[128] = "";
+    /* nosemgrep: flawfinder.fscanf-1.sscanf-1.vsscanf-1.vfscanf-1._ftscanf-1.fwscanf-1.vfwscanf-1.vswscanf-1 -- literal format with %63 / %127 width specifiers bounded to buffer sizes */
     if (sscanf(stored, "$pbkdf2$%d$%63[^$]$%127s", &iterations, salt_hex, hash_hex) != 3)
         return 0;
     if (iterations < 1) return 0;
@@ -133,6 +136,7 @@ static void generate_token(char *buf, size_t len)
     size_t max = (len - 1) / 2;
     if (max > 32) max = 32;
     for (size_t i = 0; i < max; i++)
+        /* nosemgrep: flawfinder.sprintf-1.vsprintf-1.swprintf-1.vswprintf-1._stprintf-1._vstprintf-1 -- max is clamped so max*2+1 fits within caller-provided len */
         sprintf(buf + i * 2, "%02x", random[i]);
     buf[max * 2] = '\0';
 }

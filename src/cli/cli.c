@@ -106,6 +106,7 @@ void set_topic(const char *t)
     if (!t) { g_topic[0] = '\0'; return; }
     size_t n = strlen(t);
     if (n >= sizeof(g_topic)) n = sizeof(g_topic) - 1;
+    /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- n is clamped to sizeof(g_topic)-1 above; explicit NUL termination follows */
     memcpy(g_topic, t, n);
     g_topic[n] = '\0';
 }

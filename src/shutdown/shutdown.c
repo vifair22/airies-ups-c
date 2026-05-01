@@ -76,6 +76,7 @@ static int run_shell(const char *cmd)
 {
     fflush(stdout);
     fflush(stderr);
+    /* nosemgrep: flawfinder.system-1 -- intentional admin-controlled shell-out: cmd comes from a shutdown_target row written by an authenticated admin via the web UI; same trust model as cron's command field */
     return system(cmd);
 }
 
@@ -276,6 +277,7 @@ static int confirm_target_down(const char *method, const char *host,
 char *write_key_to_tmpfs(const char *key_material)
 {
     char template[] = "/dev/shm/airies-ups-key.XXXXXX";
+    /* nosemgrep: flawfinder.mkstemp-1 -- POSIX mkstemp creates the file with mode 0600 by definition; permission concern does not apply */
     int fd = mkstemp(template);
     if (fd < 0) {
         set_error(CUTILS_ERR_IO, "mkstemp: %s", strerror(errno));
@@ -409,6 +411,7 @@ static int test_target_confirm(const char *method, const char *host,
     if (strcmp(method, "tcp_port") == 0)
         return tcp_port_open(host, port) ? 0 : -1;
     if (strcmp(method, "command") == 0 && cmd && cmd[0])
+        /* nosemgrep: flawfinder.system-1 -- intentional admin-controlled shell-out: cmd is the verification command from a shutdown_target row, written by an authenticated admin */
         return system(cmd) == 0 ? 0 : -1;
     return -1;
 }
@@ -1249,6 +1252,7 @@ void shutdown_get_status(shutdown_mgr_t *mgr, shutdown_status_t *out)
         out->n_failed = mgr->snapshot->n_failed;
         out->steps    = malloc(out->n_steps * sizeof(*out->steps));
         if (out->steps) {
+            /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- destination was just malloc'd to exactly out->n_steps * sizeof(*out->steps) */
             memcpy(out->steps, mgr->snapshot->steps,
                    out->n_steps * sizeof(*out->steps));
         } else {
