@@ -13,6 +13,45 @@ variables:
   # what's actually installed on upspi/upspi2/upspi3.
   DEBIAN_FRONTEND: noninteractive
 
+# GitLab Ultimate security scanning templates. Findings populate the MR
+# security widget and the project Vulnerability Report dashboard. The
+# templates default to allow_failure=true, so a finding does not block the
+# pipeline — Coverage-Check + branch protection remain the hard gates.
+#
+# Language coverage on this repo:
+#   - gitlab-advanced-sast scans the React/TS frontend (*.ts, *.tsx, *.js)
+#   - semgrep-sast covers the C code (*.c, *.h); the SAST template
+#     auto-partitions extensions between the two analyzers when Ultimate is
+#     active, so neither double-scans the other's languages.
+#   - secret_detection runs gitleaks-style scanning on every commit.
+#
+# Out of pilot scope (follow-up MRs):
+#   - Container-Scanning: needs to chain after `package:docker` and point at
+#     $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA; default CS_IMAGE wiring
+#     assumes Auto DevOps tagging.
+#   - Dependency-Scanning: gemnasium does not recognize bun.lock; needs a
+#     `bun pm` -> CycloneDX SBOM adapter step before it can read frontend
+#     deps.
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# Re-stage the included scanners into `analyze`, alongside cppcheck /
+# clang-tidy / coverage, instead of the template default (`test`). Overriding
+# the parent `sast` job's stage propagates to all .sast-analyzer-derived
+# children (semgrep-sast, gitlab-advanced-sast). Same pattern for
+# secret_detection. Tag them `docker` so they route to runners that don't
+# need internal LAN reach, matching the rest of the analyze stage.
+sast:
+  stage: analyze
+  tags:
+    - docker
+
+secret_detection:
+  stage: analyze
+  tags:
+    - docker
+
 # Native build + run all tests (C cmocka suite + frontend Vitest).
 test:
   stage: test
