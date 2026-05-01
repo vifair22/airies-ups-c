@@ -1,0 +1,75 @@
+# GitLab SAST ruleset overrides.
+#
+# https://docs.gitlab.com/ee/user/application_security/sast/customize_rulesets.html
+#
+# Each rule disabled here is documented inline with the reason. The bar for
+# adding to this file: the rule has a categorically wrong threat model for
+# this codebase, OR a near-zero true-positive rate that drowns real findings
+# in noise. Per-call-site exceptions live as `/* nosemgrep: <id> */`
+# comments at each call, not here.
+
+# --- gitlab-advanced-sast (JS/TS) ----------------------------------------
+
+[gitlab-advanced-sast]
+  [[gitlab-advanced-sast.ruleset]]
+    # SSRF requires a server fetching attacker-controlled URLs. Our entire
+    # JS/TS surface is browser-side: every fetch() runs from the user's own
+    # machine to our own internal API paths. The taint analysis follows the
+    # url: string parameter into fetch(), but the data flow terminates in
+    # the browser, not a server. Categorically wrong threat model here.
+    disable = true
+    [gitlab-advanced-sast.ruleset.identifier]
+      type = "gitlab-advanced-sast_id"
+      value = "javascript-node-ssrf-generic-taint"
+
+  [[gitlab-advanced-sast.ruleset]]
+    # Timing-attack rule designed for server-side secret comparison
+    # (e.g. password hash equality, HMAC verification). The single hit
+    # is on `password !== passwordConfirm` in the setup wizard — the user
+    # comparing their own two form fields client-side. There's no secret
+    # on either side of the comparison to leak via timing.
+    disable = true
+    [gitlab-advanced-sast.ruleset.identifier]
+      type = "gitlab-advanced-sast_id"
+      value = "javascript-lang-misconfiguration-timing-attack-atomic"
+
+# --- semgrep-sast (C) ----------------------------------------------------
+#
+# The flawfinder ruleset bundled with semgrep-sast generates one warning
+# per *call site* of certain libc functions, regardless of how the call is
+# used. Three of those rules have effectively zero true-positive rate in
+# this codebase and are disabled wholesale. The rest stay on, with
+# per-line `/* nosemgrep: <id> */` markers at verified-safe sites.
+
+[semgrep]
+  [[semgrep.ruleset]]
+    # Flags every `atoi()`/`atol()` as "possible integer overflow." Our
+    # atoi inputs come from typed sources (DB schema-constrained columns,
+    # validated JSON fields). The rule does no actual overflow analysis —
+    # it flags the function name. 38 findings, all noise.
+    disable = true
+    [semgrep.ruleset.identifier]
+      type = "semgrep_id"
+      value = "flawfinder.atoi-1.atol-1._wtoi-1._wtoi64-1"
+
+  [[semgrep.ruleset]]
+    # Flags every `strlen()` call as "does not handle null terminated
+    # strings or invalid pointers properly." strlen is the canonical way
+    # to find the length of a NUL-terminated string. The rule fires on
+    # function name alone with no contextual analysis. 21 findings, all
+    # noise.
+    disable = true
+    [semgrep.ruleset.identifier]
+      type = "semgrep_id"
+      value = "flawfinder.strlen-1.wcslen-1._tcslen-1._mbslen-1"
+
+  [[semgrep.ruleset]]
+    # Flags every `fopen()`/`open()` as "potential time of check time of
+    # use vulnerability." TOCTOU on open is only a real concern when the
+    # path was previously checked via stat()/access() and then opened
+    # without re-validating — a pattern this codebase doesn't use. The
+    # rule fires on function name alone. 6 findings, all noise.
+    disable = true
+    [semgrep.ruleset.identifier]
+      type = "semgrep_id"
+      value = "flawfinder.fopen-1.open-1"

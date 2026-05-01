@@ -56,10 +56,13 @@ const char *ups_status_str(uint32_t status, char *buf, size_t len)
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
         if (status & flags[i].bit) {
+            /* nosemgrep: flawfinder.strncat-1 -- n bound is len - strlen(buf) - 1, leaving room for the NUL terminator strncat itself writes */
             if (buf[0]) strncat(buf, " ", len - strlen(buf) - 1);
+            /* nosemgrep: flawfinder.strncat-1 -- n bound is len - strlen(buf) - 1, leaving room for the NUL terminator strncat itself writes */
             strncat(buf, flags[i].name, len - strlen(buf) - 1);
         }
     }
+    /* nosemgrep: flawfinder.strncpy-1 -- caller passes a buffer >= 8 chars per ups_status_str contract; "Unknown" + NUL fits, strncpy's NUL padding terminates the buffer */
     if (!buf[0]) strncpy(buf, "Unknown", len - 1);
     return buf;
 }

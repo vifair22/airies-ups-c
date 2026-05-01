@@ -272,6 +272,7 @@ static enum MHD_Result request_handler(void *cls,
             pb->data = tmp;
             pb->capacity = newcap;
         }
+        /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- buffer was just grown above to ensure pb->capacity >= pb->len + *upload_data_size + 1 */
         memcpy(pb->data + pb->len, upload_data, *upload_data_size);
         pb->len += *upload_data_size;
         pb->data[pb->len] = '\0';
@@ -422,6 +423,7 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
+        /* nosemgrep: flawfinder.strncpy-1 -- prior memset zeroed addr; strncpy bound to size-1 leaves the final byte as the NUL from memset */
         strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
         if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {

@@ -6,6 +6,7 @@
 #include <cutils/json.h>
 #include <cutils/mem.h>
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -260,55 +261,50 @@ static api_response_t handle_cmd(const api_request_t *req, void *ud)
     const char *result_msg;
 
     if (strcmp(act, "shutdown_workflow") == 0) {
+        if (!ctx->shutdown)
+            return api_error(503, "shutdown manager unavailable");
+
         bool dry_run = false;
         CUTILS_UNUSED(json_req_get_bool(body, "dry_run", &dry_run));
 
-        shutdown_result_t *sres = NULL;
-        rc = shutdown_execute_ex(ctx->shutdown, dry_run ? 1 : 0, &sres);
-        if (rc != 0) {
-            shutdown_result_free(sres);
-            return api_error(500, "shutdown workflow failed to start");
-        }
+        /* Fire-and-forget: the worker thread runs the workflow off-loop
+         * so this handler returns in milliseconds and the API stays
+         * responsive while groups, UPS action, and controller poweroff
+         * sequence. The UI polls /api/shutdown/workflow/status for the
+         * live step list and final outcome. */
+        uint64_t workflow_id = 0;
+        rc = shutdown_start_async(ctx->shutdown, dry_run ? 1 : 0, &workflow_id);
 
-        CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
-        if (json_resp_new(&resp) != CUTILS_OK) {
-            shutdown_result_free(sres);
-            return api_error(500, cutils_get_error());
-        }
-
-        size_t n_steps  = sres ? sres->n_steps  : 0;
-        size_t n_failed = sres ? sres->n_failed : 0;
-
-        const char *summary = dry_run
-            ? (n_failed > 0 ? "dry run found problems" : "dry run complete")
-            : (n_failed > 0 ? "shutdown completed with failures"
-                            : "shutdown initiated");
-
-        if (json_resp_add_str (resp, "result",   summary)            != CUTILS_OK ||
-            json_resp_add_bool(resp, "all_ok",   n_failed == 0)      != CUTILS_OK ||
-            json_resp_add_u64 (resp, "n_steps",  (uint64_t)n_steps)  != CUTILS_OK ||
-            json_resp_add_u64 (resp, "n_failed", (uint64_t)n_failed) != CUTILS_OK ||
-            json_resp_ensure_array(resp, "steps")                    != CUTILS_OK) {
-            shutdown_result_free(sres);
-            return api_error(500, cutils_get_error());
-        }
-
-        for (size_t i = 0; sres && i < sres->n_steps; i++) {
-            const shutdown_step_result_t *s = &sres->steps[i];
-            CUTILS_AUTO_JSON_ELEM cutils_json_elem_t elem;
-            if (json_resp_array_append_begin(resp, "steps", &elem) != CUTILS_OK ||
-                json_elem_add_str(&elem, "phase",  s->phase)       != CUTILS_OK ||
-                json_elem_add_str(&elem, "target", s->target)      != CUTILS_OK ||
-                json_elem_add_i32(&elem, "ok",     s->ok)          != CUTILS_OK ||
-                json_elem_add_str(&elem, "error",  s->error)       != CUTILS_OK) {
-                shutdown_result_free(sres);
+        if (rc == -EALREADY) {
+            CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+            if (json_resp_new(&resp) != CUTILS_OK)
+                return api_error(500, cutils_get_error());
+            if (json_resp_add_str(resp, "error",       "workflow already running") != CUTILS_OK ||
+                json_resp_add_u64(resp, "workflow_id", workflow_id)                != CUTILS_OK) {
                 return api_error(500, cutils_get_error());
             }
-            json_elem_commit(&elem);
+            CUTILS_AUTOFREE char *body_str = NULL;
+            size_t body_len;
+            if (json_resp_finalize(resp, &body_str, &body_len) != CUTILS_OK)
+                return api_error(500, cutils_get_error());
+            return api_ok_status(409, CUTILS_MOVE(body_str));
         }
+        if (rc != CUTILS_OK)
+            return api_error(500, cutils_get_error());
 
-        shutdown_result_free(sres);
-        return finalize_ok(resp);
+        CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+        if (json_resp_new(&resp) != CUTILS_OK)
+            return api_error(500, cutils_get_error());
+        if (json_resp_add_str (resp, "result",      "started")    != CUTILS_OK ||
+            json_resp_add_bool(resp, "dry_run",     dry_run)      != CUTILS_OK ||
+            json_resp_add_u64 (resp, "workflow_id", workflow_id)  != CUTILS_OK) {
+            return api_error(500, cutils_get_error());
+        }
+        CUTILS_AUTOFREE char *body_str = NULL;
+        size_t body_len;
+        if (json_resp_finalize(resp, &body_str, &body_len) != CUTILS_OK)
+            return api_error(500, cutils_get_error());
+        return api_ok_status(202, CUTILS_MOVE(body_str));
     } else {
         const ups_cmd_desc_t *cmd = ups_find_command(ctx->ups, act);
         if (!cmd)
