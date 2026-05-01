@@ -63,6 +63,7 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *ud)
         buf->data = tmp;
         buf->cap = newcap;
     }
+    /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- buffer was just grown above to ensure buf->cap >= buf->len + bytes + 1 */
     memcpy(buf->data + buf->len, ptr, bytes);
     buf->len += bytes;
     buf->data[buf->len] = '\0';
