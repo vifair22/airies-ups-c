@@ -173,6 +173,7 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
         int match = 0;
         while (fgets(line, sizeof(line), f)) {
             unsigned int hid_bus, hid_vid, hid_pid;
+            /* nosemgrep: flawfinder.fscanf-1.sscanf-1.vsscanf-1.vfscanf-1._ftscanf-1.fwscanf-1.vfwscanf-1.vswscanf-1 -- literal format with only %x integer specifiers */
             if (sscanf(line, "HID_ID=%x:%x:%x", &hid_bus, &hid_vid, &hid_pid) == 3) {
                 if (hid_vid == vid && hid_pid == pid)
                     match = 1;
@@ -181,6 +182,7 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
 
         if (match) {  /* NOLINT(clang-analyzer-unix.Stream) */
             snprintf(path, path_sz, "/dev/%s", ent->d_name);
+            /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- ent->d_name is a kernel-emitted /sys/class/hidraw entry name (e.g. "hidraw0"), max ~8 chars, fits in caller-declared NAME_MAX buffer */
             memcpy(hidraw_name, ent->d_name, strlen(ent->d_name) + 1);
 
             if (sysfs_base && sysfs_sz > 0) {
@@ -188,10 +190,12 @@ static int find_hidraw_device(uint16_t vid, uint16_t pid,
                 snprintf(devlink, sizeof(devlink),
                          "/sys/class/hidraw/%s/device", ent->d_name);
                 char resolved[PATH_MAX];
+                /* nosemgrep: flawfinder.realpath-1 -- `resolved` is a PATH_MAX-sized buffer per realpath(3) requirement */
                 if (realpath(devlink, resolved)) {
                     for (;;) {
                         char check[PATH_MAX + 16];
                         snprintf(check, sizeof(check), "%s/idVendor", resolved);
+                        /* nosemgrep: flawfinder.access-1 -- existence probe for sysfs idVendor file walking up the device tree; no follow-up open on `check` so there is no TOCTOU window */
                         if (access(check, R_OK) == 0) {
                             snprintf(sysfs_base, sysfs_sz, "%s", resolved);
                             break;
@@ -774,6 +778,7 @@ int hid_pdc_config_write_field(int fd,
         uint16_t rlen = (uint16_t)(1u + data_bytes);
         if (ioctl(fd, HIDIOCGFEATURE(rlen), cur) < 0)
             return UPS_ERR_IO;
+        /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- data_bytes derives from a HID field bit_size; APC bitfield registers we write are 16/24-bit, so rlen <= 4 and stays well within the 8-byte buf/cur arrays */
         memcpy(buf, cur, rlen);
         buf[1] = (uint8_t)value;
     } else {
