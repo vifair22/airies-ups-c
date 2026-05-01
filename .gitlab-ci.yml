@@ -104,11 +104,12 @@ sbom:bun:frontend:
   allow_failure: true
 
 # Vulnerability scan against the cdxgen-produced SBOM. Trivy's `sbom` mode
-# reads CycloneDX 1.5 input directly, and the official Trivy image ships a
-# GitLab template at /contrib/gitlab.tpl that emits gemnasium-format
-# `gl-dependency-scanning-report.json`. Output appears in the MR security
-# widget's Dependency Scanning section and the Vulnerability Report
-# dashboard.
+# reads CycloneDX 1.5 input directly. The shipped /contrib/gitlab.tpl is
+# hardcoded for container_scanning (`/scan/type` + missing dependency_files
+# trip the gemnasium schema validator), so Trivy emits its native JSON and
+# scripts/trivy-to-gitlab-ds.jq reshapes it into a gemnasium v15.0.7
+# dependency_scanning report. Output appears in the MR security widget's
+# Dependency Scanning section and the Vulnerability Report dashboard.
 dependency_scanning:frontend:
   stage: analyze
   image:
@@ -125,12 +126,11 @@ dependency_scanning:frontend:
     key: trivy-vuln-db
     paths:
       - .trivycache/
+  before_script:
+    - apk add --no-cache jq
   script:
-    - trivy sbom
-        --format template
-        --template "@/contrib/gitlab.tpl"
-        --output gl-dependency-scanning-report.json
-        gl-sbom-frontend-bun.cdx.json
+    - trivy sbom --format json --output trivy-native.json gl-sbom-frontend-bun.cdx.json
+    - jq -f scripts/trivy-to-gitlab-ds.jq trivy-native.json > gl-dependency-scanning-report.json
     - test -s gl-dependency-scanning-report.json
   artifacts:
     paths:
