@@ -205,6 +205,7 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
         for (int i = 0; i < 10; i++) {
             char path[64];
             snprintf(path, sizeof(path), "%s%d", patterns[p], i);
+            /* nosemgrep: flawfinder.access-1 -- discovery probe for the setup wizard's device list; no follow-up open on `path` so there is no TOCTOU window */
             if (access(path, R_OK | W_OK) == 0)
                 ADD_OR_FAIL(json_resp_array_append_str(resp, "serial", path));
         }
@@ -227,8 +228,10 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
             char hid_name[128] = "";
             while (fgets(line, sizeof(line), f)) {
                 unsigned int bus;
+                /* nosemgrep: flawfinder.fscanf-1.sscanf-1.vsscanf-1.vfscanf-1._ftscanf-1.fwscanf-1.vfwscanf-1.vswscanf-1 -- literal format with only %x integer specifiers */
                 if (sscanf(line, "HID_ID=%x:%x:%x", &bus, &vid, &pid) == 3)
                     continue;
+                /* nosemgrep: flawfinder.fscanf-1.sscanf-1.vsscanf-1.vfscanf-1._ftscanf-1.fwscanf-1.vfwscanf-1.vswscanf-1 -- %127[^\n] width-bounded into 128-byte buffer */
                 if (sscanf(line, "HID_NAME=%127[^\n]", hid_name) == 1)
                     continue;
             }

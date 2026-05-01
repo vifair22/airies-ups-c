@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useApi, apiPost } from '../hooks/useApi'
+import { useApi, apiPost, apiGet } from '../hooks/useApi'
 import { ConfirmModal, WideModal } from '../components/Modal'
 import { useToast, ToastContainer } from '../components/Toast'
 import type { UpsStatus } from '../types/ups'
-import type { CmdDesc, CmdResult, ShutdownStep } from '../types/commands'
+import type { CmdDesc, CmdResult, ShutdownStep, WorkflowStatus } from '../types/commands'
 
 /* ── Simple command button ── */
 
@@ -116,32 +116,53 @@ function StatusPill({ ok }: { ok: ShutdownStep['ok'] }) {
   )
 }
 
-function ShutdownResultModal({ result, dryRun, onClose }: {
-  result: CmdResult; dryRun: boolean; onClose: () => void
+function ShutdownWorkflowModal({ status, dryRun, onClose }: {
+  status: WorkflowStatus | null; dryRun: boolean; onClose: () => void
 }) {
-  const steps   = result.steps   ?? []
-  const total   = result.n_steps  ?? steps.length
-  const failed  = result.n_failed ?? steps.filter(s => s.ok === 1).length
-  const allOk   = result.all_ok ?? failed === 0
+  const isRunning   = status?.state === 'running' || status === null
+  const isCompleted = status?.state === 'completed'
+  const steps       = status?.steps   ?? []
+  const total       = status?.n_steps  ?? steps.length
+  const failed      = status?.n_failed ?? 0
+  const allOk       = status?.all_ok ?? false
 
-  const headline = dryRun
-    ? (allOk ? 'Dry run complete — no problems detected'
-             : `Dry run found ${failed} problem${failed === 1 ? '' : 's'}`)
-    : (allOk ? 'Shutdown initiated'
-             : `Shutdown completed with ${failed} failure${failed === 1 ? '' : 's'}`)
+  const headline = isRunning
+    ? (status === null
+        ? (dryRun ? 'Starting dry run…' : 'Starting shutdown workflow…')
+        : (dryRun ? 'Dry run in progress…' : 'Shutdown workflow in progress…'))
+    : isCompleted
+      ? (dryRun
+          ? (allOk ? 'Dry run complete — no problems detected'
+                   : `Dry run found ${failed} problem${failed === 1 ? '' : 's'}`)
+          : (allOk ? 'Shutdown initiated'
+                   : `Shutdown completed with ${failed} failure${failed === 1 ? '' : 's'}`))
+      : 'Workflow idle'
+
+  const headlineCls = isRunning
+    ? 'text-primary'
+    : (allOk ? 'text-primary' : 'text-red-400')
+
+  const subline = isRunning
+    ? (status?.current_target
+        ? `Running: ${phaseLabels[status.current_phase as ShutdownStep['phase']] ?? status.current_phase} → ${status.current_target}`
+        : 'Workflow starting…')
+    : `${total} step${total === 1 ? '' : 's'} executed${dryRun ? ' — no destructive actions taken' : ''}`
 
   return (
     <WideModal onClose={onClose}>
-      <h3 className={`text-lg font-semibold mb-1 ${allOk ? 'text-primary' : 'text-red-400'}`}>
-        {headline}
-      </h3>
-      <p className="text-xs text-muted mb-4">
-        {total} step{total === 1 ? '' : 's'} executed
-        {dryRun && ' — no destructive actions taken'}
-      </p>
+      <div className="flex items-center gap-3 mb-1">
+        <h3 className={`text-lg font-semibold ${headlineCls}`}>{headline}</h3>
+        {isRunning && (
+          <div className="h-3 w-3 rounded-full bg-primary animate-pulse" aria-label="running" />
+        )}
+      </div>
+      <p className="text-xs text-muted mb-4">{subline}</p>
 
       {steps.length === 0 ? (
-        <p className="text-sm text-muted">No steps were configured or run.</p>
+        <p className="text-sm text-muted">
+          {isRunning ? 'Waiting for the first step to complete…'
+                     : 'No steps were configured or run.'}
+        </p>
       ) : (
         <div className="border border-edge rounded overflow-hidden">
           <table className="w-full text-sm">
@@ -167,7 +188,10 @@ function ShutdownResultModal({ result, dryRun, onClose }: {
         </div>
       )}
 
-      <div className="flex justify-end mt-4">
+      <div className="flex items-center justify-between mt-4">
+        <p className="text-xs text-faint">
+          {isRunning && 'Closing this dialog will not stop the workflow — it continues server-side.'}
+        </p>
         <button onClick={onClose}
           className="px-4 py-2 rounded text-sm border border-edge-strong bg-field hover:bg-field-hover transition-colors">
           Close
@@ -180,27 +204,78 @@ function ShutdownResultModal({ result, dryRun, onClose }: {
 function ShutdownWorkflow({ onResult }: { onResult: (msg: string, type: 'success' | 'error') => void }) {
   const [confirm, setConfirm] = useState<'dry' | 'real' | null>(null)
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<{ data: CmdResult; dryRun: boolean } | null>(null)
+  /* tracking != null → modal is open and we're polling for status. Tracks
+   * the workflow_id so we notice if a different run takes over (auto-
+   * trigger fires while the user has the dry-run modal open). */
+  const [tracking, setTracking] = useState<{ id: number; dryRun: boolean } | null>(null)
+  const [status, setStatus]     = useState<WorkflowStatus | null>(null)
+
+  /* Poll /api/shutdown/workflow/status while a workflow is being tracked.
+   * Stops on completed (or when the user closes the modal). Uses a
+   * recursive setTimeout instead of setInterval so a slow response can't
+   * stack up overlapping requests. The effect re-runs when `tracking`
+   * changes, so re-pinning to a different workflow_id naturally cancels
+   * the old loop via the cleanup. */
+  useEffect(() => {
+    if (!tracking) return
+    const trackedId = tracking.id
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const tick = async () => {
+      if (cancelled) return
+      try {
+        const s = await apiGet<WorkflowStatus>('/api/shutdown/workflow/status')
+        if (cancelled) return
+        setStatus(s)
+
+        /* Different run took over (auto-trigger or operator on another
+         * tab). Re-pin to the new id; the effect cleanup cancels this
+         * loop and a fresh one starts. */
+        if (s.workflow_id && s.workflow_id !== trackedId) {
+          setTracking({ id: s.workflow_id, dryRun: s.dry_run })
+          return
+        }
+
+        if (s.state === 'completed') return
+      } catch {
+        /* Transient fetch failure — fall through to retry. */
+      }
+      if (!cancelled) timer = setTimeout(tick, 1500)
+    }
+
+    tick()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [tracking])
 
   const execute = async (dryRun: boolean) => {
     setLoading(true)
-    const res = await apiPost<CmdResult>('/api/cmd', { action: 'shutdown_workflow', dry_run: dryRun })
+    const res = await apiPost<CmdResult>(
+      '/api/cmd', { action: 'shutdown_workflow', dry_run: dryRun })
     setConfirm(null)
     setLoading(false)
 
-    if (res.error) {
+    if (res.workflow_id) {
+      /* 202 (started) or 409 (already running). In either case attach to
+       * the workflow and start polling — for 409 the user wanted to run
+       * it anyway, so the most useful thing is to show progress on the
+       * one that's actually running. */
+      if (res.error) onResult(res.error, 'error')
+      setStatus(null)
+      setTracking({ id: res.workflow_id, dryRun: res.dry_run ?? dryRun })
+    } else if (res.error) {
       onResult(res.error, 'error')
-      return
-    }
-    /* Always open the result modal — even on full success there's value
-     * in seeing which steps ran (or were skipped, e.g. docker controller
-     * skip). Falls back to a toast only if the response carries no
-     * structured payload (older daemon, or non-shutdown route reused). */
-    if (res.steps) {
-      setResult({ data: res, dryRun })
     } else {
       onResult(res.result || 'done', 'success')
     }
+  }
+
+  const closeModal = () => {
+    setTracking(null)
+    setStatus(null)
   }
 
   return (
@@ -227,9 +302,15 @@ function ShutdownWorkflow({ onResult }: { onResult: (msg: string, type: 'success
           confirmLabel="Shutdown Now" confirmVariant="danger"
           onConfirm={() => execute(false)} onCancel={() => setConfirm(null)} loading={loading} />
       )}
-      {result && (
-        <ShutdownResultModal result={result.data} dryRun={result.dryRun}
-          onClose={() => setResult(null)} />
+      {tracking && (
+        <ShutdownWorkflowModal
+          status={status}
+          /* Trust the daemon's dry_run flag once the first status poll
+           * lands — the user might be attaching to a workflow that's
+           * a different mode than the button they pressed (409 path). */
+          dryRun={status?.dry_run ?? tracking.dryRun}
+          onClose={closeModal}
+        />
       )}
     </>
   )

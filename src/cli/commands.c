@@ -36,6 +36,7 @@ static int sock_connect(const char *path)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
+    /* nosemgrep: flawfinder.strncpy-1 -- prior memset zeroed addr; strncpy bound to size-1 leaves the final byte as the NUL from memset */
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
