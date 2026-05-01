@@ -12,6 +12,133 @@ variables:
   # must match so the cross-compiled binary's libc/libssl ABI lines up with
   # what's actually installed on upspi/upspi2/upspi3.
   DEBIAN_FRONTEND: noninteractive
+  # Opt in to gitlab-advanced-sast (Ultimate-only deeper analyzer for JS/TS
+  # and other supported languages). The SAST template gates this job behind
+  # `GITLAB_ADVANCED_SAST_ENABLED`; without it, semgrep-sast falls back to
+  # scanning all languages including JS/TS with the basic ruleset.
+  GITLAB_ADVANCED_SAST_ENABLED: "true"
+
+# GitLab Ultimate security scanning templates. Findings populate the MR
+# security widget and the project Vulnerability Report dashboard. The
+# templates default to allow_failure=true, so a finding does not block the
+# pipeline — Coverage-Check + branch protection remain the hard gates.
+#
+# Language coverage on this repo:
+#   - gitlab-advanced-sast scans the React/TS frontend (*.ts, *.tsx, *.js).
+#     Opt-in via $GITLAB_ADVANCED_SAST_ENABLED above.
+#   - semgrep-sast covers the C code (*.c, *.h); the SAST template
+#     auto-partitions extensions between the two analyzers when Ultimate is
+#     active, so neither double-scans the other's languages.
+#   - secret_detection runs gitleaks-style scanning on every commit.
+#   - sbom:bun:frontend (custom job) emits a CycloneDX SBOM for the
+#     frontend's bun.lock. Neither the gemnasium analyzer nor GitLab's
+#     newer dependency-scanning:1 analyzer recognizes bun.lock; cdxgen
+#     does. GitLab consumes the SBOM via reports.cyclonedx — populating
+#     the Dependencies tab and feeding Continuous Vulnerability Scanning's
+#     recurring re-match against the pm_advisories CVE database.
+#   - dependency_scanning:frontend (custom job) reads cdxgen's SBOM with
+#     trivy in `sbom` mode and emits a gemnasium-format dependency scanning
+#     report so the MR security widget surfaces package CVEs inline. Done
+#     as a chained job rather than `trivy fs` against bun.lock directly
+#     because Trivy's bun-lockfile parser only walks direct dependencies
+#     (8 of 324 components on this repo); feeding cdxgen's full transitive
+#     SBOM into Trivy gets vulnerability matching across the complete tree.
+#
+# Out of pilot scope (follow-up MRs):
+#   - Container-Scanning: needs to chain after `package:docker` and point at
+#     $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA; default CS_IMAGE wiring
+#     assumes Auto DevOps tagging.
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# Re-stage the included scanners into `analyze`, alongside cppcheck /
+# clang-tidy / coverage, instead of the template default (`test`). Overriding
+# the parent `sast` job's stage propagates to all .sast-analyzer-derived
+# children (semgrep-sast, gitlab-advanced-sast). Same pattern for
+# secret_detection. Tag them `docker` so they route to runners that don't
+# need internal LAN reach, matching the rest of the analyze stage.
+sast:
+  stage: analyze
+  tags:
+    - docker
+
+secret_detection:
+  stage: analyze
+  tags:
+    - docker
+
+# CycloneDX SBOM for the frontend's bun.lock. cdxgen parses the bun lockfile
+# format directly (gemnasium does not). The artifact filename pattern
+# `gl-sbom-*.cdx.json` matches the template's .cyclonedx-reports glob, so
+# GitLab ingests it identically to the gemnasium-produced SBOMs on
+# package-lock.json / yarn.lock / pnpm-lock.yaml projects.
+sbom:bun:frontend:
+  stage: analyze
+  # cdxgen does not publish floating major tags (no `v11`); pin to a
+  # specific patch and bump deliberately. Latest v11.x at time of writing
+  # is v11.11.0.
+  image:
+    name: ghcr.io/cyclonedx/cdxgen:v11.11.0
+    entrypoint: [""]
+  tags:
+    - docker
+  needs: []
+  variables:
+    # cdxgen phones home for vulnerability lookups by default; disable since
+    # GitLab's Continuous Vulnerability Scanning handles that downstream.
+    FETCH_LICENSE: "false"
+    CDXGEN_DEBUG_MODE: "info"
+  script:
+    - cdxgen --type bun --spec-version 1.5
+        --output gl-sbom-frontend-bun.cdx.json
+        --no-recurse
+        frontend
+    - test -s gl-sbom-frontend-bun.cdx.json
+  artifacts:
+    paths:
+      - gl-sbom-frontend-bun.cdx.json
+    reports:
+      cyclonedx: gl-sbom-frontend-bun.cdx.json
+    expire_in: 1 week
+  allow_failure: true
+
+# Vulnerability scan against the cdxgen-produced SBOM. Trivy's `sbom` mode
+# reads CycloneDX 1.5 input directly. The shipped /contrib/gitlab.tpl is
+# hardcoded for container_scanning (`/scan/type` + missing dependency_files
+# trip the gemnasium schema validator), so Trivy emits its native JSON and
+# scripts/trivy-to-gitlab-ds.jq reshapes it into a gemnasium v15.0.7
+# dependency_scanning report. Output appears in the MR security widget's
+# Dependency Scanning section and the Vulnerability Report dashboard.
+dependency_scanning:frontend:
+  stage: analyze
+  image:
+    name: aquasec/trivy:0.70.0
+    entrypoint: [""]
+  tags:
+    - docker
+  needs:
+    - sbom:bun:frontend
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  cache:
+    key: trivy-vuln-db
+    paths:
+      - .trivycache/
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - trivy sbom --format json --output trivy-native.json gl-sbom-frontend-bun.cdx.json
+    - jq -f scripts/trivy-to-gitlab-ds.jq trivy-native.json > gl-dependency-scanning-report.json
+    - test -s gl-dependency-scanning-report.json
+  artifacts:
+    paths:
+      - gl-dependency-scanning-report.json
+    reports:
+      dependency_scanning: gl-dependency-scanning-report.json
+    expire_in: 1 week
+  allow_failure: true
 
 # Native build + run all tests (C cmocka suite + frontend Vitest).
 test:
