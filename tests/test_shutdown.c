@@ -3,9 +3,11 @@
 #include <stdint.h>
 #include <setjmp.h>
 #include <cmocka.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -1122,6 +1124,146 @@ static void test_shutdown_result_free_handles_null(void **state)
     shutdown_result_free(NULL);   /* no-op, no crash */
 }
 
+/* --- Async workflow --- */
+
+/* Spin until shutdown_get_status reports the desired state, or fail. The
+ * UPS-mode-none / controller-disabled fixture means execute_ex returns
+ * within tens of milliseconds, but we give ourselves a generous ceiling
+ * so a slow CI runner can't flake the test. */
+static void wait_for_state(shutdown_mgr_t *mgr, shutdown_state_t want,
+                           int timeout_ms)
+{
+    shutdown_status_t st = {0};
+    for (int waited = 0; waited < timeout_ms; waited += 10) {
+        shutdown_get_status(mgr, &st);
+        shutdown_state_t got = st.state;
+        shutdown_status_free(&st);
+        if (got == want) return;
+        struct timespec ts = { .tv_nsec = 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    fail_msg("workflow did not reach state %d within %d ms", want, timeout_ms);
+}
+
+static void test_async_idle_state_before_start(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    shutdown_status_t st = {0};
+    shutdown_get_status(ctx->mgr, &st);
+    assert_int_equal(st.state, SHUTDOWN_IDLE);
+    assert_int_equal(st.workflow_id, 0);
+    assert_int_equal(st.n_steps, 0);
+    assert_null(st.steps);
+    shutdown_status_free(&st);
+}
+
+static void test_async_start_runs_to_completion(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    /* Set up a single sequential group with one quick command target so
+     * the worker has something to write into the snapshot before it
+     * transitions to COMPLETED. */
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('async-grp', 0, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "async-tgt", "/bin/true"),
+                     CUTILS_OK);
+
+    uint64_t id = 0;
+    assert_int_equal(shutdown_start_async(ctx->mgr, 0, &id), CUTILS_OK);
+    assert_int_equal(id, 1);
+
+    wait_for_state(ctx->mgr, SHUTDOWN_COMPLETED, 5000);
+
+    shutdown_status_t st = {0};
+    shutdown_get_status(ctx->mgr, &st);
+    assert_int_equal(st.state, SHUTDOWN_COMPLETED);
+    assert_int_equal(st.workflow_id, 1);
+    assert_int_equal(st.dry_run, 0);
+    assert_int_equal(st.all_ok, 1);
+    assert_int_equal(st.n_failed, 0);
+    /* Phase 1 (the target) + Phase 2 (skipped, ups_mode=none) +
+     * Phase 3 (skipped, controller_enabled=0) = 3 rows. */
+    assert_int_equal(st.n_steps, 3);
+    assert_non_null(st.steps);
+    assert_string_equal(st.steps[0].phase, "phase1");
+    assert_string_equal(st.steps[0].target, "async-grp/async-tgt");
+    assert_int_equal(st.steps[0].ok, 0);
+    shutdown_status_free(&st);
+}
+
+static void test_async_second_start_returns_ealready(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    /* Use a sleep target so the workflow is reliably still running when
+     * we issue the second start_async. `sleep 1` is short enough to keep
+     * the test fast but long enough that a 5ms-old worker can't have
+     * finished yet. */
+    assert_int_equal(db_exec_raw(ctx->db,
+        "INSERT INTO shutdown_groups (name, execution_order, parallel, "
+        "max_timeout_sec, post_group_delay) VALUES ('busy-grp', 0, 0, 0, 0)"),
+        CUTILS_OK);
+    assert_int_equal(insert_command_target(ctx->db, 1, "busy-tgt", "/bin/sleep 1"),
+                     CUTILS_OK);
+
+    uint64_t first = 0;
+    assert_int_equal(shutdown_start_async(ctx->mgr, 0, &first), CUTILS_OK);
+    assert_int_equal(first, 1);
+
+    /* Second start while first is still running: -EALREADY, *out_id is
+     * the id of the in-flight workflow (not a new one). */
+    uint64_t conflict = 0;
+    int rc = shutdown_start_async(ctx->mgr, 1, &conflict);
+    assert_int_equal(rc, -EALREADY);
+    assert_int_equal(conflict, first);
+
+    /* Wait it out so teardown's shutdown_free can join cleanly. */
+    wait_for_state(ctx->mgr, SHUTDOWN_COMPLETED, 5000);
+}
+
+static void test_async_completed_then_restart_increments_id(void **state)
+{
+    test_ctx_t *ctx = *state;
+
+    /* No groups configured — workflow has zero phase-1 steps but
+     * still emits phase-2 (skipped) and phase-3 (skipped) rows, so
+     * the COMPLETED transition fires almost immediately. */
+    assert_int_equal(shutdown_start_async(ctx->mgr, 1, NULL), CUTILS_OK);
+    wait_for_state(ctx->mgr, SHUTDOWN_COMPLETED, 5000);
+
+    shutdown_status_t st = {0};
+    shutdown_get_status(ctx->mgr, &st);
+    assert_int_equal(st.workflow_id, 1);
+    assert_int_equal(st.dry_run, 1);
+    shutdown_status_free(&st);
+
+    /* A start after a completed run resets the snapshot and bumps the id. */
+    uint64_t second_id = 0;
+    assert_int_equal(shutdown_start_async(ctx->mgr, 0, &second_id), CUTILS_OK);
+    assert_int_equal(second_id, 2);
+
+    wait_for_state(ctx->mgr, SHUTDOWN_COMPLETED, 5000);
+
+    shutdown_get_status(ctx->mgr, &st);
+    assert_int_equal(st.workflow_id, 2);
+    assert_int_equal(st.dry_run, 0);
+    shutdown_status_free(&st);
+}
+
+static void test_async_status_free_handles_null_and_zero(void **state)
+{
+    (void)state;
+    shutdown_status_free(NULL);          /* no-op */
+    shutdown_status_t empty = {0};
+    shutdown_status_free(&empty);        /* no-op on a zeroed struct */
+    /* Idempotent: second call after free clears nothing. */
+    shutdown_status_free(&empty);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1182,6 +1324,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_execute_ex_dry_run_validates_command_target, setup, teardown),
         cmocka_unit_test_setup_teardown(test_execute_ex_null_out_is_safe, setup, teardown),
         cmocka_unit_test(test_shutdown_result_free_handles_null),
+        /* async workflow */
+        cmocka_unit_test_setup_teardown(test_async_idle_state_before_start,            setup, teardown),
+        cmocka_unit_test_setup_teardown(test_async_start_runs_to_completion,           setup, teardown),
+        cmocka_unit_test_setup_teardown(test_async_second_start_returns_ealready,      setup, teardown),
+        cmocka_unit_test_setup_teardown(test_async_completed_then_restart_increments_id, setup, teardown),
+        cmocka_unit_test(test_async_status_free_handles_null_and_zero),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

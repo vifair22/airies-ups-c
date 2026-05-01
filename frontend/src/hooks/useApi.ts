@@ -46,6 +46,16 @@ export function useApi<T>(url: string, interval?: number) {
   return { data, error, loading, refetch: fetchData }
 }
 
+export async function apiGet<T>(url: string): Promise<T> {
+  const res = await fetch(url, { headers: authHeaders() })
+  if (res.status === 401) {
+    localStorage.removeItem('auth_token')
+    window.location.href = '/login'
+    throw new Error('unauthorized')
+  }
+  return res.json()
+}
+
 export async function apiPost<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
