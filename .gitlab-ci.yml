@@ -12,6 +12,11 @@ variables:
   # must match so the cross-compiled binary's libc/libssl ABI lines up with
   # what's actually installed on upspi/upspi2/upspi3.
   DEBIAN_FRONTEND: noninteractive
+  # Opt in to gitlab-advanced-sast (Ultimate-only deeper analyzer for JS/TS
+  # and other supported languages). The SAST template gates this job behind
+  # `GITLAB_ADVANCED_SAST_ENABLED`; without it, semgrep-sast falls back to
+  # scanning all languages including JS/TS with the basic ruleset.
+  GITLAB_ADVANCED_SAST_ENABLED: "true"
 
 # GitLab Ultimate security scanning templates. Findings populate the MR
 # security widget and the project Vulnerability Report dashboard. The
@@ -19,7 +24,8 @@ variables:
 # pipeline — Coverage-Check + branch protection remain the hard gates.
 #
 # Language coverage on this repo:
-#   - gitlab-advanced-sast scans the React/TS frontend (*.ts, *.tsx, *.js)
+#   - gitlab-advanced-sast scans the React/TS frontend (*.ts, *.tsx, *.js).
+#     Opt-in via $GITLAB_ADVANCED_SAST_ENABLED above.
 #   - semgrep-sast covers the C code (*.c, *.h); the SAST template
 #     auto-partitions extensions between the two analyzers when Ultimate is
 #     active, so neither double-scans the other's languages.
