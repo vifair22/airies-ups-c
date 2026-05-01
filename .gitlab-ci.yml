@@ -30,12 +30,19 @@ variables:
 #     auto-partitions extensions between the two analyzers when Ultimate is
 #     active, so neither double-scans the other's languages.
 #   - secret_detection runs gitleaks-style scanning on every commit.
-#   - sbom:bun:frontend (custom job below) emits a CycloneDX SBOM for the
-#     frontend's bun.lock. The Dependency-Scanning template's gemnasium
-#     analyzer does not recognize bun.lock; cdxgen does, and GitLab consumes
-#     the resulting SBOM via reports.cyclonedx — populating the Dependencies
-#     tab and feeding Continuous Vulnerability Scanning's recurring re-match
-#     against the pm_advisories CVE database.
+#   - sbom:bun:frontend (custom job) emits a CycloneDX SBOM for the
+#     frontend's bun.lock. Neither the gemnasium analyzer nor GitLab's
+#     newer dependency-scanning:1 analyzer recognizes bun.lock; cdxgen
+#     does. GitLab consumes the SBOM via reports.cyclonedx — populating
+#     the Dependencies tab and feeding Continuous Vulnerability Scanning's
+#     recurring re-match against the pm_advisories CVE database.
+#   - dependency_scanning:frontend (custom job) reads cdxgen's SBOM with
+#     trivy in `sbom` mode and emits a gemnasium-format dependency scanning
+#     report so the MR security widget surfaces package CVEs inline. Done
+#     as a chained job rather than `trivy fs` against bun.lock directly
+#     because Trivy's bun-lockfile parser only walks direct dependencies
+#     (8 of 324 components on this repo); feeding cdxgen's full transitive
+#     SBOM into Trivy gets vulnerability matching across the complete tree.
 #
 # Out of pilot scope (follow-up MRs):
 #   - Container-Scanning: needs to chain after `package:docker` and point at
@@ -93,6 +100,43 @@ sbom:bun:frontend:
       - gl-sbom-frontend-bun.cdx.json
     reports:
       cyclonedx: gl-sbom-frontend-bun.cdx.json
+    expire_in: 1 week
+  allow_failure: true
+
+# Vulnerability scan against the cdxgen-produced SBOM. Trivy's `sbom` mode
+# reads CycloneDX 1.5 input directly, and the official Trivy image ships a
+# GitLab template at /contrib/gitlab.tpl that emits gemnasium-format
+# `gl-dependency-scanning-report.json`. Output appears in the MR security
+# widget's Dependency Scanning section and the Vulnerability Report
+# dashboard.
+dependency_scanning:frontend:
+  stage: analyze
+  image:
+    name: aquasec/trivy:0.70.0
+    entrypoint: [""]
+  tags:
+    - docker
+  needs:
+    - sbom:bun:frontend
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  cache:
+    key: trivy-vuln-db
+    paths:
+      - .trivycache/
+  script:
+    - trivy sbom
+        --format template
+        --template "@/contrib/gitlab.tpl"
+        --output gl-dependency-scanning-report.json
+        gl-sbom-frontend-bun.cdx.json
+    - test -s gl-dependency-scanning-report.json
+  artifacts:
+    paths:
+      - gl-dependency-scanning-report.json
+    reports:
+      dependency_scanning: gl-dependency-scanning-report.json
     expire_in: 1 week
   allow_failure: true
 
