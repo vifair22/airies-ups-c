@@ -1,5 +1,12 @@
 # airies-ups
 
+[![pipeline](https://git.airies.net/vifair22/airies-ups-c/badges/master/pipeline.svg)](https://git.airies.net/vifair22/airies-ups-c/-/commits/master)
+[![coverage](https://git.airies.net/vifair22/airies-ups-c/badges/master/coverage.svg)](https://git.airies.net/vifair22/airies-ups-c/-/commits/master)
+[![release](https://git.airies.net/vifair22/airies-ups-c/-/badges/release.svg)](https://git.airies.net/vifair22/airies-ups-c/-/releases)
+[![license](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![C11](https://img.shields.io/badge/C-11-A8B9CC.svg?logo=c)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
+[![platforms](https://img.shields.io/badge/platform-linux--amd64%20%7C%20linux--arm64-lightgrey.svg)](#docker)
+
 UPS management platform — replaces APC PowerChute with a self-contained daemon plus web UI that talks to the hardware directly. One Raspberry Pi per UPS; one daemon per Pi; no NUT, no PowerChute, no cloud dependency.
 
 ## What it does
