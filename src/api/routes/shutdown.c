@@ -596,6 +596,70 @@ static api_response_t handle_shutdown_settings_set(const api_request_t *req, voi
 #undef SET_STR_IF
 #undef SET_I32_IF
 #undef SET_BOOL_IF
+
+/* --- Workflow status (polled by the UI during a run) --- */
+
+static const char *state_to_str(shutdown_state_t s)
+{
+    switch (s) {
+        case SHUTDOWN_IDLE:      return "idle";
+        case SHUTDOWN_RUNNING:   return "running";
+        case SHUTDOWN_COMPLETED: return "completed";
+    }
+    return "idle";
+}
+
+static api_response_t handle_workflow_status(const api_request_t *req, void *ud)
+{
+    (void)req;
+    route_ctx_t *ctx = ud;
+    if (!ctx->shutdown) return api_error(503, "shutdown manager unavailable");
+
+    shutdown_status_t st = {0};
+    shutdown_get_status(ctx->shutdown, &st);
+
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK) {
+        shutdown_status_free(&st);
+        return api_error(500, cutils_get_error());
+    }
+
+    /* Idle: shape stays consistent with running/completed so the
+     * UI doesn't have to special-case the missing fields, but
+     * counters and timestamps come back as zeroes. */
+    ADD_OR_FAIL(json_resp_add_str (resp, "state",          state_to_str(st.state)));
+    ADD_OR_FAIL(json_resp_add_u64 (resp, "workflow_id",    st.workflow_id));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "dry_run",        st.dry_run));
+    ADD_OR_FAIL(json_resp_add_i64 (resp, "started_at",     (int64_t)st.started_at));
+    ADD_OR_FAIL(json_resp_add_i64 (resp, "finished_at",    (int64_t)st.finished_at));
+    ADD_OR_FAIL(json_resp_add_str (resp, "current_phase",  st.current_phase));
+    ADD_OR_FAIL(json_resp_add_str (resp, "current_target", st.current_target));
+    ADD_OR_FAIL(json_resp_add_u64 (resp, "n_steps",        (uint64_t)st.n_steps));
+    ADD_OR_FAIL(json_resp_add_u64 (resp, "n_failed",       (uint64_t)st.n_failed));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "all_ok",         st.all_ok));
+
+    if (json_resp_ensure_array(resp, "steps") != CUTILS_OK) {
+        shutdown_status_free(&st);
+        return api_error(500, cutils_get_error());
+    }
+    for (size_t i = 0; i < st.n_steps; i++) {
+        const shutdown_step_result_t *s = &st.steps[i];
+        CUTILS_AUTO_JSON_ELEM cutils_json_elem_t elem;
+        if (json_resp_array_append_begin(resp, "steps", &elem) != CUTILS_OK ||
+            json_elem_add_str(&elem, "phase",  s->phase)       != CUTILS_OK ||
+            json_elem_add_str(&elem, "target", s->target)      != CUTILS_OK ||
+            json_elem_add_i32(&elem, "ok",     s->ok)          != CUTILS_OK ||
+            json_elem_add_str(&elem, "error",  s->error)       != CUTILS_OK) {
+            shutdown_status_free(&st);
+            return api_error(500, cutils_get_error());
+        }
+        json_elem_commit(&elem);
+    }
+
+    shutdown_status_free(&st);
+    return finalize_ok(resp);
+}
+
 #undef ADD_OR_FAIL
 #undef CFG_SET_OR_FAIL
 
@@ -615,4 +679,5 @@ void api_register_shutdown_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/shutdown/targets/test_confirm", API_POST, handle_shutdown_targets_test_confirm, ctx);
     api_server_route(srv, "/api/shutdown/settings", API_GET,    handle_shutdown_settings_get,  ctx);
     api_server_route(srv, "/api/shutdown/settings", API_POST,   handle_shutdown_settings_set,  ctx);
+    api_server_route(srv, "/api/shutdown/workflow/status", API_GET, handle_workflow_status,    ctx);
 }

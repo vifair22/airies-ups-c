@@ -4,6 +4,7 @@
 #include <cutils/error.h>
 #include <cutils/mem.h>
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,22 @@ struct shutdown_mgr {
     /* Trigger state */
     time_t              trigger_first_met;  /* when condition first became true (0=not met) */
     int                 triggered;          /* 1 = workflow already fired, don't re-trigger */
+
+    /* Async workflow state — all fields below are guarded by state_lock.
+     * The worker thread mirrors per-step results into `snapshot` (under
+     * lock) so a polled reader sees progress as it happens, not just at
+     * the end. `worker` is joinable iff `worker_started`. */
+    pthread_mutex_t     state_lock;
+    pthread_t           worker;
+    int                 worker_started;
+    shutdown_state_t    state;
+    uint64_t            workflow_id;
+    int                 active_dry_run;
+    time_t              started_at;
+    time_t              finished_at;
+    char                current_phase[16];
+    char                current_target[96];
+    shutdown_result_t  *snapshot;           /* mgr-owned mirror of the worker's res */
 };
 
 /* Mirror a workflow milestone into the events table. NULL monitor is the
@@ -68,25 +85,59 @@ static int run_shell(const char *cmd)
  * final array back to the caller so the UI can show a per-step pass/
  * fail breakdown instead of a single "shutdown initiated" toast. */
 
-static void result_append(shutdown_result_t *res, const char *phase,
-                          const char *target, int ok, const char *err)
+/* Append a row to a result accumulator. Out-of-memory drops the row but
+ * keeps the workflow going — reporting fidelity is not worth aborting
+ * a real shutdown sequence over. */
+static void result_row_fill(shutdown_step_result_t *row, const char *phase,
+                            const char *target, int ok, const char *err)
 {
-    if (!res) return;
-    size_t cap = res->n_steps + 1;
-    shutdown_step_result_t *grow = realloc(res->steps, cap * sizeof(*grow));
-    if (!grow) return;          /* out of memory: drop the row, keep going */
-    res->steps = grow;
-
-    shutdown_step_result_t *row = &res->steps[res->n_steps];
     memset(row, 0, sizeof(*row));
     snprintf(row->phase,  sizeof(row->phase),  "%s", phase  ? phase  : "");
     snprintf(row->target, sizeof(row->target), "%s", target ? target : "");
     row->ok = ok;
     if (ok == 1)
         snprintf(row->error, sizeof(row->error), "%s", err ? err : "");
+}
 
+static void result_append_to(shutdown_result_t *res, const char *phase,
+                             const char *target, int ok, const char *err)
+{
+    if (!res) return;
+    size_t cap = res->n_steps + 1;
+    shutdown_step_result_t *grow = realloc(res->steps, cap * sizeof(*grow));
+    if (!grow) return;
+    res->steps = grow;
+    result_row_fill(&res->steps[res->n_steps], phase, target, ok, err);
     res->n_steps++;
     if (ok == 1) res->n_failed++;
+}
+
+/* Append a step row to the worker's local accumulator AND mirror the
+ * row into the manager's snapshot under state_lock so a concurrent
+ * shutdown_get_status sees progress as it happens. The mirror also
+ * updates current_phase / current_target so polled status carries a
+ * "what's running right now" pointer.
+ *
+ * Synchronous test paths (which call shutdown_execute_ex directly with
+ * mgr->state == SHUTDOWN_IDLE) skip the mirror — there's no live reader
+ * to publish to, and bypassing the lock keeps those tests free of any
+ * thread-safety dependencies. */
+static void result_append(shutdown_mgr_t *mgr, shutdown_result_t *res,
+                          const char *phase, const char *target,
+                          int ok, const char *err)
+{
+    result_append_to(res, phase, target, ok, err);
+
+    if (!mgr) return;
+    pthread_mutex_lock(&mgr->state_lock);
+    if (mgr->state == SHUTDOWN_RUNNING && mgr->snapshot) {
+        result_append_to(mgr->snapshot, phase, target, ok, err);
+        snprintf(mgr->current_phase,  sizeof(mgr->current_phase),
+                 "%s", phase  ? phase  : "");
+        snprintf(mgr->current_target, sizeof(mgr->current_target),
+                 "%s", target ? target : "");
+    }
+    pthread_mutex_unlock(&mgr->state_lock);
 }
 
 void shutdown_result_free(shutdown_result_t *res)
@@ -456,12 +507,12 @@ static void execute_group_parallel(shutdown_mgr_t *mgr, const char *group_name,
         snprintf(step_target, sizeof(step_target), "%s/%s",
                  group_name, targets->rows[t][0]);
         if (outcome[t] == 0)
-            result_append(res, "phase1", step_target, 0, NULL);
+            result_append(mgr, res, "phase1", step_target, 0, NULL);
         else if (outcome[t] == 2)
-            result_append(res, "phase1", step_target, 1,
+            result_append(mgr, res, "phase1", step_target, 1,
                           "killed: group timeout exceeded");
         else
-            result_append(res, "phase1", step_target, 1,
+            result_append(mgr, res, "phase1", step_target, 1,
                           "step failed (see daemon log)");
     }
 
@@ -485,7 +536,7 @@ static void execute_group_sequential(shutdown_mgr_t *mgr, const char *group_name
         if (max_timeout > 0 && time(NULL) - start >= max_timeout) {
             log_warn("group '%s' hit %ds ceiling, skipping remaining targets",
                      group_name, max_timeout);
-            result_append(res, "phase1", step_target, 2, NULL);
+            result_append(mgr, res, "phase1", step_target, 2, NULL);
             continue;
         }
 
@@ -499,7 +550,7 @@ static void execute_group_sequential(shutdown_mgr_t *mgr, const char *group_name
             targets->rows[t][9],
             atoi(targets->rows[t][10]));
         report(mgr, group_name, tname, ret == 0 ? "completed" : "failed");
-        result_append(res, "phase1", step_target,
+        result_append(mgr, res, "phase1", step_target,
                       ret == 0 ? 0 : 1,
                       ret == 0 ? NULL : cutils_get_error());
     }
@@ -516,11 +567,35 @@ shutdown_mgr_t *shutdown_create(cutils_db_t *db, ups_t *ups,
     mgr->ups = ups;
     mgr->config = config;
     mgr->monitor = mon;
+    mgr->state = SHUTDOWN_IDLE;
+    if (pthread_mutex_init(&mgr->state_lock, NULL) != 0) {
+        free(mgr);
+        return NULL;
+    }
     return mgr;
 }
 
 void shutdown_free(shutdown_mgr_t *mgr)
 {
+    if (!mgr) return;
+
+    /* Block until the worker has exited so its writes to mgr->snapshot
+     * are visible — and so we don't free mgr out from under it. The
+     * controller-poweroff path of a real shutdown never reaches here
+     * (systemd SIGTERMs us first); this matters mostly for unit tests
+     * and clean app shutdown. */
+    pthread_mutex_lock(&mgr->state_lock);
+    pthread_t   prior       = mgr->worker;
+    int         prior_valid = mgr->worker_started;
+    mgr->worker_started     = 0;
+    pthread_mutex_unlock(&mgr->state_lock);
+    if (prior_valid) pthread_join(prior, NULL);
+
+    if (mgr->snapshot) {
+        free(mgr->snapshot->steps);
+        free(mgr->snapshot);
+    }
+    pthread_mutex_destroy(&mgr->state_lock);
     free(mgr);
 }
 
@@ -619,7 +694,7 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                     int probe_rc = test_target_connectivity(method, host, user, cred);
                     if (probe_rc == 0) {
                         report(mgr, group_name, tname, "validated");
-                        result_append(res, "phase1", step_target, 0, NULL);
+                        result_append(mgr, res, "phase1", step_target, 0, NULL);
                     } else {
                         report(mgr, group_name, tname, "validation FAILED");
                         /* method/host/user are NOT NULL per the schema;
@@ -630,7 +705,7 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                         char err[256];
                         snprintf(err, sizeof(err),
                                  "%s probe to %s@%s failed", method, user, host);
-                        result_append(res, "phase1", step_target, 1, err);
+                        result_append(mgr, res, "phase1", step_target, 1, err);
                     }
                 }
             } else if (parallel) {
@@ -669,16 +744,16 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
 
     if (strcmp(ups_mode, "none") == 0) {
         log_info("UPS action: none (skipped)");
-        result_append(res, "phase2", "ups", 2, NULL);
+        result_append(mgr, res, "phase2", "ups", 2, NULL);
     } else if (strcmp(ups_mode, "command") == 0) {
         if (dry_run) {
             const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
             if (sd) {
                 log_info("UPS action: would send '%s'", sd->name);
-                result_append(res, "phase2", "ups", 0, NULL);
+                result_append(mgr, res, "phase2", "ups", 0, NULL);
             } else {
                 log_error("UPS action: driver advertises no shutdown command");
-                result_append(res, "phase2", "ups", 1,
+                result_append(mgr, res, "phase2", "ups", 1,
                               "driver advertises no shutdown command");
             }
         } else {
@@ -686,10 +761,10 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
             const ups_cmd_desc_t *sd = ups_find_command_flag(mgr->ups, UPS_CMD_IS_SHUTDOWN);
             if (sd && ups_cmd_execute(mgr->ups, sd->name, 0) == 0) {
                 log_info("UPS shutdown command accepted");
-                result_append(res, "phase2", "ups", 0, NULL);
+                result_append(mgr, res, "phase2", "ups", 0, NULL);
             } else {
                 log_error("UPS shutdown command FAILED");
-                result_append(res, "phase2", "ups", 1,
+                result_append(mgr, res, "phase2", "ups", 1,
                               sd ? cutils_get_error()
                                  : "UPS shutdown command not supported by driver");
             }
@@ -700,7 +775,7 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
         if (dry_run) {
             log_info("UPS action: would write %d to register '%s'",
                      raw_val, reg_name ? reg_name : "");
-            result_append(res, "phase2", "ups",
+            result_append(mgr, res, "phase2", "ups",
                           (reg_name && reg_name[0]) ? 0 : 1,
                           (reg_name && reg_name[0]) ? NULL
                               : "shutdown.ups_register is empty");
@@ -710,24 +785,24 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
             if (reg && reg->writable) {
                 if (ups_config_write(mgr->ups, reg, (uint16_t)raw_val) == 0) {
                     log_info("UPS register write accepted");
-                    result_append(res, "phase2", "ups", 0, NULL);
+                    result_append(mgr, res, "phase2", "ups", 0, NULL);
                 } else {
                     log_error("UPS register write FAILED");
-                    result_append(res, "phase2", "ups", 1, cutils_get_error());
+                    result_append(mgr, res, "phase2", "ups", 1, cutils_get_error());
                 }
             } else {
                 log_error("UPS register '%s' not found or not writable", reg_name);
-                result_append(res, "phase2", "ups", 1,
+                result_append(mgr, res, "phase2", "ups", 1,
                               "register not found or not writable");
             }
         } else {
             log_error("UPS action mode is 'register' but no register name configured");
-            result_append(res, "phase2", "ups", 1,
+            result_append(mgr, res, "phase2", "ups", 1,
                           "shutdown.ups_register is empty");
         }
     } else {
         log_warn("unknown UPS action mode: '%s'", ups_mode);
-        result_append(res, "phase2", "ups", 1, "unknown shutdown.ups_mode");
+        result_append(mgr, res, "phase2", "ups", 1, "unknown shutdown.ups_mode");
     }
 
     /* Phase 2 summary event. */
@@ -782,7 +857,7 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
 
     if (is_docker_build) {
         log_info("Controller: skipped (docker build cannot power off host)");
-        result_append(res, "phase3", "controller", 2, NULL);
+        result_append(mgr, res, "phase3", "controller", 2, NULL);
     } else if (ctrl_enabled) {
         if (dry_run) {
             /* Ask logind directly via D-Bus whether the calling user can
@@ -797,10 +872,10 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                 "| grep -q '\"yes\"'");
             if (can_rc == 0) {
                 log_info("Controller: logind would authorize poweroff");
-                result_append(res, "phase3", "controller", 0, NULL);
+                result_append(mgr, res, "phase3", "controller", 0, NULL);
             } else {
                 log_error("Controller: logind refused poweroff (polkit grant missing?)");
-                result_append(res, "phase3", "controller", 1,
+                result_append(mgr, res, "phase3", "controller", 1,
                               "logind refused poweroff (polkit grant missing?)");
             }
         } else {
@@ -822,17 +897,17 @@ int shutdown_execute_ex(shutdown_mgr_t *mgr, int dry_run,
                 log_warn("controller shutdown command returned %d", shut_rc);
                 char buf[64];
                 snprintf(buf, sizeof(buf), "systemctl poweroff exited %d", shut_rc);
-                result_append(res, "phase3", "controller", 1, buf);
+                result_append(mgr, res, "phase3", "controller", 1, buf);
                 emit_event(mgr, "error", "Controller Poweroff Failed", buf);
                 real_poweroff_failed = 1;
             } else {
-                result_append(res, "phase3", "controller", 0, NULL);
+                result_append(mgr, res, "phase3", "controller", 0, NULL);
                 real_poweroff_initiated = 1;
             }
         }
     } else {
         log_info("Controller: shutdown disabled (skipped)");
-        result_append(res, "phase3", "controller", 2, NULL);
+        result_append(mgr, res, "phase3", "controller", 2, NULL);
     }
 
     char msg[128];
@@ -983,11 +1058,18 @@ void shutdown_check_trigger(shutdown_mgr_t *mgr, const ups_data_t *data)
     if (now - mgr->trigger_first_met < delay_sec)
         return;
 
-    /* Fire */
+    /* Fire — kick the workflow off on the worker thread so the monitor
+     * poll loop (which calls us) keeps running. The auto-trigger path
+     * is fire-and-forget; status flows through the same get_status
+     * surface the API uses. */
     log_error("SHUTDOWN TRIGGER: conditions held for %lds — executing workflow",
               now - mgr->trigger_first_met);
     mgr->triggered = 1;
-    shutdown_execute(mgr, 0);
+    int rc = shutdown_start_async(mgr, 0, NULL);
+    if (rc != CUTILS_OK && rc != -EALREADY) {
+        log_error("auto-trigger: failed to start workflow: %s",
+                  cutils_get_error());
+    }
 }
 
 int shutdown_test_target(shutdown_mgr_t *mgr, const char *target_name)
@@ -1047,4 +1129,146 @@ int shutdown_test_target_confirm(shutdown_mgr_t *mgr, const char *target_name)
                   target_name, method ? method : "?");
 
     return rc;
+}
+
+/* --- Async workflow --- */
+
+static void *worker_main(void *arg)
+{
+    shutdown_mgr_t *mgr = arg;
+
+    int dry_run;
+    pthread_mutex_lock(&mgr->state_lock);
+    dry_run = mgr->active_dry_run;
+    pthread_mutex_unlock(&mgr->state_lock);
+
+    /* Run the workflow body. result_append (called from inside) mirrors
+     * each step into mgr->snapshot under the state_lock so polled
+     * readers see live progress. The local `res` here is redundant but
+     * keeps shutdown_execute_ex's existing test-friendly out param
+     * working — we just discard it. */
+    shutdown_result_t *res = NULL;
+    (void)shutdown_execute_ex(mgr, dry_run, &res);
+    shutdown_result_free(res);
+
+    pthread_mutex_lock(&mgr->state_lock);
+    mgr->state       = SHUTDOWN_COMPLETED;
+    mgr->finished_at = time(NULL);
+    pthread_mutex_unlock(&mgr->state_lock);
+
+    return NULL;
+}
+
+int shutdown_start_async(shutdown_mgr_t *mgr, int dry_run, uint64_t *out_id)
+{
+    if (!mgr) return set_error(CUTILS_ERR_INVALID, "shutdown_start_async: mgr is NULL");
+
+    pthread_t prior;
+    int       prior_valid;
+
+    pthread_mutex_lock(&mgr->state_lock);
+
+    if (mgr->state == SHUTDOWN_RUNNING) {
+        if (out_id) *out_id = mgr->workflow_id;
+        pthread_mutex_unlock(&mgr->state_lock);
+        return -EALREADY;
+    }
+
+    /* Capture the previous run's worker handle so we can join it
+     * outside the lock (pthread_join can be slow if the thread is
+     * still wrapping up an emit_event DB write). */
+    prior               = mgr->worker;
+    prior_valid         = mgr->worker_started;
+    mgr->worker_started = 0;
+
+    /* Reset snapshot for the new run. The completed snapshot from a
+     * prior workflow lingers until exactly this point — that's the
+     * "until next start" retention contract from the API plan. */
+    if (mgr->snapshot) {
+        free(mgr->snapshot->steps);
+        free(mgr->snapshot);
+        mgr->snapshot = NULL;
+    }
+    mgr->snapshot = calloc(1, sizeof(*mgr->snapshot));
+    /* If alloc fails the worker still runs; per-step mirroring drops
+     * the row but the workflow itself proceeds — same trade-off as
+     * the original res allocation. */
+
+    mgr->state              = SHUTDOWN_RUNNING;
+    mgr->active_dry_run     = dry_run ? 1 : 0;
+    mgr->workflow_id       += 1;
+    mgr->started_at         = time(NULL);
+    mgr->finished_at        = 0;
+    mgr->current_phase[0]   = '\0';
+    mgr->current_target[0]  = '\0';
+    if (out_id) *out_id     = mgr->workflow_id;
+
+    pthread_mutex_unlock(&mgr->state_lock);
+
+    if (prior_valid) pthread_join(prior, NULL);
+
+    pthread_t newt;
+    int rc = pthread_create(&newt, NULL, worker_main, mgr);
+    if (rc != 0) {
+        pthread_mutex_lock(&mgr->state_lock);
+        mgr->state       = SHUTDOWN_IDLE;
+        mgr->finished_at = time(NULL);
+        pthread_mutex_unlock(&mgr->state_lock);
+        return set_error(CUTILS_ERR, "failed to spawn shutdown worker: %s",
+                         strerror(rc));
+    }
+
+    pthread_mutex_lock(&mgr->state_lock);
+    mgr->worker         = newt;
+    mgr->worker_started = 1;
+    pthread_mutex_unlock(&mgr->state_lock);
+
+    return CUTILS_OK;
+}
+
+void shutdown_get_status(shutdown_mgr_t *mgr, shutdown_status_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!mgr) return;
+
+    pthread_mutex_lock(&mgr->state_lock);
+
+    out->state       = mgr->state;
+    out->workflow_id = mgr->workflow_id;
+    out->dry_run     = mgr->active_dry_run;
+    out->started_at  = mgr->started_at;
+    out->finished_at = mgr->finished_at;
+    snprintf(out->current_phase,  sizeof(out->current_phase),
+             "%s", mgr->current_phase);
+    snprintf(out->current_target, sizeof(out->current_target),
+             "%s", mgr->current_target);
+
+    if (mgr->snapshot && mgr->snapshot->n_steps > 0) {
+        out->n_steps  = mgr->snapshot->n_steps;
+        out->n_failed = mgr->snapshot->n_failed;
+        out->steps    = malloc(out->n_steps * sizeof(*out->steps));
+        if (out->steps) {
+            memcpy(out->steps, mgr->snapshot->steps,
+                   out->n_steps * sizeof(*out->steps));
+        } else {
+            /* Allocation failure: drop the array but keep the
+             * scalar counters so the caller can at least render
+             * "N steps, M failed". */
+            out->n_steps = 0;
+        }
+    }
+
+    out->all_ok = (mgr->state == SHUTDOWN_COMPLETED && out->n_failed == 0)
+                  ? 1 : 0;
+
+    pthread_mutex_unlock(&mgr->state_lock);
+}
+
+void shutdown_status_free(shutdown_status_t *out)
+{
+    if (!out) return;
+    free(out->steps);
+    out->steps   = NULL;
+    out->n_steps = 0;
 }

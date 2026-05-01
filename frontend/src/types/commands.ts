@@ -24,11 +24,27 @@ export interface ShutdownStep {
 export interface CmdResult {
   result?:   string
   error?:    string
-  /* Populated only by the shutdown_workflow action. */
-  all_ok?:   boolean
-  n_steps?:  number
-  n_failed?: number
-  steps?:    ShutdownStep[]
+  /* Populated by the shutdown_workflow start path (202 / 409). The
+   * full step list and counters now live on /api/shutdown/workflow/status
+   * and arrive via WorkflowStatus, not here. */
+  workflow_id?: number
+  dry_run?:     boolean
+}
+
+export type WorkflowState = 'idle' | 'running' | 'completed'
+
+export interface WorkflowStatus {
+  state:          WorkflowState
+  workflow_id:    number
+  dry_run:        boolean
+  started_at:     number
+  finished_at:    number
+  current_phase:  string
+  current_target: string
+  n_steps:        number
+  n_failed:       number
+  all_ok:         boolean
+  steps:          ShutdownStep[]
 }
 
 export interface Toast {
