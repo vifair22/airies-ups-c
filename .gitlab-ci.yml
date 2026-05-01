@@ -30,14 +30,17 @@ variables:
 #     auto-partitions extensions between the two analyzers when Ultimate is
 #     active, so neither double-scans the other's languages.
 #   - secret_detection runs gitleaks-style scanning on every commit.
+#   - sbom:bun:frontend (custom job below) emits a CycloneDX SBOM for the
+#     frontend's bun.lock. The Dependency-Scanning template's gemnasium
+#     analyzer does not recognize bun.lock; cdxgen does, and GitLab consumes
+#     the resulting SBOM via reports.cyclonedx — populating the Dependencies
+#     tab and feeding Continuous Vulnerability Scanning's recurring re-match
+#     against the pm_advisories CVE database.
 #
 # Out of pilot scope (follow-up MRs):
 #   - Container-Scanning: needs to chain after `package:docker` and point at
 #     $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA; default CS_IMAGE wiring
 #     assumes Auto DevOps tagging.
-#   - Dependency-Scanning: gemnasium does not recognize bun.lock; needs a
-#     `bun pm` -> CycloneDX SBOM adapter step before it can read frontend
-#     deps.
 include:
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/Secret-Detection.gitlab-ci.yml
@@ -57,6 +60,38 @@ secret_detection:
   stage: analyze
   tags:
     - docker
+
+# CycloneDX SBOM for the frontend's bun.lock. cdxgen parses the bun lockfile
+# format directly (gemnasium does not). The artifact filename pattern
+# `gl-sbom-*.cdx.json` matches the template's .cyclonedx-reports glob, so
+# GitLab ingests it identically to the gemnasium-produced SBOMs on
+# package-lock.json / yarn.lock / pnpm-lock.yaml projects.
+sbom:bun:frontend:
+  stage: analyze
+  image:
+    name: ghcr.io/cyclonedx/cdxgen:v11
+    entrypoint: [""]
+  tags:
+    - docker
+  needs: []
+  variables:
+    # cdxgen phones home for vulnerability lookups by default; disable since
+    # GitLab's Continuous Vulnerability Scanning handles that downstream.
+    FETCH_LICENSE: "false"
+    CDXGEN_DEBUG_MODE: "info"
+  script:
+    - cdxgen --type bun --spec-version 1.5
+        --output gl-sbom-frontend-bun.cdx.json
+        --no-recurse
+        frontend
+    - test -s gl-sbom-frontend-bun.cdx.json
+  artifacts:
+    paths:
+      - gl-sbom-frontend-bun.cdx.json
+    reports:
+      cyclonedx: gl-sbom-frontend-bun.cdx.json
+    expire_in: 1 week
+  allow_failure: true
 
 # Native build + run all tests (C cmocka suite + frontend Vitest).
 test:
