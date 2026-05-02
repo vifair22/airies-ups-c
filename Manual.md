@@ -2,7 +2,7 @@
 
 Operations manual for `airies-ups`. Covers the system from sysadmin and operator perspectives — how it's structured, what it does at runtime, how to configure it, what every page of the web UI does, and where to look when something is wrong.
 
-For build, deploy, CI, and toolchain detail, see [DEPLOY.md](DEPLOY.md). For driver internals, see [driver-api.md](driver-api.md).
+For driver internals, see [driver-api.md](driver-api.md). For build instructions, see the [README](README.md).
 
 ---
 
@@ -57,7 +57,7 @@ One daemon per UPS. Each Pi owns its UPS exclusively over a serial USB cable (Mo
 
 | Family | Transport | Driver | Verified models | Notes |
 |--------|-----------|--------|------------------|-------|
-| APC Smart-UPS SRT (online double-conversion) | Modbus RTU over USB-serial | `src/ups/ups_srt.c` | SRT 2200 | Full feature set: bypass, deep test, frequency tolerance, outlet groups |
+| APC Smart-UPS SRT (online double-conversion) | Modbus RTU over USB-serial | `src/ups/ups_srt.c` | SRT1000XLA (FW 16.5), SRT 2200 | Full feature set: bypass, deep test, frequency tolerance, outlet groups |
 | APC Smart-UPS SMT (line-interactive) | Modbus RTU over USB-serial | `src/ups/ups_smt.c` | SMT1500RM2UC (FW 04.1, ModbusMapID 00.5) | No bypass; no Green Mode write over Modbus (empirically — see project notes) |
 | APC Back-UPS / Smart-UPS HID | USB HID | `src/ups/ups_apc_hid.c` (+ `hid_pdc_core.c`) | Back-UPS ES 600M1 | APC vendor page (sensitivity, lights/beeper test, batt repl date); deep runtime calibration intentionally omitted (firmware rejects it) |
 | CyberPower PowerPanel HID | USB HID | `src/ups/ups_cyberpower_hid.c` (+ `hid_pdc_core.c`) | CP1500PFCLCD | Standard HID PDC only; no vendor extensions in this driver yet |
@@ -73,13 +73,9 @@ Hardware reference material lives under `docs/`:
 
 ## 3. Deployment topology
 
-| Hostname | UPS | Connection | Role |
-|----------|-----|-----------|------|
-| `upspi.internal.airies.net`  | APC SRT 2200             | Modbus RTU (USB serial) | Primary rack |
-| `upspi2.internal.airies.net` | APC Back-UPS ES 600M1    | USB HID                 | Workstation circuit |
-| `upspi3.internal.airies.net` | APC SMT1500RM2UC         | Modbus RTU (USB serial) | Secondary rack |
+One daemon per UPS, one host (typically a Raspberry Pi) per daemon. Each host owns its UPS exclusively over USB-serial (Modbus RTU) or USB HID.
 
-Each Pi is independent. There is no inter-daemon coordination — the orchestrated shutdown is between an `airies-upsd` and the hosts it shuts down (its dependents), not between daemons.
+Daemons are independent. There is no inter-daemon coordination — orchestrated shutdown is between an `airies-upsd` and the hosts it shuts down (its dependents), not between daemons. Multiple UPSes mean multiple daemons, each with its own dependent inventory.
 
 Web UI per-host: `http://<hostname>:8080`.
 
@@ -93,7 +89,7 @@ There are two layers.
 
 Read once at daemon startup, before SQLite is opened. Just enough to find the database, bind the HTTP server, and (optionally) describe the UPS connection. Everything else is in the DB.
 
-Path on the Pi: `/home/sysadmin/airies-ups/config.yaml`.
+Path on a `.deb`-installed host: `/var/lib/airies-ups/config.yaml`. Docker installs see the same path inside the container; map it via the `airies-ups-state` volume.
 
 Modbus RTU example:
 
@@ -131,7 +127,7 @@ The `ups:` block can be omitted on first install — the setup wizard fills it i
 
 ### 4.2 Runtime — SQLite
 
-`app.db` lives next to the binary. All runtime configuration is here, editable from the web UI:
+`app.db` lives next to `config.yaml` (`/var/lib/airies-ups/app.db` on `.deb` installs). All runtime configuration is here, editable from the web UI:
 
 | Concern | Page | What you set |
 |---------|------|--------------|
@@ -251,9 +247,9 @@ Status visible at `/config/weather` (current forecast, last poll, current decisi
 ### Where the logs go
 
 ```bash
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups -f"          # follow
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups -n 100"      # last 100 lines
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups --since '1 hour ago'"
+ssh <admin>@<host> "journalctl -u airies-ups -f"          # follow
+ssh <admin>@<host> "journalctl -u airies-ups -n 100"      # last 100 lines
+ssh <admin>@<host> "journalctl -u airies-ups --since '1 hour ago'"
 ```
 
 Log level is set in app config (`/config/app`) and applies to both the daemon's stdout (which systemd captures) and `journalctl`.
@@ -261,9 +257,9 @@ Log level is set in app config (`/config/app`) and applies to both the daemon's 
 ### Service control
 
 ```bash
-ssh sysadmin@<host> "systemctl status airies-ups"
-ssh sysadmin@<host> "sudo systemctl restart airies-ups"
-ssh sysadmin@<host> "sudo systemctl stop airies-ups"
+ssh <admin>@<host> "systemctl status airies-ups"
+ssh <admin>@<host> "sudo systemctl restart airies-ups"
+ssh <admin>@<host> "sudo systemctl stop airies-ups"
 ```
 
 Unit definition: `airies-ups.service` at the repo root (`Restart=on-failure`, `RestartSec=5`).
@@ -271,7 +267,7 @@ Unit definition: `airies-ups.service` at the repo root (`Restart=on-failure`, `R
 ### Database access
 
 ```bash
-ssh sysadmin@<host> "sqlite3 /home/sysadmin/airies-ups/app.db"
+ssh <admin>@<host> "sudo -u airies-ups sqlite3 /var/lib/airies-ups/app.db"
 ```
 
 Useful tables: `events`, `telemetry`, `app_config`, `ups_config`, `shutdown_groups`, `shutdown_targets`, `weather_state`.
@@ -291,14 +287,14 @@ Common causes: wrong `device` path in `config.yaml`; port 8080 already bound by 
 ### UPS not connecting (Modbus / serial)
 
 - Confirm the device path: `ls -l /dev/ttyUSB*`.
-- Confirm `sysadmin` is in the `dialout` group: `groups sysadmin`.
+- Confirm the `airies-ups` system user is in the `dialout` group: `id airies-ups`. (The `.deb`'s `postinst` joins it automatically; only re-check if you've installed by hand or hit a permission error.)
 - Confirm slave ID and baud match the UPS-side configuration.
 
 ### UPS not connecting (USB HID)
 
-- Confirm device on the bus: `lsusb | grep 051d`.
-- Confirm hidraw is accessible by `sysadmin`: `ls -l /dev/hidraw*`.
-- The udev rule in [DEPLOY.md](DEPLOY.md) sets `0660 plugdev` for APC VID 051d — re-run `udevadm control --reload-rules && udevadm trigger` after editing. CyberPower lives at VID 0764; add the matching rule if deploying that family.
+- Confirm the device is on the bus: `lsusb` (APC VID `051d`, CyberPower VID `0764`).
+- Confirm hidraw is accessible by `airies-ups`: `ls -l /dev/hidraw*`.
+- The `.deb` ships `99-airies-ups-ftdi.rules` (also in the repo root) and joins `airies-ups` to `plugdev`. If you're running outside the `.deb` (Docker, hand-built), copy the rule to `/etc/udev/rules.d/` on the host, then `sudo udevadm control --reload-rules && sudo udevadm trigger`.
 
 ### Modbus reads erratic right after a config write
 
@@ -310,7 +306,7 @@ Means the alert-state seed from the last persisted snapshot didn't load. Check t
 
 ### Frontend changes not visible after deploy
 
-The frontend bundle is **embedded into the daemon binary at compile time**. A frontend-only edit will not show up after a `systemctl restart` — you have to re-deploy the daemon binary (`./deploy.sh full <host>`).
+The frontend bundle is **embedded into the daemon binary at compile time**. A frontend-only edit will not show up after a `systemctl restart` — you have to rebuild and re-install the daemon (re-run the `.deb` install, or rebuild the Docker image).
 
 ### Port 8080 already in use locally
 
@@ -337,5 +333,5 @@ pkill -f airies-upsd
 | Service unit | `airies-ups.service` |
 | udev rule | `99-airies-ups-ftdi.rules` |
 | CI pipeline | `.gitlab-ci.yml` |
-| Local dev workflow | [DEPLOY.md](DEPLOY.md) §Local development |
+| Local dev workflow | [README.md](README.md) §Development |
 | Hardware reference | `docs/reference/apc-{smt,srt}-modbus.md`, `docs/vendor/` |
