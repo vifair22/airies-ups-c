@@ -95,9 +95,69 @@ const char *api_query_param(const api_request_t *req, const char *key)
     return MHD_lookup_connection_value(req->_conn, MHD_GET_ARGUMENT_KIND, key);
 }
 
+const char *api_cookie(const api_request_t *req, const char *name)
+{
+    if (!req->_conn) return NULL;
+    return MHD_lookup_connection_value(req->_conn, MHD_COOKIE_KIND, name);
+}
+
+/* --- Set-Cookie helpers ---
+ *
+ * Bake in HttpOnly + SameSite=Strict + Path=/ since those are correct
+ * for every cookie this app emits (auth state, no cross-site nav). The
+ * caller controls Secure (HTTPS-only flag) and Max-Age, which is where
+ * deployment differences live.
+ *
+ * Both helpers reject names/values containing control characters
+ * (\r, \n, ;) — these would let a caller smuggle additional headers
+ * or cookie attributes via the cookie pair. The set of valid cookie-
+ * value characters is broader than this conservative check, but every
+ * value we actually emit is a base64-encoded session token, so the
+ * narrow check is fine and simpler to audit. */
+
+static int safe_cookie_token(const char *s)
+{
+    for (const char *p = s; *p; p++) {
+        if (*p == '\r' || *p == '\n' || *p == ';' || *p == '"') return 0;
+    }
+    return 1;
+}
+
+char *api_cookie_set(const char *name, const char *value,
+                     int max_age, int secure)
+{
+    if (!name || !value) return NULL;
+    if (!safe_cookie_token(name) || !safe_cookie_token(value)) return NULL;
+
+    char buf[512];
+    int n;
+    if (max_age > 0) {
+        n = snprintf(buf, sizeof(buf),
+                     "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d%s",
+                     name, value, max_age, secure ? "; Secure" : "");
+    } else {
+        n = snprintf(buf, sizeof(buf),
+                     "%s=%s; HttpOnly; SameSite=Strict; Path=/%s",
+                     name, value, secure ? "; Secure" : "");
+    }
+    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+    return strdup(buf);
+}
+
+char *api_cookie_clear(const char *name, int secure)
+{
+    if (!name || !safe_cookie_token(name)) return NULL;
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+                     "%s=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0%s",
+                     name, secure ? "; Secure" : "");
+    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+    return strdup(buf);
+}
+
 static enum MHD_Result send_response(struct MHD_Connection *conn,
                                      int status, const char *content_type,
-                                     const char *body)
+                                     const char *body, const char *set_cookie)
 {
     size_t len = body ? strlen(body) : 0;
     /* MHD copies the buffer with RESPMEM_MUST_COPY, safe to discard const */
@@ -110,6 +170,11 @@ static enum MHD_Result send_response(struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", content_type);
     MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
     MHD_add_response_header(resp, "Access-Control-Allow-Headers", "Authorization, Content-Type");
+    /* set_cookie is built by api_cookie_set/api_cookie_clear, both of
+     * which reject control characters in name/value — so any string
+     * reaching here is safe to pass through without further validation. */
+    if (set_cookie)
+        MHD_add_response_header(resp, "Set-Cookie", set_cookie);
 
     enum MHD_Result ret = MHD_queue_response(conn, (unsigned int)status, resp);
     MHD_destroy_response(resp);
@@ -318,16 +383,17 @@ static enum MHD_Result request_handler(void *cls,
             free(pb);
             *req_cls = NULL;
             return send_response(conn, 401, "application/json",
-                "{\"error\":\"unauthorized\"}");
+                "{\"error\":\"unauthorized\"}", NULL);
         }
 
         api_response_t resp = route->handler(&req, route->userdata);
 
         enum MHD_Result ret = send_response(conn, resp.status,
             resp.content_type ? resp.content_type : "application/json",
-            resp.body);
+            resp.body, resp.set_cookie);
 
         free(resp.body);
+        free(resp.set_cookie);
         free(pb->data);
         free(pb);
         *req_cls = NULL;
@@ -363,7 +429,7 @@ static enum MHD_Result request_handler(void *cls,
     free(pb);
     *req_cls = NULL;
     return send_response(conn, 404, "application/json",
-                         "{\"error\":\"not found\"}");
+                         "{\"error\":\"not found\"}", NULL);
 }
 
 /* --- Public API --- */
