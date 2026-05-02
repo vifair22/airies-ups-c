@@ -14,6 +14,8 @@
 
 /* --- Test fixture: in-memory SQLite DB with auth schema --- */
 
+/* Mirrors migrations/006_auth.sql (auth) + 016_sessions_v2.sql (sessions).
+ * Kept as a literal so the test runs without the migration loader. */
 static const char *SCHEMA =
     "CREATE TABLE auth ("
     "  id            INTEGER PRIMARY KEY CHECK (id = 1),"
@@ -22,11 +24,19 @@ static const char *SCHEMA =
     "  updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))"
     ");"
     "CREATE TABLE sessions ("
-    "  token      TEXT PRIMARY KEY,"
-    "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
-    "  expires_at TEXT NOT NULL"
+    "  token        TEXT PRIMARY KEY,"
+    "  user_id      INTEGER,"
+    "  kind         TEXT NOT NULL DEFAULT 'session',"
+    "  name         TEXT,"
+    "  scopes       TEXT,"
+    "  created_at   TEXT NOT NULL DEFAULT (datetime('now')),"
+    "  last_used_at TEXT,"
+    "  expires_at   TEXT NOT NULL,"
+    "  revoked_at   TEXT"
     ");"
-    "CREATE INDEX idx_sessions_expires ON sessions(expires_at);";
+    "CREATE INDEX idx_sessions_expires ON sessions(expires_at);"
+    "CREATE INDEX idx_sessions_user    ON sessions(user_id);"
+    "CREATE INDEX idx_sessions_kind    ON sessions(kind);";
 
 static int setup(void **state)
 {
@@ -367,6 +377,239 @@ static void test_cleanup_nothing_expired(void **state)
     free(token);
 }
 
+/* --- api_cookie_set / api_cookie_clear (server.c helpers) ---
+ *
+ * These are pure string-building functions for the Set-Cookie response
+ * header. Tests cover the happy path, the Secure-on-HTTPS toggle, the
+ * Max-Age=0 (clear) variant, and rejection of control characters that
+ * would otherwise let a caller smuggle additional headers or cookie
+ * attributes through name/value. */
+
+static void test_cookie_set_basic(void **state)
+{
+    (void)state;
+    char *out = api_cookie_set("auth", "abc123", 7776000, 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/; Max-Age=7776000");
+    free(out);
+}
+
+static void test_cookie_set_secure(void **state)
+{
+    (void)state;
+    char *out = api_cookie_set("auth", "abc123", 3600, 1);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600; Secure");
+    free(out);
+}
+
+static void test_cookie_set_no_max_age(void **state)
+{
+    (void)state;
+    /* max_age=0 → session cookie, no Max-Age attribute */
+    char *out = api_cookie_set("auth", "abc123", 0, 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/");
+    free(out);
+}
+
+static void test_cookie_set_rejects_crlf_in_value(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth", "abc\r\nX-Inject: 1", 3600, 0));
+    assert_null(api_cookie_set("auth", "abc\nbad",            3600, 0));
+}
+
+static void test_cookie_set_rejects_semicolon_in_value(void **state)
+{
+    (void)state;
+    /* A semicolon would let the caller smuggle extra cookie attributes
+     * (e.g. value="x; Path=/admin"). Reject. */
+    assert_null(api_cookie_set("auth", "abc; Domain=evil.com", 3600, 0));
+}
+
+static void test_cookie_set_rejects_quote_in_value(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth", "abc\"def", 3600, 0));
+}
+
+static void test_cookie_set_rejects_crlf_in_name(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth\r\nX-Inject", "val", 3600, 0));
+}
+
+static void test_cookie_set_null_args(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set(NULL, "v", 0, 0));
+    assert_null(api_cookie_set("n", NULL, 0, 0));
+}
+
+static void test_cookie_clear_basic(void **state)
+{
+    (void)state;
+    char *out = api_cookie_clear("auth", 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    free(out);
+}
+
+static void test_cookie_clear_secure(void **state)
+{
+    (void)state;
+    char *out = api_cookie_clear("auth", 1);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure");
+    free(out);
+}
+
+static void test_cookie_clear_rejects_bad_name(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_clear(NULL, 0));
+    assert_null(api_cookie_clear("auth\r\n", 0));
+    assert_null(api_cookie_clear("auth;evil", 0));
+}
+
+/* --- Sliding expiry / kind-aware validation / revoke --- */
+
+/* Read expires_at for a token. NULL on error. Caller frees. */
+static char *get_expires_at(cutils_db_t *db, const char *token)
+{
+    const char *params[] = { token, NULL };
+    db_result_t *result = NULL;
+    int rc = db_execute(db, "SELECT expires_at FROM sessions WHERE token = ?",
+                        params, &result);
+    if (rc != 0 || !result || result->nrows == 0) {
+        if (result) db_result_free(result);
+        return NULL;
+    }
+    char *out = strdup(result->rows[0][0]);
+    db_result_free(result);
+    return out;
+}
+
+static void test_session_validation_slides_expiry(void **state)
+{
+    cutils_db_t *db = *state;
+
+    /* Create a session that expires in 1 hour */
+    char *token = auth_create_token(db, 1);
+    assert_non_null(token);
+
+    char *before = get_expires_at(db, token);
+    assert_non_null(before);
+
+    /* Validate — should slide expires_at to AUTH_SESSION_TTL_HOURS in the
+     * future, well past the original 1-hour mark. */
+    assert_int_equal(auth_validate_token(db, token), 1);
+
+    char *after = get_expires_at(db, token);
+    assert_non_null(after);
+
+    /* String compare on the ISO-8601 timestamp is a valid ordering test
+     * (Y-M-D H:M:S with zero-padding sorts lexicographically). */
+    assert_true(strcmp(after, before) > 0);
+
+    free(before);
+    free(after);
+    free(token);
+}
+
+static void test_api_token_validation_does_not_slide(void **state)
+{
+    cutils_db_t *db = *state;
+
+    /* Insert an api_token row directly with kind='api_token' and a
+     * known expires_at. */
+    const char *params[] = {
+        "api_test_tok", "api_token", "2099-12-31 23:59:59", NULL
+    };
+    assert_int_equal(db_execute_non_query(db,
+        "INSERT INTO sessions (token, kind, expires_at) VALUES (?, ?, ?)",
+        params, NULL), 0);
+
+    char *before = get_expires_at(db, "api_test_tok");
+    assert_string_equal(before, "2099-12-31 23:59:59");
+
+    /* Validate — api_token rows should NOT have expires_at slid. */
+    assert_int_equal(auth_validate_token(db, "api_test_tok"), 1);
+
+    char *after = get_expires_at(db, "api_test_tok");
+    assert_string_equal(after, before);
+
+    free(before);
+    free(after);
+}
+
+static void test_revoke_token_removes_row(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+    assert_int_equal(auth_validate_token(db, token), 1);
+
+    auth_revoke_token(db, token);
+
+    /* Validation should fail after revoke */
+    assert_int_equal(auth_validate_token(db, token), 0);
+
+    free(token);
+}
+
+static void test_revoke_token_strips_bearer_prefix(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+
+    char bearer[128];
+    snprintf(bearer, sizeof(bearer), "Bearer %s", token);
+    auth_revoke_token(db, bearer);
+
+    assert_int_equal(auth_validate_token(db, token), 0);
+    free(token);
+}
+
+static void test_revoke_token_safe_with_null(void **state)
+{
+    cutils_db_t *db = *state;
+    /* Should not crash or affect existing tokens. */
+    auth_revoke_token(db, NULL);
+    auth_revoke_token(db, "");
+
+    char *token = auth_create_token(db, 24);
+    assert_int_equal(auth_validate_token(db, token), 1);
+    free(token);
+}
+
+static void test_revoked_at_filters_out_session(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+
+    /* Soft-delete via revoked_at — validation should fail even though
+     * expires_at is still in the future. */
+    const char *params[] = { token, NULL };
+    assert_int_equal(db_execute_non_query(db,
+        "UPDATE sessions SET revoked_at = datetime('now') WHERE token = ?",
+        params, NULL), 0);
+
+    assert_int_equal(auth_validate_token(db, token), 0);
+    free(token);
+}
+
 /* --- Password validation (enforced in auth_set_password) --- */
 
 static void test_set_password_rejects_short(void **state)
@@ -573,6 +816,25 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_bad_key_hex, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_salt, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_hash, setup, teardown),
+        /* api_cookie_set / api_cookie_clear (no DB needed) */
+        cmocka_unit_test(test_cookie_set_basic),
+        cmocka_unit_test(test_cookie_set_secure),
+        cmocka_unit_test(test_cookie_set_no_max_age),
+        cmocka_unit_test(test_cookie_set_rejects_crlf_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_semicolon_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_quote_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_crlf_in_name),
+        cmocka_unit_test(test_cookie_set_null_args),
+        cmocka_unit_test(test_cookie_clear_basic),
+        cmocka_unit_test(test_cookie_clear_secure),
+        cmocka_unit_test(test_cookie_clear_rejects_bad_name),
+        /* sliding expiry / api_token / revoke */
+        cmocka_unit_test_setup_teardown(test_session_validation_slides_expiry, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_api_token_validation_does_not_slide, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_removes_row, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_strips_bearer_prefix, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_safe_with_null, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoked_at_filters_out_session, setup, teardown),
         /* password validation */
         cmocka_unit_test_setup_teardown(test_set_password_rejects_short, setup, teardown),
         cmocka_unit_test_setup_teardown(test_set_password_rejects_null, setup, teardown),

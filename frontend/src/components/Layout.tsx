@@ -130,8 +130,10 @@ export default function Layout() {
 
         <div className="mt-auto px-3 py-2 space-y-2">
           <button onClick={async () => {
+            /* /api/auth/logout revokes the session DB row and emits a
+             * Set-Cookie clearing the HttpOnly auth cookie. Nothing
+             * client-side to clear. */
             try { await apiPost('/api/auth/logout', {}) } catch {}
-            localStorage.removeItem('auth_token')
             window.location.href = '/login'
           }}
             className="block w-full text-left text-xs text-faint hover:text-muted transition-colors py-2 md:py-0">

@@ -33,12 +33,36 @@ typedef struct {
  * Returns NULL if not found. */
 const char *api_query_param(const api_request_t *req, const char *key);
 
+/* Get a cookie value from the Cookie request header.
+ * Returns NULL if not found. */
+const char *api_cookie(const api_request_t *req, const char *name);
+
 /* Response built by route handlers */
 typedef struct {
     int           status;      /* HTTP status code (200, 400, 404, etc.) */
     char         *body;        /* JSON response body (malloc'd, server frees) */
     const char   *content_type; /* default: "application/json" */
+    /* Optional Set-Cookie header value (malloc'd, server frees). Includes
+     * the full attribute string after the cookie pair, e.g.
+     *   "auth=abc123; HttpOnly; SameSite=Strict; Path=/; Max-Age=7776000"
+     * Build via api_cookie_set / api_cookie_clear so attributes are
+     * formatted consistently. */
+    char         *set_cookie;
 } api_response_t;
+
+/* Build a Set-Cookie value with HttpOnly, SameSite=Strict, Path=/ baked
+ * in. `secure` controls whether the Secure attribute is added (set to
+ * 0 for plain-HTTP deployments — we don't yet ship HTTPS). `max_age`
+ * is the Max-Age in seconds; 0 means no Max-Age (session cookie).
+ * Caller owns the returned string. Returns NULL on alloc failure or
+ * when name/value contain control characters. */
+char *api_cookie_set(const char *name, const char *value,
+                     int max_age, int secure);
+
+/* Build a Set-Cookie value that clears the named cookie (Max-Age=0,
+ * empty value). Same security attributes as api_cookie_set. Caller
+ * owns the returned string. */
+char *api_cookie_clear(const char *name, int secure);
 
 /* Route handler function */
 typedef api_response_t (*api_handler_fn)(const api_request_t *req, void *userdata);
