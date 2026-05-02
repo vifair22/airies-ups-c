@@ -180,6 +180,21 @@ static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
     return out;
 }
 
+/* Lightweight "am I logged in?" probe. The auth middleware runs before
+ * this handler, so reaching it at all means the request was authorized.
+ * Returns 200 with a tiny body the frontend can ignore. The frontend's
+ * AuthGuard hits this on mount to decide whether to show the login
+ * page — it can't read the HttpOnly cookie directly. */
+static api_response_t handle_auth_check(const api_request_t *req, void *ud)
+{
+    (void)req; (void)ud;
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK)
+        return api_error(500, cutils_get_error());
+    ADD_OR_FAIL(json_resp_add_bool(resp, "ok", 1));
+    return finalize_ok(resp);
+}
+
 /* --- Setup endpoints --- */
 
 static api_response_t handle_setup_status(const api_request_t *req, void *ud)
@@ -374,6 +389,7 @@ void api_register_auth_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login,  ctx);
     api_server_route(srv, "/api/auth/change",  API_POST, handle_auth_change, ctx);
     api_server_route(srv, "/api/auth/logout",  API_POST, handle_auth_logout, ctx);
+    api_server_route(srv, "/api/auth/check",   API_GET,  handle_auth_check,  ctx);
     api_server_route(srv, "/api/setup/status",  API_GET,  handle_setup_status, ctx);
     api_server_route(srv, "/api/setup/ports",   API_GET,  handle_setup_ports,  ctx);
     api_server_route(srv, "/api/setup/test",    API_POST, handle_setup_test,   ctx);
