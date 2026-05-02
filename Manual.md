@@ -37,7 +37,7 @@ One daemon per UPS. Each Pi owns its UPS exclusively over a serial USB cable (Mo
 | Component | Source | Responsibility |
 |-----------|--------|----------------|
 | HTTP API | `src/api/` | libmicrohttpd; serves the embedded React bundle and the JSON API on TCP + unix socket |
-| Monitor thread | `src/monitor/` | Polls the UPS at a fixed cadence (default 2 s), writes telemetry snapshots every telemetry interval (default 30 s), runs retention sweeps |
+| Monitor thread | `src/monitor/` | Two loops: slow loop polls the full UPS state at the configured cadence (default 5 s) for everything except power-state events; fast loop polls status + transfer reason at 200 ms and owns sub-second power events (on-battery, output-off, bypass, fault, overload). HID drivers run slow-only. Snapshot/config/retention work runs on the slow loop. |
 | Alert engine | `src/alerts/` | Hysteresis-based threshold checks on each monitor poll; fires events only on state transitions |
 | Shutdown orchestrator | `src/shutdown/` | Coordinates shutdown of dependent hosts when battery state warrants |
 | Weather + HE mode | `src/weather/` | Optional storm-aware toggling of UPS High Efficiency mode |
@@ -205,14 +205,23 @@ Notifications route through the configured channel (currently Pushover; in-app e
 
 ## 9. Monitor and telemetry
 
-The monitor thread runs at the configured poll interval (default 2 s):
+The monitor runs two loops with different responsibilities:
+
+**Slow loop** (default 5 s, configurable via `monitor.poll_interval`):
 
 1. `read_status` + `read_dynamic` from the driver
-2. Snapshot evaluated by the alert engine
+2. Snapshot evaluated by the alert engine (voltage thresholds, load, battery low, error registers)
 3. Snapshot evaluated by the shutdown orchestrator
-4. Every telemetry interval (default 30 s), snapshot persisted to `telemetry_*` tables in SQLite
+4. Detects HE-mode and self-test transitions
+5. Persists `ups_status_snapshot` on change; runs daily config-register snapshot and `xfer_history` retention sweep
 
-Retention sweeper runs in the same thread, deleting rows older than configured retention windows.
+**Fast loop** (200 ms, Modbus drivers only — SMT/SRT):
+
+1. Reads the status register and transfer-reason register every tick
+2. Detects sub-second transitions on `ON_BATTERY`, `OUTPUT_OFF`, `BYPASS`, `FAULT`, `FAULT_STATE`, `OVERLOAD` and journals them immediately
+3. Records every register-2 transition to `xfer_history` (7-day retention) so brief mains glitches that resolve before the slow loop lands still leave a forensic trail
+
+HID drivers don't expose a separate fast read path — they run slow-loop-only. The 50 ms Modbus pacing wrapper (`src/ups/ups_modbus.{h,c}`) enforces a minimum gap between consecutive bus operations so the SMT management plane doesn't crash under combined slow + fast traffic.
 
 ---
 

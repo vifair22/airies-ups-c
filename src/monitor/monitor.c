@@ -498,7 +498,7 @@ monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
 
     mon->ups = ups;
     mon->db = db;
-    mon->poll_sec = poll_interval_sec > 0 ? poll_interval_sec : 2;
+    mon->poll_sec = poll_interval_sec > 0 ? poll_interval_sec : 5;
     mon->first_poll = 1;
 
     pthread_mutex_init(&mon->mutex, NULL);

@@ -23,7 +23,9 @@ typedef void (*monitor_event_fn)(const char *severity, const char *category,
 
 /* Create and start the monitor.
  * ups must be connected.
- * poll_interval_sec: how often to read UPS (typically 2).
+ * poll_interval_sec: slow-loop cadence in seconds (default 5). The
+ *   fast power-vitals loop runs every 200 ms regardless and is what
+ *   you want for sub-second power-state event detection.
  * Returns NULL on failure. */
 monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
                           int poll_interval_sec);
