@@ -51,7 +51,11 @@ static uint64_t monotonic_ms(void)
 }
 
 /* "YYYY-MM-DD HH:MM:SS.mmm" UTC — matches the cutils logs convention
- * and pairs well with the events table for cross-table correlation. */
+ * and pairs well with the events table for cross-table correlation.
+ * Explicit % 1000 + int cast keeps the millisecond field bounded to
+ * 3 digits so -Wformat-truncation can prove the buffer is sized
+ * correctly under -O2 (without it, gcc assumes the long can be any
+ * size and warns). */
 static void format_utc_ms(char *buf, size_t len)
 {
     struct timespec ts;
@@ -60,7 +64,8 @@ static void format_utc_ms(char *buf, size_t len)
     gmtime_r(&ts.tv_sec, &tm);
     char base[24];
     strftime(base, sizeof(base), "%Y-%m-%d %H:%M:%S", &tm);
-    snprintf(buf, len, "%s.%03ld", base, ts.tv_nsec / 1000000L);
+    int ms = (int)((ts.tv_nsec / 1000000L) % 1000);
+    snprintf(buf, len, "%s.%03d", base, ms);
 }
 
 /* --- Persistence --- */
