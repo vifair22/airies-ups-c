@@ -8,10 +8,14 @@
  *  UPS Driver API — contract for implementing a new UPS family
  * ============================================================================
  *
- * A driver is a static `const ups_driver_t` (see bottom of this file) that
- * teaches the registry how to open a transport, identify a UPS, and exchange
- * data. The daemon uses the driver through the registry in ups.h; drivers
- * never talk directly to the daemon.
+ * A driver is a `const ups_driver_t` (see bottom of this file) at file scope
+ * with external linkage — `ups.c` references each driver via `extern const
+ * ups_driver_t ups_driver_<name>` to populate `ups_drivers[]`. Do NOT mark
+ * the definition `static`, that breaks the registry link.
+ *
+ * A driver teaches the registry how to open a transport, identify a UPS,
+ * and exchange data. The daemon uses the driver through the registry in
+ * ups.h; drivers never talk directly to the daemon.
  *
  *   Lifecycle, per successful connect:
  *     1. ups_connect() iterates drivers matching params->type
@@ -253,8 +257,9 @@ typedef struct {
     /* Appended fields. Default-zero is safe for every existing entry: 0 =
      * CONFIG category and no sentinel. Append-only here keeps positional
      * initializers in the existing srt_config_regs[] / smt_config_regs[] /
-     * backups_config_regs[] tables valid; new entries should use designated
-     * initializers when they need to set these. */
+     * apc_config_regs[] / cyberpower_config_regs[] tables valid; new
+     * entries should use designated initializers when they need to set
+     * these. */
     ups_reg_category_t category;       /* default 0 = CONFIG */
     int                has_sentinel;   /* 1 = sentinel_value means "N/A" */
     uint32_t           sentinel_value; /* compared against the raw read value */
@@ -322,7 +327,7 @@ typedef struct {
  * that touch transport. */
 typedef struct ups_driver {
     /* ---- Identity ---- */
-    const char      *name;      /* stable driver id: "srt", "smt", "backups_hid" */
+    const char      *name;      /* stable driver id: "srt", "smt", "apc_hid", "cyberpower_hid" */
     ups_conn_type_t  conn_type; /* transport category this driver expects */
     ups_topology_t   topology;  /* default topology; may be overridden by get_topology */
 
@@ -449,10 +454,16 @@ typedef struct ups_driver {
      *              str_bufsz). Return 0 on success, -1 on I/O failure.
      *
      * config_write: write one descriptor. The registry pre-checks
-     *               reg->writable; drivers may assume the descriptor is
-     *               writable when this fires. Return 0 on success, -1 on
-     *               failure. The registry guarantees a 100 ms inter-write
-     *               delay and reads the value back afterwards. */
+     *               reg->writable AND validates `value` against the
+     *               descriptor's meta (returning UPS_ERR_INVALID_VALUE on
+     *               out-of-range / strict-bitfield miss before the driver
+     *               sees the value), so handlers may assume both the
+     *               descriptor is writable and the value is acceptable
+     *               when this fires. Return 0 on success, -1 on failure.
+     *               The registry holds cmd_mutex through the call and
+     *               sleeps 200 ms after the handler returns before
+     *               releasing — drivers can rely on that quiet window
+     *               for the UPS firmware to digest the write. */
     int (*config_read)(void *transport, const ups_config_reg_t *reg,
                        uint32_t *raw_value, char *str_buf, size_t str_bufsz);
     int (*config_write)(void *transport, const ups_config_reg_t *reg, uint16_t value);
