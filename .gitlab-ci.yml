@@ -453,6 +453,13 @@ release:nightly:
     - job: package:deb:arm64
       artifacts: true
   rules:
+    # When the same master push bumps release_version, release:auto-tag
+    # cuts a v<semver> tag whose pipeline runs release:stable. Skip the
+    # nightly recreation so the stable Release wins the Releases-page
+    # "Latest" badge instead of losing a released_at race against nightly.
+    - if: '$CI_COMMIT_BRANCH == "master"'
+      changes: [release_version]
+      when: never
     - if: '$CI_COMMIT_BRANCH == "master"'
   before_script:
     - apk add --no-cache curl
