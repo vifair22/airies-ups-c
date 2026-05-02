@@ -377,6 +377,107 @@ static void test_cleanup_nothing_expired(void **state)
     free(token);
 }
 
+/* --- api_cookie_set / api_cookie_clear (server.c helpers) ---
+ *
+ * These are pure string-building functions for the Set-Cookie response
+ * header. Tests cover the happy path, the Secure-on-HTTPS toggle, the
+ * Max-Age=0 (clear) variant, and rejection of control characters that
+ * would otherwise let a caller smuggle additional headers or cookie
+ * attributes through name/value. */
+
+static void test_cookie_set_basic(void **state)
+{
+    (void)state;
+    char *out = api_cookie_set("auth", "abc123", 7776000, 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/; Max-Age=7776000");
+    free(out);
+}
+
+static void test_cookie_set_secure(void **state)
+{
+    (void)state;
+    char *out = api_cookie_set("auth", "abc123", 3600, 1);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600; Secure");
+    free(out);
+}
+
+static void test_cookie_set_no_max_age(void **state)
+{
+    (void)state;
+    /* max_age=0 → session cookie, no Max-Age attribute */
+    char *out = api_cookie_set("auth", "abc123", 0, 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=abc123; HttpOnly; SameSite=Strict; Path=/");
+    free(out);
+}
+
+static void test_cookie_set_rejects_crlf_in_value(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth", "abc\r\nX-Inject: 1", 3600, 0));
+    assert_null(api_cookie_set("auth", "abc\nbad",            3600, 0));
+}
+
+static void test_cookie_set_rejects_semicolon_in_value(void **state)
+{
+    (void)state;
+    /* A semicolon would let the caller smuggle extra cookie attributes
+     * (e.g. value="x; Path=/admin"). Reject. */
+    assert_null(api_cookie_set("auth", "abc; Domain=evil.com", 3600, 0));
+}
+
+static void test_cookie_set_rejects_quote_in_value(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth", "abc\"def", 3600, 0));
+}
+
+static void test_cookie_set_rejects_crlf_in_name(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set("auth\r\nX-Inject", "val", 3600, 0));
+}
+
+static void test_cookie_set_null_args(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_set(NULL, "v", 0, 0));
+    assert_null(api_cookie_set("n", NULL, 0, 0));
+}
+
+static void test_cookie_clear_basic(void **state)
+{
+    (void)state;
+    char *out = api_cookie_clear("auth", 0);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    free(out);
+}
+
+static void test_cookie_clear_secure(void **state)
+{
+    (void)state;
+    char *out = api_cookie_clear("auth", 1);
+    assert_non_null(out);
+    assert_string_equal(out,
+        "auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure");
+    free(out);
+}
+
+static void test_cookie_clear_rejects_bad_name(void **state)
+{
+    (void)state;
+    assert_null(api_cookie_clear(NULL, 0));
+    assert_null(api_cookie_clear("auth\r\n", 0));
+    assert_null(api_cookie_clear("auth;evil", 0));
+}
+
 /* --- Sliding expiry / kind-aware validation / revoke --- */
 
 /* Read expires_at for a token. NULL on error. Caller frees. */
@@ -715,6 +816,18 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_bad_key_hex, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_salt, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_hash, setup, teardown),
+        /* api_cookie_set / api_cookie_clear (no DB needed) */
+        cmocka_unit_test(test_cookie_set_basic),
+        cmocka_unit_test(test_cookie_set_secure),
+        cmocka_unit_test(test_cookie_set_no_max_age),
+        cmocka_unit_test(test_cookie_set_rejects_crlf_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_semicolon_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_quote_in_value),
+        cmocka_unit_test(test_cookie_set_rejects_crlf_in_name),
+        cmocka_unit_test(test_cookie_set_null_args),
+        cmocka_unit_test(test_cookie_clear_basic),
+        cmocka_unit_test(test_cookie_clear_secure),
+        cmocka_unit_test(test_cookie_clear_rejects_bad_name),
         /* sliding expiry / api_token / revoke */
         cmocka_unit_test_setup_teardown(test_session_validation_slides_expiry, setup, teardown),
         cmocka_unit_test_setup_teardown(test_api_token_validation_does_not_slide, setup, teardown),
