@@ -49,7 +49,7 @@ static api_response_t finalize_ok(cutils_json_resp_t *resp)
 
 /* --- Auth endpoints --- */
 
-static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
+api_response_t handle_auth_setup(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (auth_is_setup(ctx->db))
@@ -77,7 +77,7 @@ static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_auth_login(const api_request_t *req, void *ud)
+api_response_t handle_auth_login(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
@@ -121,7 +121,7 @@ static api_response_t handle_auth_login(const api_request_t *req, void *ud)
     return out;
 }
 
-static api_response_t handle_auth_change(const api_request_t *req, void *ud)
+api_response_t handle_auth_change(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
@@ -152,7 +152,7 @@ static api_response_t handle_auth_change(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
+api_response_t handle_auth_logout(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
 
@@ -185,7 +185,7 @@ static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
  * Returns 200 with a tiny body the frontend can ignore. The frontend's
  * AuthGuard hits this on mount to decide whether to show the login
  * page — it can't read the HttpOnly cookie directly. */
-static api_response_t handle_auth_check(const api_request_t *req, void *ud)
+api_response_t handle_auth_check(const api_request_t *req, void *ud)
 {
     (void)req; (void)ud;
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
@@ -197,7 +197,7 @@ static api_response_t handle_auth_check(const api_request_t *req, void *ud)
 
 /* --- Setup endpoints --- */
 
-static api_response_t handle_setup_status(const api_request_t *req, void *ud)
+api_response_t handle_setup_status(const api_request_t *req, void *ud)
 {
     (void)req;
     route_ctx_t *ctx = ud;
@@ -217,7 +217,7 @@ static api_response_t handle_setup_status(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
+api_response_t handle_setup_ports(const api_request_t *req, void *ud)
 {
     (void)req;
     (void)ud;
@@ -294,7 +294,7 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_setup_test(const api_request_t *req, void *ud)
+api_response_t handle_setup_test(const api_request_t *req, void *ud)
 {
     (void)ud;
     if (!req->body) return api_error(400, "request body required");
