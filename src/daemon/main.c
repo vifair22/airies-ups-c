@@ -25,6 +25,13 @@ static volatile int running = 1;
 static volatile int restart_requested = 0;
 static const char *g_ups_name = NULL;
 
+/* Set when the monitor is created so alert_notify can route alerts
+ * through the events journal. NULL means alerts log + push but don't
+ * journal (e.g. before the monitor is up — shouldn't happen in
+ * practice since the alert engine is wired only after monitor_create
+ * succeeds). */
+static monitor_t *g_monitor = NULL;
+
 static void sig_handler(int sig)
 {
     (void)sig;
@@ -135,11 +142,19 @@ typedef struct {
     shutdown_mgr_t    *shutdown;
 } alert_ctx_t;
 
-static void alert_notify(const char *severity, const char *title,
-                         const char *body)
+static void alert_notify(const char *severity, const char *category,
+                         const char *title, const char *body)
 {
     log_info("ALERT: %s — %s", title, body);
-    push_notify(severity, title, body);
+    /* Route through the monitor's event journal so threshold transitions
+     * land in the events table alongside bit-transition events. The
+     * journal write also fires on_monitor_event, which handles the push
+     * with the correct severity gating — so we don't push directly here.
+     * Falls back to a direct push if the monitor isn't up yet. */
+    if (g_monitor)
+        monitor_fire_event(g_monitor, severity, category, title, body);
+    else
+        push_notify(severity, title, body);
 }
 
 static void on_monitor_poll(const ups_data_t *data, void *userdata)
@@ -237,9 +252,10 @@ int main(int argc, char *argv[])
 
     if (ups) {
         /* Monitor */
-        int poll_sec = config_get_int(cfg, "monitor.poll_interval", 2);
+        int poll_sec = config_get_int(cfg, "monitor.poll_interval", 5);
         mon = monitor_create(ups, db, poll_sec);
         if (mon) {
+            g_monitor = mon;
             monitor_on_event(mon, on_monitor_event, cfg);
 
             /* Wire alert engine into monitor poll cycle. Seed alert state

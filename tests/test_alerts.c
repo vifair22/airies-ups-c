@@ -16,6 +16,7 @@
 
 static struct {
     char severities[MAX_NOTIFICATIONS][32];
+    char categories[MAX_NOTIFICATIONS][32];
     char titles[MAX_NOTIFICATIONS][128];
     char bodies[MAX_NOTIFICATIONS][512];
     int  count;
@@ -26,13 +27,14 @@ static void reset_notifs(void)
     memset(&g_notifs, 0, sizeof(g_notifs));
 }
 
-static void capture_notify(const char *severity, const char *title,
-                           const char *body)
+static void capture_notify(const char *severity, const char *category,
+                           const char *title, const char *body)
 {
     if (g_notifs.count < MAX_NOTIFICATIONS) {
-        snprintf(g_notifs.severities[g_notifs.count], 32, "%s", severity);
-        snprintf(g_notifs.titles[g_notifs.count], 128, "%s", title);
-        snprintf(g_notifs.bodies[g_notifs.count], 512, "%s", body);
+        snprintf(g_notifs.severities[g_notifs.count], 32,  "%s", severity);
+        snprintf(g_notifs.categories[g_notifs.count], 32,  "%s", category);
+        snprintf(g_notifs.titles[g_notifs.count],     128, "%s", title);
+        snprintf(g_notifs.bodies[g_notifs.count],     512, "%s", body);
         g_notifs.count++;
     }
 }
