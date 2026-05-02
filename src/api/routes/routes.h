@@ -40,4 +40,21 @@ void api_register_shutdown_routes(api_server_t *srv, route_ctx_t *ctx);
 void api_register_config_routes(api_server_t *srv, route_ctx_t *ctx);
 void api_register_weather_routes(api_server_t *srv, route_ctx_t *ctx);
 
+/* --- Auth route handlers (exposed for direct unit testing) ---
+ *
+ * These are normally registered via api_register_auth_routes and called
+ * by libmicrohttpd through the request_handler dispatcher. The
+ * signatures match api_handler_fn so a test can construct an
+ * api_request_t + route_ctx_t and call them directly without an MHD
+ * instance — useful for asserting on response shape, status code, and
+ * Set-Cookie attribute strings. */
+api_response_t handle_auth_setup (const api_request_t *req, void *ud);
+api_response_t handle_auth_login (const api_request_t *req, void *ud);
+api_response_t handle_auth_change(const api_request_t *req, void *ud);
+api_response_t handle_auth_logout(const api_request_t *req, void *ud);
+api_response_t handle_auth_check (const api_request_t *req, void *ud);
+api_response_t handle_setup_status(const api_request_t *req, void *ud);
+api_response_t handle_setup_ports (const api_request_t *req, void *ud);
+api_response_t handle_setup_test  (const api_request_t *req, void *ud);
+
 #endif

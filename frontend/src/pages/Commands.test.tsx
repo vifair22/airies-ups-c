@@ -6,7 +6,6 @@ import Commands from './Commands'
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  localStorage.setItem('auth_token', 'test-jwt')
 })
 
 const mockCommands = [

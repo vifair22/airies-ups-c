@@ -328,7 +328,42 @@ pkill -f airies-upsd
 
 ---
 
-## 14. Where to find what
+## 14. Authentication and sessions
+
+Single-admin auth, opaque random tokens, persisted in the SQLite `sessions` table. Two transports:
+
+- **Cookie** — what the web UI uses. On `/api/auth/login` success the daemon returns `Set-Cookie: auth=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=…`. The browser sends it automatically on every subsequent request, including `EventSource` SSE streams (which can't carry custom headers). `HttpOnly` means JS can't read the cookie — XSS can't exfiltrate the credential.
+- **Authorization header** — `Authorization: Bearer <token>` for CLI, `curl`, scripts, future API tokens. The login response also includes the token in its JSON body for non-browser clients to grab.
+
+The auth middleware (`auth_check`) reads either, header first; cookie is the fallback. Unix-socket requests bypass auth entirely (CLI is trusted by virtue of the socket's filesystem permissions).
+
+### Session lifetime
+
+- **Sliding 90-day window**. Every successful validation bumps `expires_at = now + 90 days`. Use the UI weekly, never re-login. Don't touch it for 90 days, expire.
+- Driven by `kind='session'` rows. `kind='api_token'` rows (future, named long-lived tokens for integrations) do **not** slide — their expiry is set at issue time and held until explicit revocation or natural expiry.
+- `last_used_at` is touched on every validation for both kinds, for observability and future idle-timeout policies.
+
+### HTTPS / `auth.cookie_secure`
+
+The daemon ships HTTP-only today. The `Secure` cookie flag (set in `app_config.h:auth.cookie_secure`, default `0`) is gated on this — browsers reject `Secure` cookies over plain HTTP, so leaving the flag off is correct for the default deployment. Flip to `1` when serving via HTTPS or behind an HTTPS reverse proxy. HTTPS support is planned as a separate change.
+
+### Logout / revocation
+
+- `POST /api/auth/logout` — revokes the current session DB row and emits a `Set-Cookie` clear. The "Logout" button in the UI sidebar calls this.
+- Revocation is a hard `DELETE` for now; the schema carries `revoked_at` for a future switch to soft-delete when audit retention becomes a requirement.
+
+### Schema (after migration 016)
+
+```sql
+sessions(token PK, user_id, kind, name, scopes,
+         created_at, last_used_at, expires_at, revoked_at)
+```
+
+The non-token columns are forward-compat hooks: `user_id` for multi-admin, `kind` for the `session`/`api_token` split, `name` + `scopes` for named API tokens with limited scope, `revoked_at` for audit-retention-friendly revocation.
+
+---
+
+## 15. Where to find what
 
 | Looking for | Path |
 |-------------|------|

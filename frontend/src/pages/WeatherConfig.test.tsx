@@ -8,7 +8,6 @@ import type { ConfigReg } from '../types/config'
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  localStorage.setItem('auth_token', 'test-jwt')
 })
 
 const enabledStatus: WeatherStatus = {

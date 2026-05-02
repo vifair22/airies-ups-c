@@ -15,54 +15,60 @@ function renderApp(route = '/') {
   )
 }
 
+/* Helper: mock fetch to return different responses per URL pattern.
+ * Auth is now decided by /api/auth/check (the only signal the JS layer
+ * gets — HttpOnly cookie is unreadable). */
+type Resp = { ok: boolean; status: number; jsonBody?: unknown }
+
+function mockFetchByUrl(map: Array<[RegExp | string, Resp]>) {
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+    for (const [match, resp] of map) {
+      const hit = match instanceof RegExp ? match.test(url) : url.includes(match)
+      if (hit) {
+        return Promise.resolve({
+          ok: resp.ok,
+          status: resp.status,
+          json: () => Promise.resolve(resp.jsonBody ?? {}),
+        })
+      }
+    }
+    return Promise.resolve({
+      ok: true, status: 200, json: () => Promise.resolve({}),
+    })
+  })
+}
+
 describe('AuthGuard / App routing', () => {
   it('redirects to /setup when setup is needed', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ needs_setup: true }),
-    })
-
+    mockFetchByUrl([
+      ['setup/status', { ok: true, status: 200, jsonBody: { needs_setup: true } }],
+    ])
     renderApp('/')
-
     await waitFor(() => {
       expect(screen.getByText('Initial Setup')).toBeInTheDocument()
     })
   })
 
-  it('redirects to /login when no token exists', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ needs_setup: false }),
-    })
-
+  it('redirects to /login when auth check fails', async () => {
+    mockFetchByUrl([
+      ['setup/status', { ok: true, status: 200, jsonBody: { needs_setup: false } }],
+      ['auth/check',   { ok: false, status: 401 }],
+    ])
     renderApp('/')
-
     await waitFor(() => {
       expect(screen.getByText('Admin Password')).toBeInTheDocument()
     })
   })
 
   it('renders protected layout when authenticated', async () => {
-    localStorage.setItem('auth_token', 'valid-jwt')
-
-    /* setup/status returns no setup needed, then /api/status for Layout */
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('setup/status')) {
-        return Promise.resolve({
-          ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: false }),
-        })
-      }
-      return Promise.resolve({
-        ok: true, status: 200,
-        json: () => Promise.resolve({ driver: 'modbus', connected: true, name: 'TestUPS' }),
-      })
-    })
-
+    mockFetchByUrl([
+      ['setup/status', { ok: true, status: 200, jsonBody: { needs_setup: false } }],
+      ['auth/check',   { ok: true,  status: 200, jsonBody: { ok: true } }],
+      [/.*/, { ok: true, status: 200, jsonBody: {
+        driver: 'modbus', connected: true, name: 'TestUPS',
+      } }],
+    ])
     renderApp('/')
-
     await waitFor(() => {
       expect(screen.getByText('Dashboard')).toBeInTheDocument()
     })

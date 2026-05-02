@@ -49,7 +49,7 @@ static api_response_t finalize_ok(cutils_json_resp_t *resp)
 
 /* --- Auth endpoints --- */
 
-static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
+api_response_t handle_auth_setup(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (auth_is_setup(ctx->db))
@@ -77,7 +77,7 @@ static api_response_t handle_auth_setup(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_auth_login(const api_request_t *req, void *ud)
+api_response_t handle_auth_login(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
@@ -96,18 +96,32 @@ static api_response_t handle_auth_login(const api_request_t *req, void *ud)
     }
     auth_event(ctx->db, "info", "Login", "Admin login successful");
 
-    CUTILS_AUTOFREE char *token = auth_create_token(ctx->db, 24 * 365);
+    CUTILS_AUTOFREE char *token = auth_create_token(ctx->db, AUTH_SESSION_TTL_HOURS);
     if (!token) return api_error(500, "failed to create session");
 
+    /* Issue an HttpOnly cookie alongside the JSON token. The cookie is
+     * what the browser uses going forward (and is the only way SSE auth
+     * works without a header — EventSource can't send Authorization).
+     * The token in the JSON body remains for non-browser clients (CLI,
+     * curl, integrations) that prefer Authorization-header auth. */
+    int cookie_secure = config_get_int(ctx->config, "auth.cookie_secure", 0);
+    char *set_cookie = api_cookie_set("auth", token,
+                                      AUTH_SESSION_TTL_HOURS * 3600, cookie_secure);
+
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
-    if (json_resp_new(&resp) != CUTILS_OK)
+    if (json_resp_new(&resp) != CUTILS_OK) {
+        free(set_cookie);
         return api_error(500, cutils_get_error());
+    }
     ADD_OR_FAIL(json_resp_add_str(resp, "token",      token));
-    ADD_OR_FAIL(json_resp_add_u32(resp, "expires_in", 24U * 365U * 3600U));
-    return finalize_ok(resp);
+    ADD_OR_FAIL(json_resp_add_u32(resp, "expires_in",
+                                  (uint32_t)AUTH_SESSION_TTL_HOURS * 3600U));
+    api_response_t out = finalize_ok(resp);
+    out.set_cookie = set_cookie;
+    return out;
 }
 
-static api_response_t handle_auth_change(const api_request_t *req, void *ud)
+api_response_t handle_auth_change(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
     if (!req->body) return api_error(400, "request body required");
@@ -138,34 +152,52 @@ static api_response_t handle_auth_change(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_auth_logout(const api_request_t *req, void *ud)
+api_response_t handle_auth_logout(const api_request_t *req, void *ud)
 {
     route_ctx_t *ctx = ud;
 
-    /* Delete the session token from DB */
-    if (req->auth_token) {
-        const char *tok = req->auth_token;
-        if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
-        const char *params[] = { tok, NULL };
-        /* Best-effort; on failure the token remains in the DB until its
-         * expires_at elapses (auth_cleanup_sessions will sweep it later).
-         * The client-side credential is already gone either way. */
-        CUTILS_UNUSED(db_execute_non_query(ctx->db,
-            "DELETE FROM sessions WHERE token = ?", params, NULL));
-    }
+    /* Revoke whichever token authenticated this request — header first,
+     * cookie as fallback. Either path validates as the same DB row, so
+     * one DELETE suffices regardless of how the caller authenticated. */
+    const char *tok = req->auth_token;
+    if (!tok || !tok[0])
+        tok = api_cookie(req, "auth");
+    auth_revoke_token(ctx->db, tok);
 
     auth_event(ctx->db, "info", "Logout", "Admin session ended");
 
+    int cookie_secure = config_get_int(ctx->config, "auth.cookie_secure", 0);
+    char *clear_cookie = api_cookie_clear("auth", cookie_secure);
+
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    if (json_resp_new(&resp) != CUTILS_OK) {
+        free(clear_cookie);
+        return api_error(500, cutils_get_error());
+    }
+    ADD_OR_FAIL(json_resp_add_str(resp, "result", "logged out"));
+    api_response_t out = finalize_ok(resp);
+    out.set_cookie = clear_cookie;
+    return out;
+}
+
+/* Lightweight "am I logged in?" probe. The auth middleware runs before
+ * this handler, so reaching it at all means the request was authorized.
+ * Returns 200 with a tiny body the frontend can ignore. The frontend's
+ * AuthGuard hits this on mount to decide whether to show the login
+ * page — it can't read the HttpOnly cookie directly. */
+api_response_t handle_auth_check(const api_request_t *req, void *ud)
+{
+    (void)req; (void)ud;
     CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
     if (json_resp_new(&resp) != CUTILS_OK)
         return api_error(500, cutils_get_error());
-    ADD_OR_FAIL(json_resp_add_str(resp, "result", "logged out"));
+    ADD_OR_FAIL(json_resp_add_bool(resp, "ok", 1));
     return finalize_ok(resp);
 }
 
 /* --- Setup endpoints --- */
 
-static api_response_t handle_setup_status(const api_request_t *req, void *ud)
+api_response_t handle_setup_status(const api_request_t *req, void *ud)
 {
     (void)req;
     route_ctx_t *ctx = ud;
@@ -185,7 +217,7 @@ static api_response_t handle_setup_status(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
+api_response_t handle_setup_ports(const api_request_t *req, void *ud)
 {
     (void)req;
     (void)ud;
@@ -262,7 +294,7 @@ static api_response_t handle_setup_ports(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
-static api_response_t handle_setup_test(const api_request_t *req, void *ud)
+api_response_t handle_setup_test(const api_request_t *req, void *ud)
 {
     (void)ud;
     if (!req->body) return api_error(400, "request body required");
@@ -357,6 +389,7 @@ void api_register_auth_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/auth/login",   API_POST, handle_auth_login,  ctx);
     api_server_route(srv, "/api/auth/change",  API_POST, handle_auth_change, ctx);
     api_server_route(srv, "/api/auth/logout",  API_POST, handle_auth_logout, ctx);
+    api_server_route(srv, "/api/auth/check",   API_GET,  handle_auth_check,  ctx);
     api_server_route(srv, "/api/setup/status",  API_GET,  handle_setup_status, ctx);
     api_server_route(srv, "/api/setup/ports",   API_GET,  handle_setup_ports,  ctx);
     api_server_route(srv, "/api/setup/test",    API_POST, handle_setup_test,   ctx);

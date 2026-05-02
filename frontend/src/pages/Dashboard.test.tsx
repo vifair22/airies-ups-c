@@ -6,7 +6,6 @@ import type { UpsStatus } from '../types/ups'
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  localStorage.setItem('auth_token', 'test-jwt')
 })
 
 const connectedStatus: UpsStatus = {

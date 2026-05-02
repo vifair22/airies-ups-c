@@ -6,7 +6,6 @@ import AppConfig from './AppConfig'
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  localStorage.setItem('auth_token', 'test-jwt')
 })
 
 const mockConfig = [

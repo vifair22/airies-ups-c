@@ -89,7 +89,7 @@ export default function WeatherConfig() {
               setReportLoading(true)
               try {
                 const res = await fetch('/api/weather/report', {
-                  headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` }
+                  credentials: 'include',
                 })
                 setReport(await res.json())
                 setShowReportModal(true)
