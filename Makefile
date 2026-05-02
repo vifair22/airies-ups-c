@@ -85,7 +85,8 @@ endif
 
 # ---- Source files ---------------------------------------------------------
 
-UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_srt.c src/ups/ups_smt.c \
+UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_modbus.c \
+             src/ups/ups_srt.c src/ups/ups_smt.c \
              src/ups/ups_apc_hid.c src/ups/ups_cyberpower_hid.c \
              src/ups/hid_pdc_core.c src/ups/hid_parser.c
 API_SRCS   = src/api/server.c src/api/auth.c \
