@@ -94,6 +94,7 @@ API_SRCS   = src/api/server.c src/api/auth.c \
              src/api/routes/shutdown.c src/api/routes/config.c \
              src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
+             src/monitor/fast_loop.c \
              src/monitor/status_snapshot.c \
              src/monitor/config_snapshot.c \
              src/monitor/xfer_ring.c \

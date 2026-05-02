@@ -63,6 +63,15 @@ void monitor_fire_event(monitor_t *mon, const char *severity,
                         const char *category, const char *title,
                         const char *message);
 
+/* Same as monitor_fire_event, but appends " (reason: <name>)" to the
+ * message when `reason` is a known transfer-reason code other than
+ * AcceptableInput. UNKNOWN / AcceptableInput pass through unchanged.
+ * Used by both the fast and slow loops to attach a cause to events
+ * that were triggered by an input-side condition. */
+void monitor_fire_event_with_reason(monitor_t *mon, const char *severity,
+                                    const char *category, const char *title,
+                                    const char *message, uint16_t reason);
+
 /* Get a copy of the loaded status snapshot. The alert engine seeds its
  * prev fields from this so it doesn't re-fire alerts on startup for
  * conditions that were already active when the daemon last shut down.
