@@ -85,7 +85,8 @@ endif
 
 # ---- Source files ---------------------------------------------------------
 
-UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_srt.c src/ups/ups_smt.c \
+UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_modbus.c \
+             src/ups/ups_srt.c src/ups/ups_smt.c \
              src/ups/ups_apc_hid.c src/ups/ups_cyberpower_hid.c \
              src/ups/hid_pdc_core.c src/ups/hid_parser.c
 API_SRCS   = src/api/server.c src/api/auth.c \
@@ -93,6 +94,7 @@ API_SRCS   = src/api/server.c src/api/auth.c \
              src/api/routes/shutdown.c src/api/routes/config.c \
              src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
+             src/monitor/fast_loop.c \
              src/monitor/status_snapshot.c \
              src/monitor/config_snapshot.c \
              src/monitor/xfer_ring.c \
