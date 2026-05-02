@@ -1,6 +1,6 @@
 #include "ups_driver.h"
 #include "ups.h"
-#include <modbus/modbus.h>
+#include "ups/ups_modbus.h"
 #include <string.h>
 #include <time.h>
 
@@ -29,9 +29,14 @@
 #define SRT_REG_CMD_RTCAL      1542  /* uint16, FC06: runtime calibration */
 #define SRT_REG_CMD_UI         1543  /* uint16, FC06: beep, mute */
 
-/* --- Transport helpers --- */
+/* --- Transport helpers ---
+ *
+ * Drivers cast the opaque transport pointer to ups_mb_t* (the paced
+ * Modbus wrapper). All Modbus I/O goes through ups_mb_read/write* so
+ * the inter-op gap is enforced consistently across SMT and SRT — see
+ * ups_modbus.h for the rationale. */
 
-static modbus_t *mb(void *transport) { return (modbus_t *)transport; }
+static ups_mb_t *mb(void *transport) { return (ups_mb_t *)transport; }
 
 /* Decode an APC string register block: 2 chars per register, big-endian
  * within each register. Strings are not NUL-terminated and may pad with
@@ -64,35 +69,20 @@ static void srt_str_decode(const uint16_t *regs, int n, char *out, size_t outsz)
 static void *srt_connect(const ups_conn_params_t *params)
 {
     if (params->type != UPS_CONN_SERIAL) return NULL;
-
-    modbus_t *ctx = modbus_new_rtu(params->serial.device, params->serial.baud,
-                                   'N', 8, 1);
-    if (!ctx) return NULL;
-
-    modbus_set_slave(ctx, params->serial.slave_id);
-    modbus_set_response_timeout(ctx, 5, 0);
-
-    if (modbus_connect(ctx) == -1) {
-        modbus_free(ctx);
-        return NULL;
-    }
-
-    return ctx;
+    return ups_mb_new(params->serial.device, params->serial.baud,
+                      params->serial.slave_id);
 }
 
 static void srt_disconnect(void *transport)
 {
-    if (transport) {
-        modbus_close(mb(transport));
-        modbus_free(mb(transport));
-    }
+    ups_mb_free((ups_mb_t *)transport);
 }
 
 static int srt_detect(void *transport)
 {
     /* Read model string from inventory block (reg 532, 16 regs = 32 chars) */
     uint16_t regs[16];
-    if (modbus_read_registers(mb(transport), 532, 16, regs) != 16)
+    if (ups_mb_read(mb(transport), 532, 16, regs) != 16)
         return 0;
 
     char model[33];
@@ -114,7 +104,7 @@ static int srt_detect(void *transport)
 static int srt_read_transfer_reason(void *transport, uint16_t *out)
 {
     uint16_t reg;
-    if (modbus_read_registers(mb(transport), SRT_REG_STATUS + 2, 1, &reg) != 1)
+    if (ups_mb_read(mb(transport), SRT_REG_STATUS + 2, 1, &reg) != 1)
         return -1;
     *out = reg;
     return 0;
@@ -123,7 +113,7 @@ static int srt_read_transfer_reason(void *transport, uint16_t *out)
 static int srt_read_status(void *transport, ups_data_t *data)
 {
     uint16_t regs[SRT_REG_STATUS_LEN];
-    if (modbus_read_registers(mb(transport), SRT_REG_STATUS, SRT_REG_STATUS_LEN, regs) != SRT_REG_STATUS_LEN)
+    if (ups_mb_read(mb(transport), SRT_REG_STATUS, SRT_REG_STATUS_LEN, regs) != SRT_REG_STATUS_LEN)
         return -1;
 
     data->status              = ((uint32_t)regs[0] << 16) | regs[1];
@@ -146,7 +136,7 @@ static int srt_read_status(void *transport, ups_data_t *data)
 static int srt_read_dynamic(void *transport, ups_data_t *data)
 {
     uint16_t regs[SRT_REG_DYNAMIC_LEN];
-    if (modbus_read_registers(mb(transport), SRT_REG_DYNAMIC, SRT_REG_DYNAMIC_LEN, regs) != SRT_REG_DYNAMIC_LEN)
+    if (ups_mb_read(mb(transport), SRT_REG_DYNAMIC, SRT_REG_DYNAMIC_LEN, regs) != SRT_REG_DYNAMIC_LEN)
         return -1;
 
     data->runtime_sec      = ((uint32_t)regs[0] << 16) | regs[1];
@@ -182,7 +172,7 @@ static int srt_read_dynamic(void *transport, ups_data_t *data)
 static int srt_read_inventory(void *transport, ups_inventory_t *inv)
 {
     uint16_t regs[SRT_REG_INVENTORY_LEN];
-    if (modbus_read_registers(mb(transport), SRT_REG_INVENTORY, SRT_REG_INVENTORY_LEN, regs) != SRT_REG_INVENTORY_LEN)
+    if (ups_mb_read(mb(transport), SRT_REG_INVENTORY, SRT_REG_INVENTORY_LEN, regs) != SRT_REG_INVENTORY_LEN)
         return -1;
 
     memset(inv, 0, sizeof(*inv));
@@ -208,7 +198,7 @@ static int srt_read_inventory(void *transport, ups_inventory_t *inv)
 static int srt_read_thresholds(void *transport, uint16_t *transfer_high, uint16_t *transfer_low)
 {
     uint16_t regs[SRT_REG_TRANSFER_LEN];
-    if (modbus_read_registers(mb(transport), SRT_REG_TRANSFER_HIGH, SRT_REG_TRANSFER_LEN, regs) != SRT_REG_TRANSFER_LEN)
+    if (ups_mb_read(mb(transport), SRT_REG_TRANSFER_HIGH, SRT_REG_TRANSFER_LEN, regs) != SRT_REG_TRANSFER_LEN)
         return -1;
     *transfer_high = regs[0];
     *transfer_low = regs[1];
@@ -224,7 +214,7 @@ static int srt_config_read(void *transport, const ups_config_reg_t *reg,
     int n = reg->reg_count > 0 ? reg->reg_count : 1;
     if (n > 32) n = 32;
 
-    if (modbus_read_registers(mb(transport), reg->reg_addr, n, regs) != n)
+    if (ups_mb_read(mb(transport), reg->reg_addr, n, regs) != n)
         return UPS_ERR_IO;
 
     if (reg->type == UPS_CFG_STRING && str_buf) {
@@ -244,7 +234,7 @@ static int srt_config_read(void *transport, const ups_config_reg_t *reg,
 
 static int srt_config_write(void *transport, const ups_config_reg_t *reg, uint16_t value)
 {
-    if (modbus_write_register(mb(transport), reg->reg_addr, value) != 1)
+    if (ups_mb_write(mb(transport), reg->reg_addr, value) != 1)
         return UPS_ERR_IO;
 
     /* Inter-write delay (UPS firmware requirement — 100ms minimum) */
@@ -253,7 +243,7 @@ static int srt_config_write(void *transport, const ups_config_reg_t *reg, uint16
 
     /* Read back for verification */
     uint16_t readback;
-    if (modbus_read_registers(mb(transport), reg->reg_addr, 1, &readback) != 1)
+    if (ups_mb_read(mb(transport), reg->reg_addr, 1, &readback) != 1)
         return UPS_ERR_IO;
 
     if (readback != value)
@@ -266,60 +256,60 @@ static int srt_config_write(void *transport, const ups_config_reg_t *reg, uint16
 
 static int srt_cmd_shutdown(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_SHUTDOWN, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_SHUTDOWN, 0x0001) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_battery_test(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_BATTEST, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_BATTEST, 0x0001) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_runtime_cal(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_RTCAL, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_RTCAL, 0x0001) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_abort_runtime_cal(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_RTCAL, 0x0002) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_RTCAL, 0x0002) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_clear_faults(void *transport)
 {
     uint16_t cmd[2] = { 0x0000, 0x0200 };
-    return modbus_write_registers(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
+    return ups_mb_write_n(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
 static int srt_cmd_mute_alarm(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_UI, 0x0004) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_UI, 0x0004) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_cancel_mute(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_UI, 0x0008) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_UI, 0x0008) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_beep_short(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_UI, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_UI, 0x0001) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_beep_continuous(void *transport)
 {
-    return modbus_write_register(mb(transport), SRT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SRT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
 }
 
 static int srt_cmd_bypass_enable(void *transport)
 {
     uint16_t cmd[2] = { 0x0000, 0x0010 };
-    return modbus_write_registers(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
+    return ups_mb_write_n(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
 static int srt_cmd_bypass_disable(void *transport)
 {
     uint16_t cmd[2] = { 0x0000, 0x0020 };
-    return modbus_write_registers(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
+    return ups_mb_write_n(mb(transport), SRT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
 /* --- Frequency tolerance settings ---

@@ -47,8 +47,10 @@ static const config_key_t app_file_keys[] = {
 
 static const config_key_t app_db_keys[] = {
     /* Monitor */
-    { "monitor.poll_interval",      CFG_INT, "2",
-      "UPS status poll interval (seconds)",
+    { "monitor.poll_interval",      CFG_INT, "5",
+      "UPS status poll interval (seconds) — slow loop only; the fast "
+      "power-vitals loop in src/monitor/fast_loop.c runs every 200 ms "
+      "regardless and owns power-state events",
       CFG_STORE_DB, 0 },
 
     /* Alert thresholds */
