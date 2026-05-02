@@ -318,8 +318,8 @@ $(eval $(call build_test,test_cli,\
   $(TEST_COMMON_LIBS),$(TEST_DIR),))
 
 $(eval $(call build_test,test_auth,\
-  tests/test_auth.c src/api/auth.c,\
-  $(TEST_FULL_LIBS),$(TEST_DIR),))
+  tests/test_auth.c src/api/auth.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
 
 $(eval $(call build_test,test_shutdown,\
   tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\

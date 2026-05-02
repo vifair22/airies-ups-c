@@ -254,15 +254,62 @@ int auth_validate_token(cutils_db_t *db, const char *token)
     const char *tok = token;
     if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
 
+    /* Look up kind so we can decide whether to slide the expiry.
+     * revoked_at IS NULL filters out soft-deleted rows. */
     const char *params[] = { tok, NULL };
     CUTILS_AUTO_DBRES db_result_t *result = NULL;
     int rc = db_execute(db,
-        "SELECT token FROM sessions WHERE token = ? "
-        "AND expires_at > datetime('now')",
+        "SELECT kind FROM sessions "
+        "WHERE token = ? "
+        "  AND expires_at > datetime('now') "
+        "  AND revoked_at IS NULL",
         params, &result);
+    if (rc != 0 || !result || result->nrows == 0)
+        return 0;
 
-    if (rc != 0 || !result) return 0;
-    return result->nrows > 0;
+    int is_session = (strcmp(result->rows[0][0], "session") == 0);
+
+    /* Sliding window: bump expires_at on session validation so an active
+     * user never has to re-login. api_token rows are not slid — their
+     * expiry is set by the issuer and held until explicit revocation.
+     * last_used_at is touched for both kinds (observability + future
+     * idle-timeout policies). Best-effort: a UPDATE failure must not
+     * cause an otherwise-valid token to be treated as invalid. */
+    if (is_session) {
+        char new_expires[32];
+        time_t exp_time = time(NULL) + (time_t)AUTH_SESSION_TTL_HOURS * 3600;
+        struct tm tm;
+        gmtime_r(&exp_time, &tm);
+        strftime(new_expires, sizeof(new_expires), "%Y-%m-%d %H:%M:%S", &tm);
+
+        const char *up_params[] = { new_expires, tok, NULL };
+        CUTILS_UNUSED(db_execute_non_query(db,
+            "UPDATE sessions "
+            "SET expires_at = ?, last_used_at = datetime('now') "
+            "WHERE token = ?",
+            up_params, NULL));
+    } else {
+        const char *up_params[] = { tok, NULL };
+        CUTILS_UNUSED(db_execute_non_query(db,
+            "UPDATE sessions SET last_used_at = datetime('now') "
+            "WHERE token = ?",
+            up_params, NULL));
+    }
+
+    return 1;
+}
+
+void auth_revoke_token(cutils_db_t *db, const char *token)
+{
+    if (!token || !token[0]) return;
+    const char *tok = token;
+    if (strncmp(tok, "Bearer ", 7) == 0) tok += 7;
+    const char *params[] = { tok, NULL };
+    /* Hard delete for now — when audit retention is a requirement we'll
+     * switch to UPDATE … SET revoked_at = datetime('now'). The schema
+     * already carries revoked_at for that future migration. */
+    CUTILS_UNUSED(db_execute_non_query(db,
+        "DELETE FROM sessions WHERE token = ?", params, NULL));
 }
 
 void auth_cleanup_sessions(cutils_db_t *db)
@@ -300,6 +347,12 @@ int auth_check(const api_request_t *req, const char *url, void *userdata)
     if (!auth_is_setup(db))
         return 1;
 
-    /* Validate token */
-    return auth_validate_token(db, req->auth_token);
+    /* Token comes from either the Authorization header (CLI / API
+     * tokens / curl) or the "auth" cookie (browser SSE + regular
+     * fetch). Header takes precedence so a curl --header still works
+     * even from a browser context where a stale cookie might exist. */
+    const char *token = req->auth_token;
+    if (!token || !token[0])
+        token = api_cookie(req, "auth");
+    return auth_validate_token(db, token);
 }

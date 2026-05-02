@@ -14,6 +14,8 @@
 
 /* --- Test fixture: in-memory SQLite DB with auth schema --- */
 
+/* Mirrors migrations/006_auth.sql (auth) + 016_sessions_v2.sql (sessions).
+ * Kept as a literal so the test runs without the migration loader. */
 static const char *SCHEMA =
     "CREATE TABLE auth ("
     "  id            INTEGER PRIMARY KEY CHECK (id = 1),"
@@ -22,11 +24,19 @@ static const char *SCHEMA =
     "  updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))"
     ");"
     "CREATE TABLE sessions ("
-    "  token      TEXT PRIMARY KEY,"
-    "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
-    "  expires_at TEXT NOT NULL"
+    "  token        TEXT PRIMARY KEY,"
+    "  user_id      INTEGER,"
+    "  kind         TEXT NOT NULL DEFAULT 'session',"
+    "  name         TEXT,"
+    "  scopes       TEXT,"
+    "  created_at   TEXT NOT NULL DEFAULT (datetime('now')),"
+    "  last_used_at TEXT,"
+    "  expires_at   TEXT NOT NULL,"
+    "  revoked_at   TEXT"
     ");"
-    "CREATE INDEX idx_sessions_expires ON sessions(expires_at);";
+    "CREATE INDEX idx_sessions_expires ON sessions(expires_at);"
+    "CREATE INDEX idx_sessions_user    ON sessions(user_id);"
+    "CREATE INDEX idx_sessions_kind    ON sessions(kind);";
 
 static int setup(void **state)
 {
