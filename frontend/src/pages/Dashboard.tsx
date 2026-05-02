@@ -275,7 +275,7 @@ export default function Dashboard() {
         <StatusDot raw={raw} canBypass={canBypass} />
         {inv && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
-            <span className="text-primary font-medium">{inv.model.trim()}</span>
+            <span className="text-primary font-medium">{inv.sku?.trim() || inv.model.trim()}</span>
             <span>{inv.serial.trim()}</span>
             <span>{inv.nominal_va} VA / {inv.nominal_watts} W</span>
             <span className="text-muted">{s.driver.toUpperCase()} driver</span>
