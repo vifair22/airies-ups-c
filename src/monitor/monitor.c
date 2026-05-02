@@ -2,6 +2,7 @@
 #include "monitor/status_snapshot.h"
 #include "monitor/config_snapshot.h"
 #include "monitor/xfer_ring.h"
+#include "ups/ups_format.h"
 #include <cutils/log.h>
 #include <cutils/error.h>
 #include <cutils/mem.h>
@@ -136,6 +137,46 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+/* Format current UTC wall-clock as "YYYY-MM-DD HH:MM:SS.mmm" — the
+ * convention the cutils log table and xfer_history use. Wall-clock here
+ * (not the monotonic clock fed to the ring) because the table is for
+ * post-mortem reconstruction and operators read it alongside event
+ * journal rows that are also wall-clock. */
+static void format_utc_ms(char *buf, size_t len)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    gmtime_r(&ts.tv_sec, &tm);
+    char base[24];
+    strftime(base, sizeof(base), "%Y-%m-%d %H:%M:%S", &tm);
+    snprintf(buf, len, "%s.%03ld", base, ts.tv_nsec / 1000000L);
+}
+
+/* Persist a register-2 transition to xfer_history. Called only when the
+ * ring reports a fresh value (de-dupe already happened). Best-effort —
+ * a DB hiccup must not interrupt the fast poll. */
+static void persist_xfer_transition(monitor_t *mon, uint16_t reason)
+{
+    char ts[32];
+    format_utc_ms(ts, sizeof(ts));
+
+    char code_s[8];
+    snprintf(code_s, sizeof(code_s), "%u", reason);
+
+    const char *reason_str = ups_transfer_reason_str(reason);
+
+    /* status_bits is left NULL until the fast loop also reads the status
+     * register (Phase 3). The column accepts NULL so existing rows from
+     * earlier deployments stay readable when the column starts being
+     * populated. */
+    const char *params[] = { ts, code_s, reason_str, NULL };
+    CUTILS_UNUSED(db_execute_non_query(mon->db,
+        "INSERT INTO xfer_history (timestamp, reason_code, reason_str, status_bits) "
+        "VALUES (?, ?, ?, NULL)",
+        params, NULL));
+}
+
 /* Fast-poll thread body: reads register 2 every XFER_FAST_POLL_MS and
  * pushes any change into the ring. Only spawned when the driver supports
  * the single-register read (SRT/SMT do; HID drivers don't). */
@@ -157,8 +198,13 @@ static void *xfer_fast_poll_thread(void *arg)
         if (ups_read_transfer_reason(mon->ups, &r) != UPS_OK)
             continue;
 
-        CUTILS_LOCK_GUARD(&mon->xfer_mutex);
-        xfer_ring_push(&mon->xfer_ring, now_ms(), r);
+        int recorded;
+        {
+            CUTILS_LOCK_GUARD(&mon->xfer_mutex);
+            recorded = xfer_ring_push(&mon->xfer_ring, now_ms(), r);
+        }
+        if (recorded)
+            persist_xfer_transition(mon, r);
     }
     return NULL;
 }
@@ -558,10 +604,17 @@ static void *monitor_thread(void *arg)
         uint64_t sig = status_signature(&data);
         mon->prev_sig = sig;
 
-        /* Daily config register snapshot (catches LCD-initiated changes) */
+        /* Daily housekeeping: config-register snapshot (catches
+         * LCD-initiated changes) plus 7-day prune of xfer_history rows.
+         * Both gated on the same 24-hour timer so we don't race the
+         * snapshot job and don't add another wall-clock check. */
         time_t now = time(NULL);
         if (now - mon->last_config_snapshot >= 86400) {
             snapshot_config_registers(mon);
+            CUTILS_UNUSED(db_execute_non_query(mon->db,
+                "DELETE FROM xfer_history "
+                "WHERE timestamp < datetime('now', '-7 days')",
+                NULL, NULL));
             mon->last_config_snapshot = now;
         }
     }
