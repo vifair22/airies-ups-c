@@ -377,6 +377,138 @@ static void test_cleanup_nothing_expired(void **state)
     free(token);
 }
 
+/* --- Sliding expiry / kind-aware validation / revoke --- */
+
+/* Read expires_at for a token. NULL on error. Caller frees. */
+static char *get_expires_at(cutils_db_t *db, const char *token)
+{
+    const char *params[] = { token, NULL };
+    db_result_t *result = NULL;
+    int rc = db_execute(db, "SELECT expires_at FROM sessions WHERE token = ?",
+                        params, &result);
+    if (rc != 0 || !result || result->nrows == 0) {
+        if (result) db_result_free(result);
+        return NULL;
+    }
+    char *out = strdup(result->rows[0][0]);
+    db_result_free(result);
+    return out;
+}
+
+static void test_session_validation_slides_expiry(void **state)
+{
+    cutils_db_t *db = *state;
+
+    /* Create a session that expires in 1 hour */
+    char *token = auth_create_token(db, 1);
+    assert_non_null(token);
+
+    char *before = get_expires_at(db, token);
+    assert_non_null(before);
+
+    /* Validate — should slide expires_at to AUTH_SESSION_TTL_HOURS in the
+     * future, well past the original 1-hour mark. */
+    assert_int_equal(auth_validate_token(db, token), 1);
+
+    char *after = get_expires_at(db, token);
+    assert_non_null(after);
+
+    /* String compare on the ISO-8601 timestamp is a valid ordering test
+     * (Y-M-D H:M:S with zero-padding sorts lexicographically). */
+    assert_true(strcmp(after, before) > 0);
+
+    free(before);
+    free(after);
+    free(token);
+}
+
+static void test_api_token_validation_does_not_slide(void **state)
+{
+    cutils_db_t *db = *state;
+
+    /* Insert an api_token row directly with kind='api_token' and a
+     * known expires_at. */
+    const char *params[] = {
+        "api_test_tok", "api_token", "2099-12-31 23:59:59", NULL
+    };
+    assert_int_equal(db_execute_non_query(db,
+        "INSERT INTO sessions (token, kind, expires_at) VALUES (?, ?, ?)",
+        params, NULL), 0);
+
+    char *before = get_expires_at(db, "api_test_tok");
+    assert_string_equal(before, "2099-12-31 23:59:59");
+
+    /* Validate — api_token rows should NOT have expires_at slid. */
+    assert_int_equal(auth_validate_token(db, "api_test_tok"), 1);
+
+    char *after = get_expires_at(db, "api_test_tok");
+    assert_string_equal(after, before);
+
+    free(before);
+    free(after);
+}
+
+static void test_revoke_token_removes_row(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+    assert_int_equal(auth_validate_token(db, token), 1);
+
+    auth_revoke_token(db, token);
+
+    /* Validation should fail after revoke */
+    assert_int_equal(auth_validate_token(db, token), 0);
+
+    free(token);
+}
+
+static void test_revoke_token_strips_bearer_prefix(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+
+    char bearer[128];
+    snprintf(bearer, sizeof(bearer), "Bearer %s", token);
+    auth_revoke_token(db, bearer);
+
+    assert_int_equal(auth_validate_token(db, token), 0);
+    free(token);
+}
+
+static void test_revoke_token_safe_with_null(void **state)
+{
+    cutils_db_t *db = *state;
+    /* Should not crash or affect existing tokens. */
+    auth_revoke_token(db, NULL);
+    auth_revoke_token(db, "");
+
+    char *token = auth_create_token(db, 24);
+    assert_int_equal(auth_validate_token(db, token), 1);
+    free(token);
+}
+
+static void test_revoked_at_filters_out_session(void **state)
+{
+    cutils_db_t *db = *state;
+
+    char *token = auth_create_token(db, 24);
+    assert_non_null(token);
+
+    /* Soft-delete via revoked_at — validation should fail even though
+     * expires_at is still in the future. */
+    const char *params[] = { token, NULL };
+    assert_int_equal(db_execute_non_query(db,
+        "UPDATE sessions SET revoked_at = datetime('now') WHERE token = ?",
+        params, NULL), 0);
+
+    assert_int_equal(auth_validate_token(db, token), 0);
+    free(token);
+}
+
 /* --- Password validation (enforced in auth_set_password) --- */
 
 static void test_set_password_rejects_short(void **state)
@@ -583,6 +715,13 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_bad_key_hex, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_salt, setup, teardown),
         cmocka_unit_test_setup_teardown(test_malformed_pbkdf2_empty_hash, setup, teardown),
+        /* sliding expiry / api_token / revoke */
+        cmocka_unit_test_setup_teardown(test_session_validation_slides_expiry, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_api_token_validation_does_not_slide, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_removes_row, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_strips_bearer_prefix, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoke_token_safe_with_null, setup, teardown),
+        cmocka_unit_test_setup_teardown(test_revoked_at_filters_out_session, setup, teardown),
         /* password validation */
         cmocka_unit_test_setup_teardown(test_set_password_rejects_short, setup, teardown),
         cmocka_unit_test_setup_teardown(test_set_password_rejects_null, setup, teardown),
