@@ -1,6 +1,5 @@
-import { useApi } from '../hooks/useApi'
+import { useSseState, useSseError } from '../hooks/SseProvider'
 import { PowerFlowSRT, PowerFlowLineInteractive, PowerFlowStandby } from '../components/PowerFlow'
-import type { UpsStatus } from '../types/ups'
 import { ST } from '../types/ups'
 import { fmtRuntime, fmtWatts, fmtVA, humanizeTransfer } from '../utils/format'
 
@@ -220,9 +219,14 @@ function VoltageBar({ voltage, low, high, warnOffset = 5 }: {
 /* ── Main component ── */
 
 export default function Dashboard() {
-  const { data: s, error } = useApi<UpsStatus>('/api/status', 2000)
-
-  if (error) return (
+  /* Single shared SSE connection lives in SseProvider; Dashboard just
+   * reads the latest state. Initial /api/status fetch + push-on-connect
+   * are owned by the provider, so the first frame lands right at mount. */
+  const s = useSseState()
+  const error = useSseError()
+  /* If the initial /api/status fetch failed AND we never got an SSE
+   * state frame, surface "Connection Lost" rather than spinning forever. */
+  if (error && !s) return (
     <div className="rounded-lg bg-red-900/30 border border-red-800 p-6 text-center">
       <p className="text-red-300 text-lg mb-1">Connection Lost</p>
       <p className="text-red-400/70 text-sm">{error}</p>
@@ -275,7 +279,7 @@ export default function Dashboard() {
         <StatusDot raw={raw} canBypass={canBypass} />
         {inv && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted">
-            <span className="text-primary font-medium">{inv.model.trim()}</span>
+            <span className="text-primary font-medium">{inv.sku?.trim() || inv.model.trim()}</span>
             <span>{inv.serial.trim()}</span>
             <span>{inv.nominal_va} VA / {inv.nominal_watts} W</span>
             <span className="text-muted">{s.driver.toUpperCase()} driver</span>

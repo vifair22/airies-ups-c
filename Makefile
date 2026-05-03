@@ -85,14 +85,16 @@ endif
 
 # ---- Source files ---------------------------------------------------------
 
-UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_srt.c src/ups/ups_smt.c \
+UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_modbus.c \
+             src/ups/ups_srt.c src/ups/ups_smt.c \
              src/ups/ups_apc_hid.c src/ups/ups_cyberpower_hid.c \
              src/ups/hid_pdc_core.c src/ups/hid_parser.c
-API_SRCS   = src/api/server.c src/api/auth.c \
-             src/api/routes/routes.c src/api/routes/auth.c \
+API_SRCS   = src/api/server.c src/api/auth.c src/api/sse.c \
+             src/api/routes/routes.c src/api/routes/auth_routes.c \
              src/api/routes/shutdown.c src/api/routes/config.c \
              src/api/routes/weather.c
 MON_SRCS   = src/monitor/monitor.c \
+             src/monitor/fast_loop.c \
              src/monitor/status_snapshot.c \
              src/monitor/config_snapshot.c \
              src/monitor/xfer_ring.c \
@@ -316,8 +318,12 @@ $(eval $(call build_test,test_cli,\
   $(TEST_COMMON_LIBS),$(TEST_DIR),))
 
 $(eval $(call build_test,test_auth,\
-  tests/test_auth.c src/api/auth.c,\
-  $(TEST_FULL_LIBS),$(TEST_DIR),))
+  tests/test_auth.c src/api/auth.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
+
+$(eval $(call build_test,test_routes_auth,\
+  tests/test_routes_auth.c src/api/routes/auth_routes.c src/api/auth.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
 
 $(eval $(call build_test,test_shutdown,\
   tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
@@ -343,6 +349,10 @@ $(eval $(call build_test,test_xfer_ring,\
   tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
   $(TEST_COMMON_LIBS),$(TEST_DIR),))
 
+$(eval $(call build_test,test_sse,\
+  tests/test_sse.c src/api/sse.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
+
 # --- Coverage builds (same definitions, --coverage flag) ---
 
 $(eval $(call build_test,test_ups_strings,\
@@ -362,8 +372,12 @@ $(eval $(call build_test,test_cli,\
   $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
 
 $(eval $(call build_test,test_auth,\
-  tests/test_auth.c src/api/auth.c,\
-  $(TEST_FULL_LIBS),$(COV_TEST),--coverage))
+  tests/test_auth.c src/api/auth.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
+
+$(eval $(call build_test,test_routes_auth,\
+  tests/test_routes_auth.c src/api/routes/auth_routes.c src/api/auth.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
 
 $(eval $(call build_test,test_shutdown,\
   tests/test_shutdown.c src/shutdown/shutdown.c src/ups/ups.c src/ups/ups_format.c tests/test_stubs.c,\
@@ -389,9 +403,13 @@ $(eval $(call build_test,test_xfer_ring,\
   tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
   $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_sse,\
+  tests/test_sse.c src/api/sse.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
+
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_xfer_ring
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_routes_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_xfer_ring test_sse
 
 # --- Run targets ---
 

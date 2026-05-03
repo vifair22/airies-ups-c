@@ -8,6 +8,31 @@ beforeEach(() => {
   vi.restoreAllMocks()
 })
 
+/* URL-routed mock with FIFO fallback queue. Routes match by substring;
+ * if no route matches, the next item from `fallback` is returned (so
+ * existing tests that use call-order semantics keep working). All
+ * responses default to ok:true unless overridden. */
+type MockResp = { ok?: boolean; status?: number; jsonBody?: unknown }
+function setFetch(routes: Record<string, MockResp>, fallback: MockResp[] = []) {
+  let fbIdx = 0
+  globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+    for (const [pat, r] of Object.entries(routes)) {
+      if (url.includes(pat)) {
+        return Promise.resolve({
+          ok: r.ok ?? true, status: r.status ?? 200,
+          json: () => Promise.resolve(r.jsonBody ?? {}),
+        })
+      }
+    }
+    const r = fallback[fbIdx] ?? fallback[fallback.length - 1] ?? { ok: true, status: 200 }
+    fbIdx++
+    return Promise.resolve({
+      ok: r.ok ?? true, status: r.status ?? 200,
+      json: () => Promise.resolve(r.jsonBody ?? {}),
+    })
+  })
+}
+
 describe('Setup', () => {
   it('shows loading spinner initially', () => {
     /* setup/status never resolves */
@@ -36,16 +61,21 @@ describe('Setup', () => {
     expect(screen.getByText(/Step 1 of 4/)).toBeInTheDocument()
   })
 
-  it('shows login step when password is already set', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({
-        needs_setup: true,
-        password_set: true,
-        ups_configured: false,
-        ups_connected: false,
-      }),
+  it('shows login step when password is already set but not authed', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/auth/check')) {
+        /* Cookie absent / invalid → unauthed → show login step */
+        return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) })
+      }
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: () => Promise.resolve({
+          needs_setup: true,
+          password_set: true,
+          ups_configured: false,
+          ups_connected: false,
+        }),
+      })
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -125,23 +155,17 @@ describe('Setup', () => {
     await waitFor(() => {
       expect(screen.getByText('UPS Connection')).toBeInTheDocument()
     })
-    expect(localStorage.getItem('auth_token')).toBe('new-jwt')
+    /* Auth credential is now an HttpOnly cookie set by the server's
+     * /api/auth/login response — unreadable from JS, so no client-side
+     * assertion. The fact that we successfully advanced to the
+     * connection step is the proof. */
   })
 
   it('shows connection step with serial/USB options', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      /* ports */
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({ serial: ['/dev/ttyUSB0', '/dev/ttyUSB1'], usb: [] }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { jsonBody: { ok: true } },
+      '/api/setup/ports':  { jsonBody: { serial: ['/dev/ttyUSB0', '/dev/ttyUSB1'], usb: [] } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -154,27 +178,14 @@ describe('Setup', () => {
   })
 
   it('shows successful test connection result', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      if (callCount === 2) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
-        })
-      }
-      /* test connection */
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({
-          result: 'ok', driver: 'modbus', topology: 'online_double',
-          inventory: { model: 'SRT3000', serial: 'ABC123', firmware: '1.0', nominal_va: 3000, nominal_watts: 2700 },
-        }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { jsonBody: { ok: true } },
+      '/api/setup/ports':  { jsonBody: { serial: ['/dev/ttyUSB0'], usb: [] } },
+      '/api/setup/test':   { jsonBody: {
+        result: 'ok', driver: 'modbus', topology: 'online_double',
+        inventory: { model: 'SRT3000', serial: 'ABC123', firmware: '1.0', nominal_va: 3000, nominal_watts: 2700 },
+      } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -192,27 +203,14 @@ describe('Setup', () => {
   })
 
   it('shows notifications step', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      if (callCount === 2) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
-        })
-      }
-      /* test connection */
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({
-          result: 'ok', driver: 'modbus',
-          inventory: { model: 'SRT3000', serial: 'ABC', firmware: '1.0', nominal_va: 3000, nominal_watts: 2700 },
-        }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { jsonBody: { ok: true } },
+      '/api/setup/ports':  { jsonBody: { serial: ['/dev/ttyUSB0'], usb: [] } },
+      '/api/setup/test':   { jsonBody: {
+        result: 'ok', driver: 'modbus',
+        inventory: { model: 'SRT3000', serial: 'ABC', firmware: '1.0', nominal_va: 3000, nominal_watts: 2700 },
+      } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -265,25 +263,14 @@ describe('Setup', () => {
   })
 
   it('login step submits and advances to connection', async () => {
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        /* setup/status — password set, no token */
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      if (callCount === 2) {
-        /* auth/login */
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ token: 'login-jwt' }),
-        })
-      }
-      /* setup/ports */
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      /* auth/check returns 401 the first time so AuthGuard puts us on
+       * the login step. After login, the same endpoint isn't called
+       * again here — the user moves forward via state, not by re-probing. */
+      '/api/auth/check':   { ok: false, status: 401 },
+      '/api/auth/login':   { jsonBody: { token: 'login-jwt' } },
+      '/api/setup/ports':  { jsonBody: { serial: ['/dev/ttyUSB0'], usb: [] } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -298,21 +285,14 @@ describe('Setup', () => {
     await waitFor(() => {
       expect(screen.getByText('UPS Connection')).toBeInTheDocument()
     })
-    expect(localStorage.getItem('auth_token')).toBe('login-jwt')
+    /* No localStorage assertion — the auth cookie is HttpOnly. */
   })
 
   it('login error from server is surfaced', async () => {
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({ error: 'invalid password' }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { ok: false, status: 401 },
+      '/api/auth/login':   { jsonBody: { error: 'invalid password' } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -330,22 +310,14 @@ describe('Setup', () => {
   })
 
   it('connection step switches to USB form when user selects USB', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { jsonBody: { ok: true } },
       /* Mixed port scan — serial wins auto-select; user manually picks USB */
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({
-          serial: ['/dev/ttyUSB0'],
-          usb: [{ vid: '051d', pid: '0002', name: 'APC Back-UPS', device: '/dev/hidraw0' }],
-        }),
-      })
+      '/api/setup/ports':  { jsonBody: {
+        serial: ['/dev/ttyUSB0'],
+        usb: [{ vid: '051d', pid: '0002', name: 'APC Back-UPS', device: '/dev/hidraw0' }],
+      } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -364,23 +336,11 @@ describe('Setup', () => {
   })
 
   it('test connection error is shown', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
-        })
-      }
-      if (callCount === 2) {
-        return Promise.resolve({ ok: true, status: 200,
-          json: () => Promise.resolve({ serial: ['/dev/ttyUSB0'], usb: [] }),
-        })
-      }
-      return Promise.resolve({ ok: true, status: 200,
-        json: () => Promise.resolve({ error: 'no UPS detected on /dev/ttyUSB0' }),
-      })
+    setFetch({
+      '/api/setup/status': { jsonBody: { needs_setup: true, password_set: true, ups_configured: false, ups_connected: false } },
+      '/api/auth/check':   { jsonBody: { ok: true } },
+      '/api/setup/ports':  { jsonBody: { serial: ['/dev/ttyUSB0'], usb: [] } },
+      '/api/setup/test':   { jsonBody: { error: 'no UPS detected on /dev/ttyUSB0' } },
     })
 
     renderWithRouter(<Setup />, { route: '/setup' })
@@ -397,7 +357,6 @@ describe('Setup', () => {
   })
 
   it('save config with pushover and restart polls back to dashboard', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
     let restarted = false
     let postRestartStatus = 0  /* simulate daemon down then up */
     globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
@@ -414,6 +373,11 @@ describe('Setup', () => {
         }
         return Promise.resolve({ ok: true, status: 200,
           json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (u.includes('/api/auth/check')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ ok: true }),
         })
       }
       if (u.includes('/api/setup/ports')) {
@@ -478,14 +442,16 @@ describe('Setup', () => {
   })
 
   it('save config from notifications step lands on done step', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
-    let callCount = 0
     globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-      callCount++
       const u = String(url)
       if (u.includes('/api/setup/status')) {
         return Promise.resolve({ ok: true, status: 200,
           json: () => Promise.resolve({ needs_setup: true, password_set: true, ups_configured: false, ups_connected: false }),
+        })
+      }
+      if (u.includes('/api/auth/check')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: () => Promise.resolve({ ok: true }),
         })
       }
       if (u.includes('/api/setup/ports')) {
@@ -547,8 +513,5 @@ describe('Setup', () => {
       })
       expect(configPosts.length).toBeGreaterThan(0)
     })
-
-    /* callCount used to silence linter — verifies the mock fired */
-    expect(callCount).toBeGreaterThan(0)
   })
 })

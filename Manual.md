@@ -2,7 +2,7 @@
 
 Operations manual for `airies-ups`. Covers the system from sysadmin and operator perspectives — how it's structured, what it does at runtime, how to configure it, what every page of the web UI does, and where to look when something is wrong.
 
-For build, deploy, CI, and toolchain detail, see [DEPLOY.md](DEPLOY.md). For driver internals, see [driver-api.md](driver-api.md).
+For driver internals, see [driver-api.md](driver-api.md). For build instructions, see the [README](README.md).
 
 ---
 
@@ -37,7 +37,7 @@ One daemon per UPS. Each Pi owns its UPS exclusively over a serial USB cable (Mo
 | Component | Source | Responsibility |
 |-----------|--------|----------------|
 | HTTP API | `src/api/` | libmicrohttpd; serves the embedded React bundle and the JSON API on TCP + unix socket |
-| Monitor thread | `src/monitor/` | Polls the UPS at a fixed cadence (default 2 s), writes telemetry snapshots every telemetry interval (default 30 s), runs retention sweeps |
+| Monitor thread | `src/monitor/` | Two loops: slow loop polls the full UPS state at the configured cadence (default 5 s) for everything except power-state events; fast loop polls status + transfer reason at 200 ms and owns sub-second power events (on-battery, output-off, bypass, fault, overload). HID drivers run slow-only. Snapshot/config/retention work runs on the slow loop. |
 | Alert engine | `src/alerts/` | Hysteresis-based threshold checks on each monitor poll; fires events only on state transitions |
 | Shutdown orchestrator | `src/shutdown/` | Coordinates shutdown of dependent hosts when battery state warrants |
 | Weather + HE mode | `src/weather/` | Optional storm-aware toggling of UPS High Efficiency mode |
@@ -57,7 +57,7 @@ One daemon per UPS. Each Pi owns its UPS exclusively over a serial USB cable (Mo
 
 | Family | Transport | Driver | Verified models | Notes |
 |--------|-----------|--------|------------------|-------|
-| APC Smart-UPS SRT (online double-conversion) | Modbus RTU over USB-serial | `src/ups/ups_srt.c` | SRT 2200 | Full feature set: bypass, deep test, frequency tolerance, outlet groups |
+| APC Smart-UPS SRT (online double-conversion) | Modbus RTU over USB-serial | `src/ups/ups_srt.c` | SRT1000XLA (FW 16.5), SRT 2200 | Full feature set: bypass, deep test, frequency tolerance, outlet groups |
 | APC Smart-UPS SMT (line-interactive) | Modbus RTU over USB-serial | `src/ups/ups_smt.c` | SMT1500RM2UC (FW 04.1, ModbusMapID 00.5) | No bypass; no Green Mode write over Modbus (empirically — see project notes) |
 | APC Back-UPS / Smart-UPS HID | USB HID | `src/ups/ups_apc_hid.c` (+ `hid_pdc_core.c`) | Back-UPS ES 600M1 | APC vendor page (sensitivity, lights/beeper test, batt repl date); deep runtime calibration intentionally omitted (firmware rejects it) |
 | CyberPower PowerPanel HID | USB HID | `src/ups/ups_cyberpower_hid.c` (+ `hid_pdc_core.c`) | CP1500PFCLCD | Standard HID PDC only; no vendor extensions in this driver yet |
@@ -73,13 +73,9 @@ Hardware reference material lives under `docs/`:
 
 ## 3. Deployment topology
 
-| Hostname | UPS | Connection | Role |
-|----------|-----|-----------|------|
-| `upspi.internal.airies.net`  | APC SRT 2200             | Modbus RTU (USB serial) | Primary rack |
-| `upspi2.internal.airies.net` | APC Back-UPS ES 600M1    | USB HID                 | Workstation circuit |
-| `upspi3.internal.airies.net` | APC SMT1500RM2UC         | Modbus RTU (USB serial) | Secondary rack |
+One daemon per UPS, one host (typically a Raspberry Pi) per daemon. Each host owns its UPS exclusively over USB-serial (Modbus RTU) or USB HID.
 
-Each Pi is independent. There is no inter-daemon coordination — the orchestrated shutdown is between an `airies-upsd` and the hosts it shuts down (its dependents), not between daemons.
+Daemons are independent. There is no inter-daemon coordination — orchestrated shutdown is between an `airies-upsd` and the hosts it shuts down (its dependents), not between daemons. Multiple UPSes mean multiple daemons, each with its own dependent inventory.
 
 Web UI per-host: `http://<hostname>:8080`.
 
@@ -93,7 +89,7 @@ There are two layers.
 
 Read once at daemon startup, before SQLite is opened. Just enough to find the database, bind the HTTP server, and (optionally) describe the UPS connection. Everything else is in the DB.
 
-Path on the Pi: `/home/sysadmin/airies-ups/config.yaml`.
+Path on a `.deb`-installed host: `/var/lib/airies-ups/config.yaml`. Docker installs see the same path inside the container; map it via the `airies-ups-state` volume.
 
 Modbus RTU example:
 
@@ -131,7 +127,7 @@ The `ups:` block can be omitted on first install — the setup wizard fills it i
 
 ### 4.2 Runtime — SQLite
 
-`app.db` lives next to the binary. All runtime configuration is here, editable from the web UI:
+`app.db` lives next to `config.yaml` (`/var/lib/airies-ups/app.db` on `.deb` installs). All runtime configuration is here, editable from the web UI:
 
 | Concern | Page | What you set |
 |---------|------|--------------|
@@ -209,14 +205,23 @@ Notifications route through the configured channel (currently Pushover; in-app e
 
 ## 9. Monitor and telemetry
 
-The monitor thread runs at the configured poll interval (default 2 s):
+The monitor runs two loops with different responsibilities:
+
+**Slow loop** (default 5 s, configurable via `monitor.poll_interval`):
 
 1. `read_status` + `read_dynamic` from the driver
-2. Snapshot evaluated by the alert engine
+2. Snapshot evaluated by the alert engine (voltage thresholds, load, battery low, error registers)
 3. Snapshot evaluated by the shutdown orchestrator
-4. Every telemetry interval (default 30 s), snapshot persisted to `telemetry_*` tables in SQLite
+4. Detects HE-mode and self-test transitions
+5. Persists `ups_status_snapshot` on change; runs daily config-register snapshot and `xfer_history` retention sweep
 
-Retention sweeper runs in the same thread, deleting rows older than configured retention windows.
+**Fast loop** (200 ms, Modbus drivers only — SMT/SRT):
+
+1. Reads the status register and transfer-reason register every tick
+2. Detects sub-second transitions on `ON_BATTERY`, `OUTPUT_OFF`, `BYPASS`, `FAULT`, `FAULT_STATE`, `OVERLOAD` and journals them immediately
+3. Records every register-2 transition to `xfer_history` (7-day retention) so brief mains glitches that resolve before the slow loop lands still leave a forensic trail
+
+HID drivers don't expose a separate fast read path — they run slow-loop-only. The 50 ms Modbus pacing wrapper (`src/ups/ups_modbus.{h,c}`) enforces a minimum gap between consecutive bus operations so the SMT management plane doesn't crash under combined slow + fast traffic.
 
 ---
 
@@ -251,9 +256,9 @@ Status visible at `/config/weather` (current forecast, last poll, current decisi
 ### Where the logs go
 
 ```bash
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups -f"          # follow
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups -n 100"      # last 100 lines
-ssh sysadmin@upspi.internal.airies.net "journalctl -u airies-ups --since '1 hour ago'"
+ssh <admin>@<host> "journalctl -u airies-ups -f"          # follow
+ssh <admin>@<host> "journalctl -u airies-ups -n 100"      # last 100 lines
+ssh <admin>@<host> "journalctl -u airies-ups --since '1 hour ago'"
 ```
 
 Log level is set in app config (`/config/app`) and applies to both the daemon's stdout (which systemd captures) and `journalctl`.
@@ -261,9 +266,9 @@ Log level is set in app config (`/config/app`) and applies to both the daemon's 
 ### Service control
 
 ```bash
-ssh sysadmin@<host> "systemctl status airies-ups"
-ssh sysadmin@<host> "sudo systemctl restart airies-ups"
-ssh sysadmin@<host> "sudo systemctl stop airies-ups"
+ssh <admin>@<host> "systemctl status airies-ups"
+ssh <admin>@<host> "sudo systemctl restart airies-ups"
+ssh <admin>@<host> "sudo systemctl stop airies-ups"
 ```
 
 Unit definition: `airies-ups.service` at the repo root (`Restart=on-failure`, `RestartSec=5`).
@@ -271,7 +276,7 @@ Unit definition: `airies-ups.service` at the repo root (`Restart=on-failure`, `R
 ### Database access
 
 ```bash
-ssh sysadmin@<host> "sqlite3 /home/sysadmin/airies-ups/app.db"
+ssh <admin>@<host> "sudo -u airies-ups sqlite3 /var/lib/airies-ups/app.db"
 ```
 
 Useful tables: `events`, `telemetry`, `app_config`, `ups_config`, `shutdown_groups`, `shutdown_targets`, `weather_state`.
@@ -291,14 +296,14 @@ Common causes: wrong `device` path in `config.yaml`; port 8080 already bound by 
 ### UPS not connecting (Modbus / serial)
 
 - Confirm the device path: `ls -l /dev/ttyUSB*`.
-- Confirm `sysadmin` is in the `dialout` group: `groups sysadmin`.
+- Confirm the `airies-ups` system user is in the `dialout` group: `id airies-ups`. (The `.deb`'s `postinst` joins it automatically; only re-check if you've installed by hand or hit a permission error.)
 - Confirm slave ID and baud match the UPS-side configuration.
 
 ### UPS not connecting (USB HID)
 
-- Confirm device on the bus: `lsusb | grep 051d`.
-- Confirm hidraw is accessible by `sysadmin`: `ls -l /dev/hidraw*`.
-- The udev rule in [DEPLOY.md](DEPLOY.md) sets `0660 plugdev` for APC VID 051d — re-run `udevadm control --reload-rules && udevadm trigger` after editing. CyberPower lives at VID 0764; add the matching rule if deploying that family.
+- Confirm the device is on the bus: `lsusb` (APC VID `051d`, CyberPower VID `0764`).
+- Confirm hidraw is accessible by `airies-ups`: `ls -l /dev/hidraw*`.
+- The `.deb` ships `99-airies-ups-ftdi.rules` (also in the repo root) and joins `airies-ups` to `plugdev`. If you're running outside the `.deb` (Docker, hand-built), copy the rule to `/etc/udev/rules.d/` on the host, then `sudo udevadm control --reload-rules && sudo udevadm trigger`.
 
 ### Modbus reads erratic right after a config write
 
@@ -310,7 +315,7 @@ Means the alert-state seed from the last persisted snapshot didn't load. Check t
 
 ### Frontend changes not visible after deploy
 
-The frontend bundle is **embedded into the daemon binary at compile time**. A frontend-only edit will not show up after a `systemctl restart` — you have to re-deploy the daemon binary (`./deploy.sh full <host>`).
+The frontend bundle is **embedded into the daemon binary at compile time**. A frontend-only edit will not show up after a `systemctl restart` — you have to rebuild and re-install the daemon (re-run the `.deb` install, or rebuild the Docker image).
 
 ### Port 8080 already in use locally
 
@@ -323,7 +328,101 @@ pkill -f airies-upsd
 
 ---
 
-## 14. Where to find what
+## 14. Authentication and sessions
+
+Single-admin auth, opaque random tokens, persisted in the SQLite `sessions` table. Two transports:
+
+- **Cookie** — what the web UI uses. On `/api/auth/login` success the daemon returns `Set-Cookie: auth=<token>; HttpOnly; SameSite=Strict; Path=/; Max-Age=…`. The browser sends it automatically on every subsequent request, including `EventSource` SSE streams (which can't carry custom headers). `HttpOnly` means JS can't read the cookie — XSS can't exfiltrate the credential.
+- **Authorization header** — `Authorization: Bearer <token>` for CLI, `curl`, scripts, future API tokens. The login response also includes the token in its JSON body for non-browser clients to grab.
+
+The auth middleware (`auth_check`) reads either, header first; cookie is the fallback. Unix-socket requests bypass auth entirely (CLI is trusted by virtue of the socket's filesystem permissions).
+
+### Session lifetime
+
+- **Sliding 90-day window**. Every successful validation bumps `expires_at = now + 90 days`. Use the UI weekly, never re-login. Don't touch it for 90 days, expire.
+- Driven by `kind='session'` rows. `kind='api_token'` rows (future, named long-lived tokens for integrations) do **not** slide — their expiry is set at issue time and held until explicit revocation or natural expiry.
+- `last_used_at` is touched on every validation for both kinds, for observability and future idle-timeout policies.
+
+### HTTPS / `auth.cookie_secure`
+
+The daemon ships HTTP-only today. The `Secure` cookie flag (set in `app_config.h:auth.cookie_secure`, default `0`) is gated on this — browsers reject `Secure` cookies over plain HTTP, so leaving the flag off is correct for the default deployment. Flip to `1` when serving via HTTPS or behind an HTTPS reverse proxy. HTTPS support is planned as a separate change.
+
+### Logout / revocation
+
+- `POST /api/auth/logout` — revokes the current session DB row and emits a `Set-Cookie` clear. The "Logout" button in the UI sidebar calls this.
+- Revocation is a hard `DELETE` for now; the schema carries `revoked_at` for a future switch to soft-delete when audit retention becomes a requirement.
+
+### Schema (after migration 016)
+
+```sql
+sessions(token PK, user_id, kind, name, scopes,
+         created_at, last_used_at, expires_at, revoked_at)
+```
+
+The non-token columns are forward-compat hooks: `user_id` for multi-admin, `kind` for the `session`/`api_token` split, `name` + `scopes` for named API tokens with limited scope, `revoked_at` for audit-retention-friendly revocation.
+
+---
+
+## 15. Live event stream (SSE)
+
+The daemon exposes a single Server-Sent Events endpoint at **`GET /api/events/stream`** that multiplexes two channels onto one connection:
+
+- **`event: monitor`** — state-change events as they fire (alerts, on-battery / bypass / fault transitions, self-test results). Same payload shape as the journal `/api/events` endpoint, minus the timestamp (clients synthesize one on receipt).
+- **`event: state`** — full UPS snapshot at the slow-loop cadence (default 5 s). Same JSON shape as `/api/status`. Lets dashboards drop their poll-every-N-seconds pattern entirely.
+
+### Auth
+
+Cookie-only. `EventSource` automatically sends the `auth` HttpOnly cookie set by `/api/auth/login` (see §14), and the existing `auth_check` middleware gates the stream the same way it gates every other route. There is no ticket endpoint, no `?token=…` query param. Browsers can't attach `Authorization` headers to `EventSource`, so the cookie is the only auth path — mirrored intentionally so server-side checks don't fork between SSE and regular routes.
+
+### Push-on-connect
+
+The broadcaster caches the most recent `state` frame. When a new client connects, that cached frame is delivered **before** any further events — no "blank dashboard until the next 5 s tick" gap. The cache is updated atomically every time the slow loop emits a new state, so the gap is bounded by one slow-loop period.
+
+`monitor` events are not cached. The `/api/events` journal endpoint is the source of truth for historical replay; the live stream is for "what's happening right now."
+
+### Heartbeat
+
+Default 30 s. If no real frame fires within the interval, the broadcaster sends the SSE comment line `:heartbeat\n\n`. This keeps idle connections alive past common proxy timeouts and gives clients a positive liveness signal even when the UPS is reporting nothing new. Comment lines are ignored by `EventSource` so the application code never sees them.
+
+### Concurrency cap
+
+8 simultaneous subscribers (`SSE_MAX_SUBSCRIBERS` in `src/api/sse.h`). The 9th connection gets a real **`503 Service Unavailable`** with body `{"error":"sse capacity exceeded"}` — not a dropped TCP connection. Browsers `EventSource` auto-reconnects on 503, so the cap doubles as natural backpressure.
+
+The cap is generous for a single-admin UPS daemon (typical: one open dashboard tab). Raise `SSE_MAX_SUBSCRIBERS` if you have a real reason; each subscriber holds a 256-frame ring buffer (~1 MB worst case).
+
+### Reconnect semantics
+
+`EventSource` reconnects automatically on transient errors (server restart, network blip, idle timeout). The auth cookie rides on each reconnect with no client work. The frontend hook (`useEventStream`) re-establishes its event listeners on every connection without re-subscribing globally.
+
+`Last-Event-ID` is **not** honored. Replay of the live stream is not supported by design — `/api/events` already serves the historical journal, and the live stream is meant for "right now." A reconnecting client gets the cached state immediately and continues from there.
+
+### Frontend usage
+
+```tsx
+import { useEventStream } from '@/hooks/useEventStream'
+
+useEventStream<{ state: UpsStatus; monitor: MonitorEvent }>('/api/events/stream', {
+  state:   (snapshot) => setLive(snapshot),
+  monitor: (event)    => setEvents(prev => [event, ...prev].slice(0, 200)),
+})
+```
+
+The hook installs listeners per event type, parses `data` as JSON, drops malformed payloads silently. Handlers can change between renders without reconnecting (refs under the hood). Unmount closes the connection cleanly.
+
+### Where it lives
+
+| Looking for | Path |
+|-------------|------|
+| Broadcaster + subscriber primitives | `src/api/sse.{h,c}` |
+| Streaming-route plumbing | `src/api/server.c` (`api_server_route_streaming`, `send_streaming_response`) |
+| Wiring (broadcaster + monitor + route) | `src/daemon/main.c`, `src/api/routes/routes.c` |
+| State-tick serializer | `api_state_emit` in `src/api/routes/routes.c` (reuses `build_status_into_resp`) |
+| Frontend hook | `frontend/src/hooks/useEventStream.ts` |
+| Backend tests (unit + integration) | `tests/test_sse.c` |
+
+---
+
+## 16. Where to find what
 
 | Looking for | Path |
 |-------------|------|
@@ -337,5 +436,5 @@ pkill -f airies-upsd
 | Service unit | `airies-ups.service` |
 | udev rule | `99-airies-ups-ftdi.rules` |
 | CI pipeline | `.gitlab-ci.yml` |
-| Local dev workflow | [DEPLOY.md](DEPLOY.md) §Local development |
+| Local dev workflow | [README.md](README.md) §Development |
 | Hardware reference | `docs/reference/apc-{smt,srt}-modbus.md`, `docs/vendor/` |

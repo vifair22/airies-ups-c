@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { useTheme } from './hooks/useTheme'
+import { SseProvider } from './hooks/SseProvider'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Events from './pages/Events'
@@ -22,16 +23,20 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<'loading' | 'setup' | 'login' | 'ok'>('loading')
 
   useEffect(() => {
-    fetch('/api/setup/status')
+    /* Setup-status first (public). If setup isn't done, send the user
+     * there. Otherwise probe /api/auth/check — it's a tiny protected
+     * endpoint whose 200/401 response is the only way the frontend can
+     * know if the HttpOnly auth cookie is valid (JS can't read the
+     * cookie directly). */
+    fetch('/api/setup/status', { credentials: 'include' })
       .then(r => r.json())
-      .then(data => {
+      .then(async data => {
         if (data.needs_setup) {
           setState('setup')
-        } else if (!localStorage.getItem('auth_token')) {
-          setState('login')
-        } else {
-          setState('ok')
+          return
         }
+        const probe = await fetch('/api/auth/check', { credentials: 'include' })
+        setState(probe.ok ? 'ok' : 'login')
       })
       .catch(() => setState('ok'))
   }, [location.pathname])
@@ -70,7 +75,9 @@ export default function App() {
       {/* Protected routes */}
       <Route element={
         <AuthGuard>
-          <Layout />
+          <SseProvider>
+            <Layout />
+          </SseProvider>
         </AuthGuard>
       }>
         <Route path="/" element={<Dashboard />} />

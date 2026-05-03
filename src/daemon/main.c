@@ -8,6 +8,7 @@
 
 #include "ups/ups.h"
 #include "api/server.h"
+#include "api/sse.h"
 #include "api/routes/routes.h"
 #include "api/auth.h"
 #include "monitor/monitor.h"
@@ -24,6 +25,13 @@
 static volatile int running = 1;
 static volatile int restart_requested = 0;
 static const char *g_ups_name = NULL;
+
+/* Set when the monitor is created so alert_notify can route alerts
+ * through the events journal. NULL means alerts log + push but don't
+ * journal (e.g. before the monitor is up — shouldn't happen in
+ * practice since the alert engine is wired only after monitor_create
+ * succeeds). */
+static monitor_t *g_monitor = NULL;
 
 static void sig_handler(int sig)
 {
@@ -135,11 +143,19 @@ typedef struct {
     shutdown_mgr_t    *shutdown;
 } alert_ctx_t;
 
-static void alert_notify(const char *severity, const char *title,
-                         const char *body)
+static void alert_notify(const char *severity, const char *category,
+                         const char *title, const char *body)
 {
     log_info("ALERT: %s — %s", title, body);
-    push_notify(severity, title, body);
+    /* Route through the monitor's event journal so threshold transitions
+     * land in the events table alongside bit-transition events. The
+     * journal write also fires on_monitor_event, which handles the push
+     * with the correct severity gating — so we don't push directly here.
+     * Falls back to a direct push if the monitor isn't up yet. */
+    if (g_monitor)
+        monitor_fire_event(g_monitor, severity, category, title, body);
+    else
+        push_notify(severity, title, body);
 }
 
 static void on_monitor_poll(const ups_data_t *data, void *userdata)
@@ -233,14 +249,29 @@ int main(int argc, char *argv[])
 
     monitor_t *mon = NULL;
     shutdown_mgr_t *shutdown = NULL;
+    sse_broadcaster_t *sse = NULL;
+    weather_t *weather = NULL;
+    /* route_ctx is built incrementally so monitor_on_poll can register the
+     * SSE state-tick callback against a stable pointer BEFORE monitor_start.
+     * Fields not yet available (weather) are filled in later — the state-emit
+     * callback only reads monitor/ups/sse/config/transfer_*, never weather. */
+    static route_ctx_t route_ctx;
     static alert_ctx_t alert_ctx;
 
     if (ups) {
         /* Monitor */
-        int poll_sec = config_get_int(cfg, "monitor.poll_interval", 2);
+        int poll_sec = config_get_int(cfg, "monitor.poll_interval", 5);
         mon = monitor_create(ups, db, poll_sec);
         if (mon) {
+            g_monitor = mon;
             monitor_on_event(mon, on_monitor_event, cfg);
+
+            /* SSE broadcaster: monitor events fan out to web-UI subscribers
+             * via /api/events/stream. State ticks (full ups_data snapshot)
+             * are emitted from the slow-loop poll callback wired below. */
+            sse = sse_broadcaster_create(0);
+            if (sse)
+                monitor_on_event(mon, sse_on_monitor_event, sse);
 
             /* Wire alert engine into monitor poll cycle. Seed alert state
              * from the persisted snapshot so we don't re-fire alerts on
@@ -265,18 +296,35 @@ int main(int argc, char *argv[])
             shutdown = shutdown_create(db, ups, cfg, mon);
             alert_ctx.shutdown = shutdown;
 
+            /* Populate route_ctx with everything we have so far. weather is
+             * filled in below, after weather_create. State-emit only reads
+             * monitor/ups/sse/config/transfer_*, so partial init is safe. */
+            route_ctx = (route_ctx_t){
+                .monitor  = mon,
+                .ups      = ups,
+                .shutdown = shutdown,
+                .sse      = sse,
+                .db       = db,
+                .config   = cfg,
+                .guard    = guard,
+            };
+            api_refresh_thresholds(&route_ctx);
+
             monitor_on_poll(mon, on_monitor_poll, &alert_ctx);
+            /* SSE state ticks: emit a full ups_data snapshot every slow-loop
+             * cycle so dashboards can drop their /api/ups/state polling. */
+            monitor_on_poll(mon, api_state_emit, &route_ctx);
 
             monitor_start(mon);
         }
     }
 
     /* Weather subsystem (starts only if enabled in DB config) */
-    weather_t *weather = NULL;
     if (ups && mon)
         weather = weather_create(db, mon, ups);
     if (weather)
         weather_start(weather);
+    route_ctx.weather = weather;
 
     /* --- Phase 4: API server --- */
 
@@ -293,16 +341,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Register routes */
-    route_ctx_t route_ctx = {
-        .monitor  = mon,
-        .ups      = ups,
-        .shutdown = shutdown,
-        .weather  = weather,
-        .db       = db,
-        .config   = cfg,
-        .guard    = guard,
-    };
     api_register_routes(api, &route_ctx);
     api_server_set_auth(api, auth_check, db);
 
@@ -320,10 +358,16 @@ int main(int argc, char *argv[])
 
     log_info("shutting down");
     weather_stop(weather);
+    /* Wake any blocked SSE readers BEFORE stopping the API server so
+     * MHD's worker threads exit promptly instead of hanging on cond_wait. */
+    sse_broadcaster_shutdown(sse);
     api_server_stop(api);
     if (mon) monitor_stop(mon);
     if (ups) ups_close(ups);
     shutdown_free(shutdown);
+    /* Broadcaster destroyed last — MHD has already drained subscribers
+     * (each cleanup callback freed its own subscriber slot). */
+    sse_broadcaster_destroy(sse);
 
     if (restart_requested) {
         log_info("restarting via appguard_restart");

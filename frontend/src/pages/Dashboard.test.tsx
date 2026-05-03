@@ -6,7 +6,6 @@ import type { UpsStatus } from '../types/ups'
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  localStorage.setItem('auth_token', 'test-jwt')
 })
 
 const connectedStatus: UpsStatus = {
@@ -15,6 +14,7 @@ const connectedStatus: UpsStatus = {
   connected: true,
   inventory: {
     model: 'Smart-UPS SRT 3000',
+    sku: 'SRT3000XLT',
     serial: 'AS1234567890',
     firmware: '08.3',
     nominal_va: 3000,
@@ -62,15 +62,28 @@ describe('Dashboard', () => {
     expect(screen.getByText(/No device found/)).toBeInTheDocument()
   })
 
-  it('renders connected UPS with model and battery info', async () => {
+  it('renders connected UPS with SKU and battery info', async () => {
     mockApiResponses({ '/api/status': connectedStatus })
+    renderWithRouter(<Dashboard />)
+
+    await waitFor(() => {
+      expect(screen.getByText('SRT3000XLT')).toBeInTheDocument()
+    })
+    expect(screen.getByText('AS1234567890')).toBeInTheDocument()
+    expect(screen.getByText('1h 0m remaining')).toBeInTheDocument()
+  })
+
+  it('falls back to model when SKU is missing', async () => {
+    const noSku: UpsStatus = {
+      ...connectedStatus,
+      inventory: { ...connectedStatus.inventory!, sku: undefined },
+    }
+    mockApiResponses({ '/api/status': noSku })
     renderWithRouter(<Dashboard />)
 
     await waitFor(() => {
       expect(screen.getByText('Smart-UPS SRT 3000')).toBeInTheDocument()
     })
-    expect(screen.getByText('AS1234567890')).toBeInTheDocument()
-    expect(screen.getByText('1h 0m remaining')).toBeInTheDocument()
   })
 
   it('renders output load percentage', async () => {

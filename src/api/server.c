@@ -19,11 +19,20 @@
 
 #define MAX_ROUTES 64
 
+typedef enum {
+    ROUTE_KIND_BUFFERED,
+    ROUTE_KIND_STREAMING,
+} route_kind_t;
+
 typedef struct {
-    char          pattern[128];
-    api_method_t  method;
-    api_handler_fn handler;
-    void         *userdata;
+    char            pattern[128];
+    api_method_t    method;
+    route_kind_t    kind;
+    union {
+        api_handler_fn        buffered;
+        api_stream_handler_fn streaming;
+    } handler;
+    void           *userdata;
 } route_entry_t;
 
 /* --- POST body accumulator --- */
@@ -95,9 +104,69 @@ const char *api_query_param(const api_request_t *req, const char *key)
     return MHD_lookup_connection_value(req->_conn, MHD_GET_ARGUMENT_KIND, key);
 }
 
+const char *api_cookie(const api_request_t *req, const char *name)
+{
+    if (!req->_conn) return NULL;
+    return MHD_lookup_connection_value(req->_conn, MHD_COOKIE_KIND, name);
+}
+
+/* --- Set-Cookie helpers ---
+ *
+ * Bake in HttpOnly + SameSite=Strict + Path=/ since those are correct
+ * for every cookie this app emits (auth state, no cross-site nav). The
+ * caller controls Secure (HTTPS-only flag) and Max-Age, which is where
+ * deployment differences live.
+ *
+ * Both helpers reject names/values containing control characters
+ * (\r, \n, ;) — these would let a caller smuggle additional headers
+ * or cookie attributes via the cookie pair. The set of valid cookie-
+ * value characters is broader than this conservative check, but every
+ * value we actually emit is a base64-encoded session token, so the
+ * narrow check is fine and simpler to audit. */
+
+static int safe_cookie_token(const char *s)
+{
+    for (const char *p = s; *p; p++) {
+        if (*p == '\r' || *p == '\n' || *p == ';' || *p == '"') return 0;
+    }
+    return 1;
+}
+
+char *api_cookie_set(const char *name, const char *value,
+                     int max_age, int secure)
+{
+    if (!name || !value) return NULL;
+    if (!safe_cookie_token(name) || !safe_cookie_token(value)) return NULL;
+
+    char buf[512];
+    int n;
+    if (max_age > 0) {
+        n = snprintf(buf, sizeof(buf),
+                     "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d%s",
+                     name, value, max_age, secure ? "; Secure" : "");
+    } else {
+        n = snprintf(buf, sizeof(buf),
+                     "%s=%s; HttpOnly; SameSite=Strict; Path=/%s",
+                     name, value, secure ? "; Secure" : "");
+    }
+    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+    return strdup(buf);
+}
+
+char *api_cookie_clear(const char *name, int secure)
+{
+    if (!name || !safe_cookie_token(name)) return NULL;
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+                     "%s=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0%s",
+                     name, secure ? "; Secure" : "");
+    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
+    return strdup(buf);
+}
+
 static enum MHD_Result send_response(struct MHD_Connection *conn,
                                      int status, const char *content_type,
-                                     const char *body)
+                                     const char *body, const char *set_cookie)
 {
     size_t len = body ? strlen(body) : 0;
     /* MHD copies the buffer with RESPMEM_MUST_COPY, safe to discard const */
@@ -110,7 +179,92 @@ static enum MHD_Result send_response(struct MHD_Connection *conn,
         MHD_add_response_header(resp, "Content-Type", content_type);
     MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
     MHD_add_response_header(resp, "Access-Control-Allow-Headers", "Authorization, Content-Type");
+    /* set_cookie is built by api_cookie_set/api_cookie_clear, both of
+     * which reject control characters in name/value — so any string
+     * reaching here is safe to pass through without further validation. */
+    if (set_cookie)
+        MHD_add_response_header(resp, "Set-Cookie", set_cookie);
 
+    enum MHD_Result ret = MHD_queue_response(conn, (unsigned int)status, resp);
+    MHD_destroy_response(resp);
+    return ret;
+}
+
+/* --- Streaming response (SSE etc.) ---
+ *
+ * MHD's content reader signature carries a `pos` parameter we don't use
+ * for streams (each call returns whatever bytes are currently ready, no
+ * seekable offset). The wrapper here drops `pos` and forwards to the
+ * caller-provided api_stream_reader_fn. */
+
+typedef struct {
+    api_stream_reader_fn  reader;
+    api_stream_cleanup_fn cleanup;
+    void                 *cls;
+} stream_wrap_t;
+
+static ssize_t stream_reader_adapter(void *cls, uint64_t pos,
+                                     char *buf, size_t max)
+{
+    (void)pos;
+    stream_wrap_t *w = cls;
+    return w->reader(w->cls, buf, max);
+}
+
+static void stream_cleanup_adapter(void *cls)
+{
+    stream_wrap_t *w = cls;
+    if (w->cleanup) w->cleanup(w->cls);
+    free(w);
+}
+
+static enum MHD_Result send_streaming_response(
+    struct MHD_Connection *conn, const api_stream_response_t *sresp)
+{
+    /* No reader -> handler is signalling a setup error. Fall through to
+     * the buffered response path so the client sees a real HTTP status
+     * code rather than a dropped connection. */
+    if (!sresp->reader) {
+        int status = sresp->status > 0 ? sresp->status : 503;
+        return send_response(conn, status, "application/json",
+                             sresp->error_body ? sresp->error_body
+                                               : "{\"error\":\"unavailable\"}",
+                             NULL);
+    }
+
+    stream_wrap_t *w = malloc(sizeof(*w));
+    if (!w) {
+        if (sresp->cleanup) sresp->cleanup(sresp->cls);
+        return MHD_NO;
+    }
+    w->reader  = sresp->reader;
+    w->cleanup = sresp->cleanup;
+    w->cls     = sresp->cls;
+
+    /* 4 KiB block hint; MHD picks an actual buffer size. SSE frames are
+     * a few hundred bytes typically, well under one block. */
+    struct MHD_Response *resp = MHD_create_response_from_callback(
+        MHD_SIZE_UNKNOWN, 4096,
+        stream_reader_adapter, w, stream_cleanup_adapter);
+    if (!resp) {
+        /* On alloc failure MHD does not invoke cleanup_adapter — drive
+         * the caller's cleanup manually to avoid leaking subscriber state. */
+        if (sresp->cleanup) sresp->cleanup(sresp->cls);
+        free(w);
+        return MHD_NO;
+    }
+
+    MHD_add_response_header(resp, "Access-Control-Allow-Origin", "*");
+    MHD_add_response_header(resp, "Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+    if (sresp->headers) {
+        for (const api_header_t *h = sresp->headers; h->name; h++) {
+            if (h->value)
+                MHD_add_response_header(resp, h->name, h->value);
+        }
+    }
+
+    int status = sresp->status > 0 ? sresp->status : 200;
     enum MHD_Result ret = MHD_queue_response(conn, (unsigned int)status, resp);
     MHD_destroy_response(resp);
     return ret;
@@ -318,16 +472,27 @@ static enum MHD_Result request_handler(void *cls,
             free(pb);
             *req_cls = NULL;
             return send_response(conn, 401, "application/json",
-                "{\"error\":\"unauthorized\"}");
+                "{\"error\":\"unauthorized\"}", NULL);
         }
 
-        api_response_t resp = route->handler(&req, route->userdata);
+        if (route->kind == ROUTE_KIND_STREAMING) {
+            api_stream_response_t sresp =
+                route->handler.streaming(&req, route->userdata);
+            enum MHD_Result ret = send_streaming_response(conn, &sresp);
+            free(pb->data);
+            free(pb);
+            *req_cls = NULL;
+            return ret;
+        }
+
+        api_response_t resp = route->handler.buffered(&req, route->userdata);
 
         enum MHD_Result ret = send_response(conn, resp.status,
             resp.content_type ? resp.content_type : "application/json",
-            resp.body);
+            resp.body, resp.set_cookie);
 
         free(resp.body);
+        free(resp.set_cookie);
         free(pb->data);
         free(pb);
         *req_cls = NULL;
@@ -363,7 +528,7 @@ static enum MHD_Result request_handler(void *cls,
     free(pb);
     *req_cls = NULL;
     return send_response(conn, 404, "application/json",
-                         "{\"error\":\"not found\"}");
+                         "{\"error\":\"not found\"}", NULL);
 }
 
 /* --- Public API --- */
@@ -393,7 +558,18 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
      * the kernel's socket cleanup and the new daemon refuses to start. */
     if (tcp_port > 0) {
         srv->tcp_daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
+            /* Thread-per-connection because the SSE streaming-route
+             * handler blocks in pthread_cond_timedwait while waiting for
+             * the next frame. With a single-threaded polling model
+             * (formerly MHD_USE_EPOLL) that block parked the entire MHD
+             * daemon thread for up to one heartbeat interval, making
+             * the whole daemon feel unresponsive on an idle UPS. Each
+             * connection now has its own worker thread; the SSE block
+             * is local to that thread, other HTTP requests continue
+             * uninterrupted. Loses epoll efficiency but the workload
+             * (single-admin dashboard, ~10 concurrent conns max) makes
+             * that irrelevant. */
+            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_THREAD_PER_CONNECTION,
             (uint16_t)tcp_port,
             NULL, NULL,
             request_handler, tcp_cls,
@@ -442,7 +618,18 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
         }
 
         srv->unix_daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
+            /* Thread-per-connection because the SSE streaming-route
+             * handler blocks in pthread_cond_timedwait while waiting for
+             * the next frame. With a single-threaded polling model
+             * (formerly MHD_USE_EPOLL) that block parked the entire MHD
+             * daemon thread for up to one heartbeat interval, making
+             * the whole daemon feel unresponsive on an idle UPS. Each
+             * connection now has its own worker thread; the SSE block
+             * is local to that thread, other HTTP requests continue
+             * uninterrupted. Loses epoll efficiency but the workload
+             * (single-admin dashboard, ~10 concurrent conns max) makes
+             * that irrelevant. */
+            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_THREAD_PER_CONNECTION,
             0,  /* port ignored for pre-bound socket */
             NULL, NULL,
             request_handler, unix_cls,
@@ -472,7 +659,26 @@ int api_server_route(api_server_t *srv, const char *pattern,
     route_entry_t *r = &srv->routes[srv->nroutes++];
     snprintf(r->pattern, sizeof(r->pattern), "%s", pattern);
     r->method = method;
-    r->handler = handler;
+    r->kind = ROUTE_KIND_BUFFERED;
+    r->handler.buffered = handler;
+    r->userdata = userdata;
+
+    return CUTILS_OK;
+}
+
+int api_server_route_streaming(api_server_t *srv, const char *pattern,
+                               api_method_t method,
+                               api_stream_handler_fn handler,
+                               void *userdata)
+{
+    if (srv->nroutes >= MAX_ROUTES)
+        return set_error(CUTILS_ERR, "too many API routes");
+
+    route_entry_t *r = &srv->routes[srv->nroutes++];
+    snprintf(r->pattern, sizeof(r->pattern), "%s", pattern);
+    r->method = method;
+    r->kind = ROUTE_KIND_STREAMING;
+    r->handler.streaming = handler;
     r->userdata = userdata;
 
     return CUTILS_OK;

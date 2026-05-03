@@ -14,11 +14,12 @@ session.
 
 ## Overview
 
-Drivers are `static const ups_driver_t` instances linked at compile time and 
-listed in the registry (`ups_drivers[]` in `src/ups/ups.c`). At runtime, the
-daemon calls `ups_connect(&params, &ups)`, which iterates registered drivers
-whose `conn_type` matches the caller's transport, asks each one to probe the
-bus, and picks the first one whose `detect()` returns 1.
+Drivers are `const ups_driver_t` instances at file scope (external linkage —
+the registry in `src/ups/ups.c` references each by `extern`) listed in
+`ups_drivers[]`. At runtime, the daemon calls `ups_connect(&params, &ups)`,
+which iterates registered drivers whose `conn_type` matches the caller's
+transport, asks each one to probe the bus, and picks the first one whose
+`detect()` returns 1.
 
 ```mermaid
 flowchart TD
@@ -64,7 +65,7 @@ comments; this section is a high-altitude reference.
 | Lifecycle | `connect(params)`, `disconnect(transport)` | Driver owns the `void *transport` handle between these two calls. |
 | Identification | `detect(transport)`, `get_topology(transport)` (optional) | `detect` returns 1 iff this driver claims the device. `get_topology` overrides the static field per-connection. |
 | Capabilities | `caps`, `resolve_caps(transport, default_caps)` (optional) | `caps` is the *maximum* set; `resolve_caps` narrows to what actually resolved on the live device. See [Capabilities](#capabilities). |
-| Reads | `read_status`, `read_dynamic`, `read_inventory`, `read_thresholds` | See [Data structs](#data-structs). All return 0 on success, -1 on I/O failure. |
+| Reads | `read_status`, `read_dynamic`, `read_inventory`, `read_thresholds`, `read_transfer_reason` (optional) | See [Data structs](#data-structs). Driver-level callbacks return 0 on success, -1 on I/O failure (the dispatcher remaps to `UPS_OK` / `UPS_ERR_IO`). |
 | Commands | `commands[]`, `commands_count` | Descriptor-driven. See [Commands](#commands). |
 | Config | `config_regs[]`, `config_regs_count`, `resolve_config_regs` (optional), `config_read`, `config_write` | Optional spec-driven setting I/O. See [Config registers](#config-registers). |
 | Freq tolerance | `freq_settings[]`, `freq_settings_count` | Only meaningful when `UPS_CAP_FREQ_TOLERANCE` is claimed. |
@@ -98,6 +99,7 @@ sequenceDiagram
             Drv-->>R: 1 (match) or 0 (not me)
             alt match
                 R->>Drv: resolve_caps (if present)
+                R->>Drv: resolve_config_regs (if present)
                 R->>Drv: read_inventory
                 R-->>D: UPS_OK + ups_t*
             else mismatch
@@ -118,17 +120,31 @@ sequenceDiagram
     participant Drv as driver.read_*
 
     loop every poll_sec
-        M->>R: ups_read_status + ups_read_dynamic
+        M->>R: ups_read_status
         R->>L: lock
         R->>Drv: read_status(transport, data)
         Drv-->>R: 0 / -1
+        R->>L: unlock
+        R-->>M: rc
+        M->>R: ups_read_dynamic
+        R->>L: lock
         R->>Drv: read_dynamic(transport, data)
         Drv-->>R: 0 / -1
         R->>L: unlock
+        Note over R: battery-zero fixup runs unlocked<br/>(data is caller-owned)
         R-->>M: rc
         M->>M: alerts, shutdown triggers, event emit
     end
 ```
+
+**Lock granularity.** `ups_read_status` and `ups_read_dynamic` each take and
+release `cmd_mutex` independently — they do *not* run inside one shared lock.
+Other threads (API request handlers, the shutdown worker, the fast-poll
+`xfer_fast_poll_thread`) can interleave between the two reads. The alert
+engine and shutdown orchestrator's threshold checks run synchronously inside
+the monitor thread per-poll, so they don't compete for the mutex themselves.
+The `data` snapshot is caller-owned, so the battery-zero fixup that runs
+after `read_dynamic` returns deliberately runs outside the lock.
 
 ### Command dispatch
 
@@ -169,9 +185,10 @@ Driver author implication: **`connect()` must be replayable**. The registry
 will call it over and over while the physical layer is down, and a
 successful replay triggers another round of `detect` / `resolve_caps` /
 `resolve_config_regs` / `read_inventory`. Any state the driver caches
-during `connect` (e.g., Back-UPS HID's resolved field pointers) must be
-recomputed each time — drivers generally achieve this by allocating a
-fresh transport struct on every `connect`.
+during `connect` (e.g., the APC HID adapter's resolved standard-PDC and
+vendor-page field pointers) must be recomputed each time — drivers
+generally achieve this by allocating a fresh transport struct on every
+`connect`.
 
 ---
 
@@ -182,7 +199,7 @@ its library needs.
 
 | Driver | `conn_type` | Transport handle | Lifetime |
 |--------|-------------|-------------------|----------|
-| `ups_srt`, `ups_smt` | `UPS_CONN_SERIAL` | `modbus_t *` (libmodbus) | `modbus_new_rtu` in `connect`, `modbus_free` in `disconnect` |
+| `ups_srt`, `ups_smt` | `UPS_CONN_SERIAL` | `modbus_t *` (libmodbus) | `modbus_new_rtu` + `modbus_connect` in `connect`, `modbus_close` + `modbus_free` in `disconnect` |
 | `ups_apc_hid`, `ups_cyberpower_hid` | `UPS_CONN_USB` | `hid_pdc_transport_t *` (defined in `hid_pdc_core.h`) | hidraw fd + parsed descriptor + standard PDC field pointers + opaque vendor-state pointer |
 | *(future)* | `UPS_CONN_TCP` | TBD | Placeholder; no driver yet |
 | *(future)* | `UPS_CONN_SNMP` | TBD | Placeholder; no driver yet |
@@ -249,7 +266,7 @@ sentinels.
 Populated by `read_status` + `read_dynamic`. SI units throughout (volts,
 amperes, Hz, seconds, percent). A few fields have meaningful sentinels:
 
-- `timer_shutdown`, `timer_start`: `-1` means "no countdown active"
+- `timer_shutdown`, `timer_start`, `timer_reboot`: `-1` means "no countdown active"
 - `efficiency`: valid only when `efficiency_reason == UPS_EFF_OK`. See
   [Efficiency encoding](#efficiency-encoding).
 - Battery fields (`charge_pct`, `battery_voltage`, `runtime_sec`) are
@@ -262,9 +279,11 @@ actually read.
 ### `ups_inventory_t` — one-shot identity
 
 Cached on `ups->inventory` at connect time via `ups_read_inventory` and
-refreshed on reconnect. Holds **identity fields only** (model, serial,
-firmware, nameplate ratings, SOG wiring config). Consumers may use
-`ups->has_inventory` to gate display.
+refreshed on reconnect. Holds **identity fields only**: `model`, `sku`
+(part number, separate from `model` because Back-UPS USB doesn't expose
+a SKU distinct from `iProduct` — leave empty on transports that don't
+have one), `serial`, `firmware`, `nominal_va`, `nominal_watts`,
+`sog_config`. Consumers may use `ups->has_inventory` to gate display.
 
 **Not here:** mutable settings like frequency tolerance, transfer
 thresholds, or outlet delays. Those change at runtime and must be read
@@ -278,6 +297,28 @@ Returns `transfer_high` and `transfer_low` in **volts**, not raw register
 counts. Drivers must pre-scale; the `uint16_t` parameter type is legacy
 (reflects APC's native storage) but the semantic is volts throughout.
 Consumers can treat the result as a voltage directly.
+
+### `read_transfer_reason` — optional fast-poll callback
+
+A single-register read of the input transfer-reason cause register, lighter
+than `read_status` (one register vs. the whole status block) so the
+monitor's `xfer_fast_poll_thread` can call it every ~200 ms without
+hogging the bus. Used to catch sub-poll-interval transitions: brief mains
+glitches that push the UPS out of HE mode but resolve within the main 2 s
+poll window — register 2 on SRT/SMT firmware reverts to "Acceptable
+Input" once mains is good again, so the slow status read misses the
+actual cause.
+
+Return 0 on success, -1 on I/O failure. **Modbus-only**: leave NULL on
+HID drivers, which have no separate cause register. When NULL, the
+dispatcher returns `UPS_ERR_NOT_SUPPORTED` and the monitor's fast-poll
+thread is not spawned.
+
+Note that the `transfer_reason` *field* on `ups_data_t` is still part of
+every driver's `read_status` output — HID drivers populate it with
+`UPS_TRANSFER_REASON_UNKNOWN` (`0xFFFF`, defined in `ups_format.h`).
+What's Modbus-only is the *fast-poll cause-register read*, not the
+transfer-reason field itself.
 
 ### Efficiency encoding
 
@@ -319,11 +360,14 @@ static uint32_t apc_resolve_caps(void *transport, uint32_t default_caps)
     const apc_vendor_t  *v = t->vendor;
     uint32_t caps = default_caps;
 
-    if (!t->pdc.delay_before_shutdown) caps &= ~UPS_CAP_SHUTDOWN;
-    if (!t->pdc.test)                  caps &= ~UPS_CAP_BATTERY_TEST;
-    if (!t->pdc.module_reset)          caps &= ~UPS_CAP_CLEAR_FAULTS;
-    if (!t->pdc.alarm_control)         caps &= ~UPS_CAP_MUTE;
-    if (!v || !v->lights_test)         caps &= ~UPS_CAP_BEEP;
+    /* Casts pacify -Wsign-conversion (a project-wide flag); without them
+     * `caps &= ~UPS_CAP_SHUTDOWN` is a build error since the enum value
+     * promotes to int and `~` produces a signed result. */
+    if (!t->pdc.delay_before_shutdown) caps &= (uint32_t)~UPS_CAP_SHUTDOWN;
+    if (!t->pdc.test)                  caps &= (uint32_t)~UPS_CAP_BATTERY_TEST;
+    if (!t->pdc.module_reset)          caps &= (uint32_t)~UPS_CAP_CLEAR_FAULTS;
+    if (!t->pdc.alarm_control)         caps &= (uint32_t)~UPS_CAP_MUTE;
+    if (!v || !v->lights_test)         caps &= (uint32_t)~UPS_CAP_BEEP;
     return caps;
 }
 ```
@@ -347,38 +391,100 @@ everything it advertises), just leave `resolve_caps = NULL`.
 
 ---
 
-## Convenience tables
-
-### `config_regs[]`
+## Config registers
 
 Descriptor-driven, driver-supplied table of readable/writable UPS settings.
-The daemon exposes them via `/config/<name>` endpoints without knowing the
-register layout of each family.
+Each driver provides a `config_regs[]` array; the daemon exposes the entries
+via `/api/config/ups` (settings page) and `/api/about` (full register dump)
+without knowing the register layout of each family. Operators read and
+write through the same API on every driver — only the descriptors and the
+driver-side `config_read` / `config_write` translators change.
 
-Descriptor fields include: API `name`, `display_name`, `unit`, `group`,
-`reg_addr` (driver-interpreted), `reg_count`, `type` (`SCALAR`, `BITFIELD`,
-`STRING`), `scale` divisor, `writable` flag, and type-specific metadata
-(min/max for scalar, options array for bitfield, `max_chars` for string).
+### The descriptor
 
-The driver's `config_read` / `config_write` callbacks translate the
-descriptor into transport-level I/O. The HID adapters store the resolved
-HID report ID in `reg_addr` and resolve it via
-`hid_pdc_find_field_by_report_id()`; Modbus drivers use `reg_addr` as an
-absolute register address.
+`ups_config_reg_t` (full definition in `src/ups/ups_driver.h`):
 
-#### Narrowing at connect time: `resolve_config_regs`
+| Field | Purpose |
+|-------|---------|
+| `name` | API dispatch key (e.g. `"transfer_high"`). |
+| `display_name` | Human label for the UI (e.g. `"High Transfer Voltage"`). |
+| `unit` | `"V"`, `"s"`, `"%"`, or `NULL`. UI suffix only — the wire is unitless. |
+| `group` | UI grouping bucket (`"transfer"`, `"delays"`, etc.). |
+| `reg_addr` | Driver-interpreted: Modbus drivers store an absolute register address; HID adapters store a **field index into `map->fields[]`** (populated at connect by the fixup function, see below). |
+| `reg_count` | Register span: 1 for `uint16`, 2 for `uint32` (Modbus packs MSB first), `N` for an `N`-register STRING. |
+| `type` | One of `UPS_CFG_SCALAR`, `UPS_CFG_BITFIELD`, `UPS_CFG_STRING`, `UPS_CFG_FLAGS`. |
+| `scale` | Display divisor; `1` = raw. |
+| `writable` | Non-zero if the driver's `config_write` accepts this descriptor. The dispatcher rejects writes against `writable == 0` with `UPS_ERR_NOT_SUPPORTED` before the driver sees them. |
+| `meta` | Type-specific union; see [Validation contract](#validation-contract) below. |
+| `category` | One of `UPS_REG_CATEGORY_CONFIG` (default), `MEASUREMENT`, `IDENTITY`, `DIAGNOSTIC`. `/api/config/ups` filters to `CONFIG`; the others surface only via `/api/about`. Default-zero (CONFIG) means existing entries don't need annotation, but new tunables/diagnostics should be tagged explicitly. |
+| `has_sentinel`, `sentinel_value` | When `has_sentinel == 1` and the read raw value equals `sentinel_value`, the API renders the field as N/A instead of a number (e.g., a "no battery installed" indicator a UPS reports as `0xFFFF`). |
 
-Analogous to `resolve_caps`. The driver's static `config_regs[]` is the
+### Type cheat-sheet
+
+| `type` | Wire shape | Meta access | Example |
+|--------|------------|-------------|---------|
+| `UPS_CFG_SCALAR` | unsigned integer (`reg_count`-wide) | `meta.scalar.{min, max, step}` | High Transfer Voltage (volts, scalar). |
+| `UPS_CFG_BITFIELD` | one-of-N enum: each `opts[]` entry's `value` is a complete acceptable register value (single-bit, or arbitrary integer — driver picks the encoding) | `meta.bitfield.{opts, count, strict}` | Audible Alarm = Disabled / Enabled / Muted; SRT bat_test = OnStartUp / OnStartUpPlus7 / ... |
+| `UPS_CFG_STRING` | `reg_count` registers, two ASCII chars per register | `meta.string.max_chars` | Output Voltage Selector free-text (rare). |
+| `UPS_CFG_FLAGS` | multi-bit register where every set bit is a separately-named flag | `meta.bitfield.{opts, count, strict}` (shares the bitfield branch) | UPSStatus / PowerSystemError diagnostic dumps. Each `opts[]` entry's `value` is a single bit mask; the decoder ORs the set bits and renders the matching labels as a list. |
+
+### Validation contract
+
+`ups_config_write` validates the value against `meta` *before* invoking the
+driver. Failures return `UPS_ERR_INVALID_VALUE` and the driver never sees
+the value.
+
+- **SCALAR.** `min ≤ value ≤ max` when set. Convention: `min == 0 && max == 0`
+  means "no range declared" — the check is skipped. `step` is a UI-only
+  hint (rendered as `<input step=N>`); the wire still accepts any in-range
+  integer.
+- **BITFIELD.** When `meta.bitfield.strict == 1`, the value must equal one
+  of the entries in `opts[]`; otherwise the dispatcher rejects it. With
+  `strict == 0`, any value passes through to the driver — use sparingly,
+  only when the firmware accepts arbitrary combinations or you need a
+  raw-bypass escape hatch.
+- **STRING.** `max_chars` is enforced by the string-write path.
+- **FLAGS.** Currently passthrough (the flags-typed descriptors that exist
+  today are read-only diagnostics). When a writable FLAGS descriptor lands,
+  validation should ensure the value covers only declared bits.
+
+The "rapid-fire writes confuse APC firmware" reflex (see
+`docs/reference/apc-srt-modbus.md`) is one reason this gate exists in the
+dispatcher rather than in each driver: an out-of-range write rejected at
+the dispatcher never gets the chance to wedge the control plane.
+
+### HID adapter pattern: in-place fixup
+
+HID adapters' `config_regs[]` are declared **mutable** (`static
+ups_config_reg_t`, NOT `const`) because the resolver writes the resolved
+HID field index into each entry's `reg_addr` at connect time. Modbus
+drivers use `static const` — `reg_addr` is a literal Modbus register
+address known at compile time and never changes.
+
+The fixup function calls `hid_pdc_fixup_config_reg(reg, field, map)` for
+each (descriptor, resolved-field) pair; that helper writes the field
+index into `reg->reg_addr` (and copies the field's logical min/max into
+`meta.scalar` for scalars). At read/write time, the adapter resolves the
+field via `hid_pdc_field_by_index(map, reg->reg_addr)` and delegates the
+actual I/O to `hid_pdc_config_read_field` / `hid_pdc_config_write_field`
+in the shared core.
+
+### Narrowing at connect time: `resolve_config_regs`
+
+Analogous to `resolve_caps`. The driver's `config_regs[]` is the
 maximum set; `resolve_config_regs(transport, default_regs, default_count,
-out)` lets the driver narrow to descriptors whose backing
-register/HID-field actually resolved on the live device. The registry
-allocates `out` with capacity `default_count`, the driver writes the
-subset as struct copies, and the result is cached on `ups_t->resolved_regs`.
+out)` lets the driver narrow to descriptors whose backing register / HID
+field actually resolved on the live device. The registry allocates `out`
+with capacity `default_count`, the driver writes the subset as struct
+copies, and the result is cached on `ups_t->resolved_regs`.
 `ups_get_config_regs` returns the narrowed set when present and the full
 static array otherwise.
 
 The APC and CyberPower HID adapters use this to drop descriptors whose
-HID field didn't resolve on the current device:
+HID field didn't resolve on the current device. The fixup call comes
+*first* — the dispatcher guarantees `resolve_config_regs` runs on every
+connect AND reconnect, so this is the right place to refresh field
+indices any time the transport comes back up:
 
 ```c
 static size_t apc_resolve_config_regs(
@@ -387,6 +493,9 @@ static size_t apc_resolve_config_regs(
 {
     hid_pdc_transport_t *t = transport;
     (void)default_count;
+
+    apc_fixup_config_regs(t);   /* populate reg_addr with field indices */
+
     size_t n = 0;
     #define KEEP_IF(idx, f) do { if ((f)) out[n++] = default_regs[(idx)]; } while (0)
     KEEP_IF(CFG_TRANSFER_LOW, t->pdc.transfer_low);
@@ -401,10 +510,14 @@ Drivers that don't need narrowing (SRT, currently) leave
 this to drop SOG descriptors for outlet groups that aren't physically
 present on the SKU.
 
-### `freq_settings[]`
+### Where the examples live
 
-Enumerates valid frequency-tolerance choices for the UPS. Only consumed
-when `UPS_CAP_FREQ_TOLERANCE` is in the effective caps.
+- Modbus, `static const` table + direct register I/O —
+  `src/ups/ups_srt.c:srt_config_regs` plus `srt_config_read` /
+  `srt_config_write`.
+- HID, mutable table + fixup + delegation to the shared core —
+  `src/ups/ups_apc_hid.c:apc_config_regs` plus
+  `apc_fixup_config_regs` and `apc_resolve_config_regs`.
 
 ---
 
@@ -426,16 +539,14 @@ return. Return 0 on success, -1 on error.
 
 ---
 
-## Config registers
+## Frequency tolerance
 
-Same table as [Convenience tables](#convenience-tables) — repeated here
-because when implementing a new driver, you'll touch this twice: once
-to define the static table, and again to implement the driver's
-`config_read` / `config_write` callbacks. See `ups_srt.c:srt_config_regs`
-and `srt_config_read` / `srt_config_write` for the Modbus example, and
-`ups_apc_hid.c:apc_config_regs` for the HID-field-mapped example (the
-adapter delegates the actual I/O to `hid_pdc_config_read_field` /
-`hid_pdc_config_write_field` in the shared core).
+`freq_settings[]` enumerates the valid frequency-tolerance choices a UPS
+accepts (e.g. `60 Hz ± 0.1 Hz`, `60 Hz ± 1.0 Hz`, ...). Each entry holds
+the raw register value, an API name, and a human label. Only consumed
+when `UPS_CAP_FREQ_TOLERANCE` is in the effective capability set —
+`ups_get_freq_settings` and friends return NULL for drivers that don't
+claim it. Drivers that *do* claim it must populate at least one entry.
 
 ---
 
@@ -446,10 +557,12 @@ adapter delegates the actual I/O to `hid_pdc_config_read_field` /
 | `UPS_OK` (0) | Success |
 | `UPS_ERR_IO` (-1) | I/O failure: transport down, CRC error, driver returned -1 |
 | `UPS_ERR_NO_DRIVER` (-2) | No registered driver identified the UPS |
-| `UPS_ERR_NOT_SUPPORTED` (-3) | The active driver lacks the requested callback |
+| `UPS_ERR_NOT_SUPPORTED` (-3) | The active driver lacks the requested callback (or `reg->writable == 0` on a `ups_config_write`) |
+| `UPS_ERR_INVALID_VALUE` (-4) | A `ups_config_write` failed validation against the descriptor's meta — out-of-range SCALAR, or a value not in `opts[]` for a strict BITFIELD. The driver never sees the value. API routes should map this to HTTP 400 (operator error), distinct from `UPS_ERR_IO`'s 5xx (hardware error). |
 
 All negative, so `if (rc < 0)` catches every failure. Driver-level
-callbacks return 0 / -1; the registry translates to the public-API codes.
+callbacks return 0 / -1 only; the registry translates to the public-API
+codes above.
 
 There is no errno-style thread-local error message buffer; callers log
 failures at the call site. The registry tracks
@@ -467,17 +580,28 @@ calls the driver, and releases. Consequences:
 - Driver callbacks run single-threaded as far as `transport` is concerned.
 - Drivers MUST NOT spawn threads that touch `transport`. If the driver
   needs internal asynchrony, it must serialize itself.
-- Concurrent callers (monitor thread + API route + shutdown orchestrator)
-  will stall each other if one is blocked in a slow I/O. In practice
-  Modbus reads finish in under ~100 ms, so contention is invisible, but
-  it's a real cost when one read hangs waiting for timeout.
+- Concurrent callers (monitor thread, the fast-poll
+  `xfer_fast_poll_thread` for `read_transfer_reason`, libmicrohttpd-managed
+  API request handlers, shutdown worker thread) will stall each other if
+  one is blocked in a slow I/O. In practice Modbus reads finish in under
+  ~100 ms, so contention is invisible, but it's a real cost when one read
+  hangs waiting for timeout.
 - After every successful command execute or config_write, the registry
   sleeps 200 ms *before* releasing the mutex. Drivers can rely on that
   quiet window for UPS firmware to process the write before the next
   read races in.
 
-The inventory cache (`ups->inventory`) is written exactly once at connect
-time and read without a lock thereafter; `has_inventory` is the guard.
+The inventory cache (`ups->inventory`) is written at connect time and
+**rewritten on every successful reconnect** (a freshly-replaced UPS of the
+same family may report different model/serial/firmware). `has_inventory`
+is the guard for whether it's been populated at all. Writes happen with
+`cmd_mutex` held (reconnect runs from inside a dispatcher's lock); reads
+by display consumers (monitor's session-banner copy, `/api/about` route)
+do **not** take the lock and accept the resulting tradeoff: a struct copy
+that races with a reconnect may yield a stale or briefly-torn snapshot.
+This is acceptable because the fields are display-only and char arrays
+are NUL-terminated, so the worst case is a one-poll-old model name on
+the dashboard.
 
 ---
 
@@ -515,9 +639,10 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
    units (rare). For a USB HID PDC family, layer on `hid_pdc_core` and
    model the file on `ups_cyberpower_hid.c` (minimal) or `ups_apc_hid.c`
    (with vendor-page extensions).
-2. **Static driver struct** — `static const ups_driver_t ups_driver_<family>`
-   at the bottom of the file, with every required callback pointing at a
-   file-scope static function.
+2. **Driver struct** — `const ups_driver_t ups_driver_<family>` at the bottom
+   of the file, with every required callback pointing at a file-scope static
+   function. **Not `static`** — `ups.c` references each driver via an
+   `extern` declaration, so the symbol must have external linkage.
 3. **Connect / disconnect** — own the `void *transport` lifetime. Must be
    re-entrant-safe; the registry calls speculatively across drivers.
 4. **Detect** — cheap probe (one or two reads); return 1 if you recognize
@@ -525,16 +650,23 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 5. **Resolve caps** (if needed) — narrow the maximum-cap mask based on
    what resolved against the live device. See APC example above.
 6. **Reads** — `read_status`, `read_dynamic`, `read_inventory`,
-   `read_thresholds`. Populate the relevant `ups_data_t` /
-   `ups_inventory_t` fields and leave the rest zeroed. Remember
-   `read_thresholds` returns **volts**, not raw register counts, and
-   `ups_inventory_t` is identity-only (no mutable settings).
-7. **Commands & config regs** — static tables + handler functions. Match
-   each claimed capability to a command per the table in
-   [Capabilities](#capabilities). If some descriptors are only present
+   `read_thresholds`, and (Modbus-only, optional) `read_transfer_reason`.
+   Populate the relevant `ups_data_t` / `ups_inventory_t` fields and
+   leave the rest zeroed. Remember `read_thresholds` returns **volts**,
+   not raw register counts, and `ups_inventory_t` is identity-only (no
+   mutable settings). Leave `read_transfer_reason = NULL` on HID
+   drivers (no separate cause register exists).
+7. **Commands & config regs** — file-scope tables + handler functions.
+   Match each claimed capability to a command per the table in
+   [Capabilities](#capabilities). For Modbus drivers, declare config_regs
+   as `static const` (the `reg_addr` field is the literal Modbus address,
+   set at compile time). For HID adapters, declare config_regs as
+   `static` *without* `const` — the resolver writes the resolved HID
+   field index into each `reg_addr` at connect time via
+   `hid_pdc_fixup_config_reg()`. If some descriptors are only present
    on a subset of devices in your family, implement
    `resolve_config_regs` to narrow at connect time (parallel to
-   `resolve_caps`).
+   `resolve_caps`); see [Config registers](#config-registers).
 8. **Register in `src/ups/ups.c`** — add `extern const ups_driver_t
    ups_driver_<family>;` and an entry in `ups_drivers[]`. Order matters:
    put specific drivers before permissive ones to avoid misclassification.
@@ -546,7 +678,7 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
     warnings are errors; the project uses strict flags.
 12. **Smoke-test against real hardware** — run `./airies-upsd` against
     the actual UPS, watch `stdout.log`, verify detect and steady-state
-    reads. The DEPLOY.md describes the local dev path.
+    reads. See the [README](README.md) §Development for the local build flow.
 
 ---
 
@@ -554,9 +686,6 @@ Adding a new driver (e.g., an SNMP or Modbus TCP driver):
 
 Not blocking, but worth fixing when someone has the cycles:
 
-- **`*_CFG_COUNT` is hardcoded** in each HID adapter (`apc_config_regs`,
-  `cyberpower_config_regs`). Keep in sync with the array size manually;
-  no compile-time assertion.
 - **HID PDC output-voltage inference** in `hid_pdc_read_dynamic_standard`
   is derived from `status & ON_BATTERY ? nominal : input_voltage`.
   Accurate for standby/line-interactive UPS but not perfect during
@@ -578,7 +707,10 @@ Not blocking, but worth fixing when someone has the cycles:
   error codes, data structs
 - [`src/ups/ups.c`](src/ups/ups.c) — registry, connect, mutex-wrapped
   callback dispatch
-- [`docs/apc/990-9840_modbus_register_map.pdf`](docs/apc/990-9840_modbus_register_map.pdf)
+- [`docs/vendor/apc/990-9840_modbus_register_map.pdf`](docs/vendor/apc/990-9840_modbus_register_map.pdf)
   — unified SMT/SMX/SURTD/SRT register map (APC)
-- [`docs/apc/AN176_modbus_implementation.pdf`](docs/apc/AN176_modbus_implementation.pdf)
+- [`docs/vendor/apc/AN176_modbus_implementation.pdf`](docs/vendor/apc/AN176_modbus_implementation.pdf)
   — protocol-level spec (framing, BPI encoding, register-block layout)
+- [`docs/reference/apc-smt-modbus.md`](docs/reference/apc-smt-modbus.md),
+  [`docs/reference/apc-srt-modbus.md`](docs/reference/apc-srt-modbus.md)
+  — our own notes on register quirks and firmware behaviour

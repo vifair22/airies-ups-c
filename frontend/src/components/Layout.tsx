@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
-import type { UpsStatus } from '../types/ups'
+import { useSseState } from '../hooks/SseProvider'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
@@ -36,7 +36,10 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
-  const { data: status } = useApi<UpsStatus>('/api/status', 5000)
+  /* Read the shared SSE state from SseProvider — single connection app-wide.
+   * Initial /api/status fetch + push-on-connect happen inside the provider. */
+  const status = useSseState()
+
   const { data: version } = useApi<{ daemon: string }>('/api/version')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
@@ -130,8 +133,10 @@ export default function Layout() {
 
         <div className="mt-auto px-3 py-2 space-y-2">
           <button onClick={async () => {
+            /* /api/auth/logout revokes the session DB row and emits a
+             * Set-Cookie clearing the HttpOnly auth cookie. Nothing
+             * client-side to clear. */
             try { await apiPost('/api/auth/logout', {}) } catch {}
-            localStorage.removeItem('auth_token')
             window.location.href = '/login'
           }}
             className="block w-full text-left text-xs text-faint hover:text-muted transition-colors py-2 md:py-0">

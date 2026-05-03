@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import Layout from './Layout'
+import { SseProvider } from '../hooks/SseProvider'
 import { mockApiResponses } from '../test/helpers'
 
 beforeEach(() => {
@@ -10,16 +11,20 @@ beforeEach(() => {
 })
 
 /* Layout uses <Outlet />; mount it inside Routes so React Router has a tree.
- * The dummy child page lets us assert the main slot rendered. */
+ * The dummy child page lets us assert the main slot rendered. SseProvider
+ * wraps Layout in production (see App.tsx) so the topbar can read the
+ * shared UPS state via useSseState; mirror that here. */
 function renderLayout({ route = '/' } = {}) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<div data-testid="page-content">home</div>} />
-          <Route path="/about" element={<div data-testid="page-content">about</div>} />
-        </Route>
-      </Routes>
+      <SseProvider>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<div data-testid="page-content">home</div>} />
+            <Route path="/about" element={<div data-testid="page-content">about</div>} />
+          </Route>
+        </Routes>
+      </SseProvider>
     </MemoryRouter>
   )
 }
@@ -109,13 +114,11 @@ describe('Layout', () => {
     expect(screen.getByText('Weather')).toBeInTheDocument()
   })
 
-  it('logout calls api and clears the auth token', async () => {
-    localStorage.setItem('auth_token', 'before')
-
-    /* Tracks the logout POST. Don't redefine window.location — that
-     * leaks across tests in the full suite. The redirect itself is
-     * left unverified; we assert the side effects we can without
-     * mutating global state. */
+  it('logout calls the logout endpoint', async () => {
+    /* The cookie is HttpOnly and unreadable from JS, so there's no
+     * client-side credential to assert on. We just verify the logout
+     * POST fired — the server-side Set-Cookie clear is what actually
+     * de-authenticates the user. */
     let logoutCalled = false
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes('/api/auth/logout')) {
@@ -125,10 +128,8 @@ describe('Layout', () => {
       return new Promise(() => {})
     })
 
-    /* jsdom throws on window.location.href assignment by default in some
-     * versions. Wrap in try/catch via the click — we just need the
-     * earlier side effects (apiPost + localStorage.removeItem) to fire
-     * before the throw. */
+    /* jsdom throws on window.location.href assignment in some versions —
+     * the navigation is the last side effect, so wrap the click. */
     renderLayout()
     try {
       await userEvent.click(screen.getByText('Logout'))
@@ -137,7 +138,6 @@ describe('Layout', () => {
     await waitFor(() => {
       expect(logoutCalled).toBe(true)
     })
-    expect(localStorage.getItem('auth_token')).toBeNull()
   })
 
   it('renders UI version in footer', () => {
