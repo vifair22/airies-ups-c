@@ -558,7 +558,18 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
      * the kernel's socket cleanup and the new daemon refuses to start. */
     if (tcp_port > 0) {
         srv->tcp_daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
+            /* Thread-per-connection because the SSE streaming-route
+             * handler blocks in pthread_cond_timedwait while waiting for
+             * the next frame. With a single-threaded polling model
+             * (formerly MHD_USE_EPOLL) that block parked the entire MHD
+             * daemon thread for up to one heartbeat interval, making
+             * the whole daemon feel unresponsive on an idle UPS. Each
+             * connection now has its own worker thread; the SSE block
+             * is local to that thread, other HTTP requests continue
+             * uninterrupted. Loses epoll efficiency but the workload
+             * (single-admin dashboard, ~10 concurrent conns max) makes
+             * that irrelevant. */
+            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_THREAD_PER_CONNECTION,
             (uint16_t)tcp_port,
             NULL, NULL,
             request_handler, tcp_cls,
@@ -607,7 +618,18 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
         }
 
         srv->unix_daemon = MHD_start_daemon(
-            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_EPOLL,
+            /* Thread-per-connection because the SSE streaming-route
+             * handler blocks in pthread_cond_timedwait while waiting for
+             * the next frame. With a single-threaded polling model
+             * (formerly MHD_USE_EPOLL) that block parked the entire MHD
+             * daemon thread for up to one heartbeat interval, making
+             * the whole daemon feel unresponsive on an idle UPS. Each
+             * connection now has its own worker thread; the SSE block
+             * is local to that thread, other HTTP requests continue
+             * uninterrupted. Loses epoll efficiency but the workload
+             * (single-admin dashboard, ~10 concurrent conns max) makes
+             * that irrelevant. */
+            MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_THREAD_PER_CONNECTION,
             0,  /* port ignored for pre-bound socket */
             NULL, NULL,
             request_handler, unix_cls,
