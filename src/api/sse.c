@@ -115,6 +115,7 @@ static int subscriber_push_copy(sse_subscriber_t *s,
 {
     char *dup = malloc(frame_len);
     if (!dup) return -1;
+    /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- dst was just malloc'd to exactly frame_len bytes */
     memcpy(dup, frame, frame_len);
 
     pthread_mutex_lock(&s->mutex);
@@ -291,6 +292,7 @@ sse_subscriber_t *sse_broadcaster_subscribe(sse_broadcaster_t *b)
     if (b->cached_frame && b->cached_frame_len > 0) {
         char *dup = malloc(b->cached_frame_len);
         if (dup) {
+            /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- dst was just malloc'd to exactly cached_frame_len bytes */
             memcpy(dup, b->cached_frame, b->cached_frame_len);
             pthread_mutex_lock(&s->mutex);
             subscriber_enqueue_locked(s, dup, b->cached_frame_len);
@@ -358,6 +360,7 @@ ssize_t sse_subscriber_read(sse_subscriber_t *s, char *buf, size_t max)
         if (rc == ETIMEDOUT) {
             pthread_mutex_unlock(&s->mutex);
             if (max < HEARTBEAT_FRAME_LEN) return 0;
+            /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- guard above ensures max >= HEARTBEAT_FRAME_LEN */
             memcpy(buf, HEARTBEAT_FRAME, HEARTBEAT_FRAME_LEN);
             return (ssize_t)HEARTBEAT_FRAME_LEN;
         }
@@ -368,6 +371,7 @@ ssize_t sse_subscriber_read(sse_subscriber_t *s, char *buf, size_t max)
     struct sse_frame *f = &s->ring[s->head];
     size_t avail = f->len - f->pos;
     size_t n = avail < max ? avail : max;
+    /* nosemgrep: flawfinder.memcpy-1.CopyMemory-1.bcopy-1 -- n = min(avail, max) bounds both src and dst */
     memcpy(buf, f->data + f->pos, n);
     f->pos += n;
     if (f->pos == f->len) {
