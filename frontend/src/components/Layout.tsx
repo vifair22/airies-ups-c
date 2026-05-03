@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
-import type { UpsStatus } from '../types/ups'
+import { useSseState } from '../hooks/SseProvider'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
@@ -36,7 +36,10 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
-  const { data: status } = useApi<UpsStatus>('/api/status', 5000)
+  /* Read the shared SSE state from SseProvider — single connection app-wide.
+   * Initial /api/status fetch + push-on-connect happen inside the provider. */
+  const status = useSseState()
+
   const { data: version } = useApi<{ daemon: string }>('/api/version')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()

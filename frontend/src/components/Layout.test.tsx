@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import Layout from './Layout'
+import { SseProvider } from '../hooks/SseProvider'
 import { mockApiResponses } from '../test/helpers'
 
 beforeEach(() => {
@@ -10,16 +11,20 @@ beforeEach(() => {
 })
 
 /* Layout uses <Outlet />; mount it inside Routes so React Router has a tree.
- * The dummy child page lets us assert the main slot rendered. */
+ * The dummy child page lets us assert the main slot rendered. SseProvider
+ * wraps Layout in production (see App.tsx) so the topbar can read the
+ * shared UPS state via useSseState; mirror that here. */
 function renderLayout({ route = '/' } = {}) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<div data-testid="page-content">home</div>} />
-          <Route path="/about" element={<div data-testid="page-content">about</div>} />
-        </Route>
-      </Routes>
+      <SseProvider>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<div data-testid="page-content">home</div>} />
+            <Route path="/about" element={<div data-testid="page-content">about</div>} />
+          </Route>
+        </Routes>
+      </SseProvider>
     </MemoryRouter>
   )
 }

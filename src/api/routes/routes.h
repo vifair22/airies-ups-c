@@ -3,6 +3,7 @@
 
 #include "api/server.h"
 #include "api/auth.h"
+#include "api/sse.h"
 #include "monitor/monitor.h"
 #include "shutdown/shutdown.h"
 #include "weather/weather.h"
@@ -12,16 +13,17 @@
 
 /* Context passed to all route handlers */
 typedef struct {
-    monitor_t       *monitor;
-    ups_t           *ups;
-    shutdown_mgr_t  *shutdown;
-    weather_t       *weather;
-    cutils_db_t     *db;
-    cutils_config_t *config;
-    appguard_t      *guard;
+    monitor_t         *monitor;
+    ups_t             *ups;
+    shutdown_mgr_t    *shutdown;
+    weather_t         *weather;
+    sse_broadcaster_t *sse;
+    cutils_db_t       *db;
+    cutils_config_t   *config;
+    appguard_t        *guard;
     /* Cached transfer voltage thresholds (read once, refreshed on config write) */
-    uint16_t         transfer_high;
-    uint16_t         transfer_low;
+    uint16_t           transfer_high;
+    uint16_t           transfer_low;
 } route_ctx_t;
 
 /* Register all API routes on the server. */
@@ -30,6 +32,11 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx);
 /* Re-read transfer voltage thresholds from UPS into cache.
  * Call after writing transfer config registers. */
 void api_refresh_thresholds(route_ctx_t *ctx);
+
+/* monitor_poll_fn-shaped state-tick callback. Reuses the same `/api/ups/state`
+ * JSON shape as the buffered route. userdata is route_ctx_t* — the broadcaster
+ * is read from ctx->sse and may be NULL (in which case this is a no-op). */
+void api_state_emit(const ups_data_t *data, void *userdata);
 
 /* JSON response helper */
 api_response_t api_ok_msg(const char *msg);

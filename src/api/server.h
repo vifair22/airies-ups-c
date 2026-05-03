@@ -2,6 +2,7 @@
 #define API_SERVER_H
 
 #include <stddef.h>
+#include <sys/types.h>
 
 /* --- HTTP API server ---
  *
@@ -67,6 +68,47 @@ char *api_cookie_clear(const char *name, int secure);
 /* Route handler function */
 typedef api_response_t (*api_handler_fn)(const api_request_t *req, void *userdata);
 
+/* --- Streaming responses (Server-Sent Events, etc.) ---
+ *
+ * A streaming route returns an `api_stream_response_t` instead of a
+ * buffered body. The server invokes `reader` repeatedly to pull bytes,
+ * and calls `cleanup` exactly once when the connection ends (peer
+ * disconnect or server shutdown). Both callbacks run on the MHD worker
+ * thread for the connection. */
+
+/* Read up to `max` bytes into `buf`. Returns:
+ *   > 0  : bytes written (any value <= max).
+ *   == 0 : transient empty read; the server may retry.
+ *   < 0  : end of stream / connection closed.
+ * Mirrors MHD's content reader contract — the negative return is
+ * forwarded to MHD as MHD_CONTENT_READER_END_OF_STREAM. */
+typedef ssize_t (*api_stream_reader_fn)(void *cls, char *buf, size_t max);
+
+/* Called once when the streaming response is torn down. */
+typedef void (*api_stream_cleanup_fn)(void *cls);
+
+/* A single response header (NULL-terminated array sentinel: name == NULL). */
+typedef struct {
+    const char *name;
+    const char *value;
+} api_header_t;
+
+typedef struct {
+    int                     status;       /* HTTP status (default 200) */
+    api_stream_reader_fn    reader;
+    api_stream_cleanup_fn   cleanup;
+    void                   *cls;          /* passed to reader + cleanup */
+    const api_header_t     *headers;      /* NULL-terminated, or NULL */
+    /* If reader is NULL, the server falls back to a buffered response with
+     * `status` and `error_body` (treated as JSON). cleanup is NOT invoked
+     * since there is no per-stream cls to release. Lets a streaming handler
+     * cleanly report a setup error (e.g. subscriber capacity exceeded). */
+    const char             *error_body;
+} api_stream_response_t;
+
+typedef api_stream_response_t (*api_stream_handler_fn)(const api_request_t *req,
+                                                       void *userdata);
+
 /* Opaque server handle */
 typedef struct api_server api_server_t;
 
@@ -86,6 +128,14 @@ api_server_t *api_server_create(int tcp_port, const char *socket_path,
 int api_server_route(api_server_t *srv, const char *pattern,
                      api_method_t method, api_handler_fn handler,
                      void *userdata);
+
+/* Register a streaming route. Same matching rules as api_server_route,
+ * but the handler returns an api_stream_response_t whose reader/cleanup
+ * are driven by the server until end-of-stream. */
+int api_server_route_streaming(api_server_t *srv, const char *pattern,
+                               api_method_t method,
+                               api_stream_handler_fn handler,
+                               void *userdata);
 
 /* Set an auth check callback. Called before every API route handler.
  * Return 1 if the request is authorized, 0 to reject with 401.
