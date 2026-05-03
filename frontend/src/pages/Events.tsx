@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useApi } from '../hooks/useApi'
+import { useEventStream } from '../hooks/useEventStream'
 import type { Event } from '../types/events'
 
 const severityStyle: Record<string, { dot: string; bg: string }> = {
@@ -23,6 +24,10 @@ const categoryColor: Record<string, string> = {
   auth:     'bg-violet-500/20',
 }
 
+/* Cap the in-memory event list to keep the DOM bounded for long-running
+ * sessions. Older entries fall off the bottom; the journal keeps them. */
+const MAX_EVENTS = 200
+
 function relativeTime(ts: string): string {
   const diff = (Date.now() - new Date(ts + 'Z').getTime()) / 1000
   if (diff < 0) return 'just now'
@@ -30,6 +35,12 @@ function relativeTime(ts: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   return `${Math.floor(diff / 86400)}d ago`
+}
+
+/* Match the daemon's "YYYY-MM-DD HH:MM:SS" UTC format so client-synthesized
+ * timestamps render the same way as journal timestamps. */
+function nowTimestamp(): string {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ')
 }
 
 function FilterChip({ label, active, color, onClick }: {
@@ -47,15 +58,46 @@ function FilterChip({ label, active, color, onClick }: {
   )
 }
 
+type LiveMonitorPayload = {
+  severity: string
+  category: string
+  title: string
+  message: string
+}
+
 export default function Events() {
-  const { data: events, error, loading } = useApi<Event[]>('/api/events', 5000)
+  /* Initial load: pull the journal at mount. No polling — SSE delivers
+   * subsequent updates live so polling would just create duplicates. */
+  const { data: initial, error, loading } = useApi<Event[]>('/api/events')
+
+  /* Live-appended events. Prepend to keep the most recent on top. */
+  const [live, setLive] = useState<Event[]>([])
+
+  useEventStream<{ monitor: LiveMonitorPayload }>('/api/events/stream', {
+    monitor: (e) => {
+      setLive((prev) => [
+        { timestamp: nowTimestamp(), ...e },
+        ...prev,
+      ].slice(0, MAX_EVENTS))
+    },
+  })
+
+  /* Reset live buffer whenever the initial fetch lands so a refresh
+   * navigates back to a clean slate (otherwise live + initial double up). */
+  useEffect(() => {
+    if (initial) setLive([])
+  }, [initial])
 
   const [severityFilter, setSeverityFilter] = useState<Set<string>>(new Set())
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
 
+  const events = useMemo(() => {
+    return [...live, ...(initial ?? [])].slice(0, MAX_EVENTS)
+  }, [live, initial])
+
   /* Derive available categories from actual data */
   const availableCategories = useMemo(() => {
-    if (!events) return []
+    if (!events.length) return []
     const cats = new Set(events.map(e => e.category))
     return [...cats].sort()
   }, [events])
@@ -68,7 +110,6 @@ export default function Events() {
   }
 
   const filtered = useMemo(() => {
-    if (!events) return []
     return events.filter(e => {
       if (severityFilter.size > 0 && !severityFilter.has(e.severity)) return false
       if (categoryFilter.size > 0 && !categoryFilter.has(e.category)) return false
@@ -82,7 +123,7 @@ export default function Events() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Events</h2>
-        {events && (
+        {events.length > 0 && (
           <span className="text-xs text-muted">
             {hasFilters ? `${filtered.length} of ${events.length}` : events.length} entries
           </span>
@@ -125,7 +166,7 @@ export default function Events() {
       {error && <p className="text-red-400 mb-4">{error}</p>}
       {loading && <LoadingSkeleton />}
 
-      {events && filtered.length === 0 && (
+      {!loading && events.length === 0 && (
         <div className="text-center py-12 text-muted">
           {hasFilters ? (
             <p className="text-sm">No events match the current filters.</p>

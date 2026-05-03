@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import { useApi } from '../hooks/useApi'
+import { useEventStream } from '../hooks/useEventStream'
 import { PowerFlowSRT, PowerFlowLineInteractive, PowerFlowStandby } from '../components/PowerFlow'
 import type { UpsStatus } from '../types/ups'
 import { ST } from '../types/ups'
@@ -220,7 +222,24 @@ function VoltageBar({ voltage, low, high, warnOffset = 5 }: {
 /* ── Main component ── */
 
 export default function Dashboard() {
-  const { data: s, error } = useApi<UpsStatus>('/api/status', 2000)
+  /* Initial snapshot on mount; SSE state ticks drive subsequent updates,
+   * so no polling interval. The broadcaster's push-on-connect cache
+   * delivers the latest snapshot ~immediately after subscribe. */
+  const { data: initial, error } = useApi<UpsStatus>('/api/status')
+  const [live, setLive] = useState<UpsStatus | null>(null)
+
+  useEventStream<{ state: UpsStatus }>('/api/events/stream', {
+    state: setLive,
+  })
+
+  /* Seed `live` from the initial fetch so the first paint isn't blank
+   * when the broadcaster's cache happens to be empty (e.g. daemon just
+   * started and hasn't completed a slow-loop tick yet). */
+  useEffect(() => {
+    if (initial && !live) setLive(initial)
+  }, [initial, live])
+
+  const s = live ?? initial
 
   if (error) return (
     <div className="rounded-lg bg-red-900/30 border border-red-800 p-6 text-center">
