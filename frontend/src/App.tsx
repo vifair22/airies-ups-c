@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { useTheme } from './hooks/useTheme'
+import { SseProvider } from './hooks/SseProvider'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Events from './pages/Events'
@@ -74,7 +75,9 @@ export default function App() {
       {/* Protected routes */}
       <Route element={
         <AuthGuard>
-          <Layout />
+          <SseProvider>
+            <Layout />
+          </SseProvider>
         </AuthGuard>
       }>
         <Route path="/" element={<Dashboard />} />

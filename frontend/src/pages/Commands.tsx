@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi, apiPost, apiGet } from '../hooks/useApi'
-import { useEventStream } from '../hooks/useEventStream'
+import { useSseState } from '../hooks/SseProvider'
 import { ConfirmModal, WideModal } from '../components/Modal'
 import { useToast, ToastContainer } from '../components/Toast'
-import type { UpsStatus } from '../types/ups'
 import type { CmdDesc, CmdResult, ShutdownStep, WorkflowStatus } from '../types/commands'
 
 /* ── Simple command button ── */
@@ -328,16 +327,10 @@ const groupLabels: Record<string, { title: string; description: string }> = {
 /* ── Main component ── */
 
 export default function Commands() {
-  /* /api/status for first paint, then live SSE state ticks — drops the
-   * old 2 s poll. The status.raw bitmask drives "is power off" / "is
-   * test running" indicators, which want sub-poll-cadence freshness
-   * during a battery test. Fast-loop monitor events handle the
-   * instant-reaction transitions; this stream covers numeric updates. */
-  const { data: initialStatus } = useApi<UpsStatus>('/api/status')
-  const [liveStatus, setLiveStatus] = useState<UpsStatus | null>(null)
-  useEventStream<{ state: UpsStatus }>('/api/events/stream', { state: setLiveStatus })
-  useEffect(() => { if (initialStatus && !liveStatus) setLiveStatus(initialStatus) }, [initialStatus, liveStatus])
-  const status = liveStatus ?? initialStatus
+  /* Live UPS state from the shared SSE provider. status.raw drives the
+   * "test running" / "power off" indicators; fast-loop monitor events
+   * handle instant-reaction transitions, this stream covers numerics. */
+  const status = useSseState()
 
   const { data: commands } = useApi<CmdDesc[]>('/api/commands')
   const { toasts, push } = useToast()

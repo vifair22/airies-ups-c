@@ -1,8 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useApi } from '../hooks/useApi'
-import { useEventStream } from '../hooks/useEventStream'
+import { useSseState, useSseError } from '../hooks/SseProvider'
 import { PowerFlowSRT, PowerFlowLineInteractive, PowerFlowStandby } from '../components/PowerFlow'
-import type { UpsStatus } from '../types/ups'
 import { ST } from '../types/ups'
 import { fmtRuntime, fmtWatts, fmtVA, humanizeTransfer } from '../utils/format'
 
@@ -222,26 +219,14 @@ function VoltageBar({ voltage, low, high, warnOffset = 5 }: {
 /* ── Main component ── */
 
 export default function Dashboard() {
-  /* Initial snapshot on mount; SSE state ticks drive subsequent updates,
-   * so no polling interval. The broadcaster's push-on-connect cache
-   * delivers the latest snapshot ~immediately after subscribe. */
-  const { data: initial, error } = useApi<UpsStatus>('/api/status')
-  const [live, setLive] = useState<UpsStatus | null>(null)
-
-  useEventStream<{ state: UpsStatus }>('/api/events/stream', {
-    state: setLive,
-  })
-
-  /* Seed `live` from the initial fetch so the first paint isn't blank
-   * when the broadcaster's cache happens to be empty (e.g. daemon just
-   * started and hasn't completed a slow-loop tick yet). */
-  useEffect(() => {
-    if (initial && !live) setLive(initial)
-  }, [initial, live])
-
-  const s = live ?? initial
-
-  if (error) return (
+  /* Single shared SSE connection lives in SseProvider; Dashboard just
+   * reads the latest state. Initial /api/status fetch + push-on-connect
+   * are owned by the provider, so the first frame lands right at mount. */
+  const s = useSseState()
+  const error = useSseError()
+  /* If the initial /api/status fetch failed AND we never got an SSE
+   * state frame, surface "Connection Lost" rather than spinning forever. */
+  if (error && !s) return (
     <div className="rounded-lg bg-red-900/30 border border-red-800 p-6 text-center">
       <p className="text-red-300 text-lg mb-1">Connection Lost</p>
       <p className="text-red-400/70 text-sm">{error}</p>

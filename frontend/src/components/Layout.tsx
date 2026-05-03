@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
-import { useEventStream } from '../hooks/useEventStream'
-import type { UpsStatus } from '../types/ups'
+import { useSseState } from '../hooks/SseProvider'
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: '~' },
@@ -37,14 +36,9 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
-  /* Initial /api/status for first paint, then live state via SSE — same
-   * pattern as Dashboard. The topbar shows name + connected indicator on
-   * every page so this connection is open whenever the UI is. */
-  const { data: initial } = useApi<UpsStatus>('/api/status')
-  const [live, setLive] = useState<UpsStatus | null>(null)
-  useEventStream<{ state: UpsStatus }>('/api/events/stream', { state: setLive })
-  useEffect(() => { if (initial && !live) setLive(initial) }, [initial, live])
-  const status = live ?? initial
+  /* Read the shared SSE state from SseProvider — single connection app-wide.
+   * Initial /api/status fetch + push-on-connect happen inside the provider. */
+  const status = useSseState()
 
   const { data: version } = useApi<{ daemon: string }>('/api/version')
   const [drawerOpen, setDrawerOpen] = useState(false)

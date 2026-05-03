@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApi } from '../hooks/useApi'
-import { useEventStream } from '../hooks/useEventStream'
+import { useSseMonitor } from '../hooks/SseProvider'
 import type { Event } from '../types/events'
 
 const severityStyle: Record<string, { dot: string; bg: string }> = {
@@ -58,28 +58,20 @@ function FilterChip({ label, active, color, onClick }: {
   )
 }
 
-type LiveMonitorPayload = {
-  severity: string
-  category: string
-  title: string
-  message: string
-}
-
 export default function Events() {
-  /* Initial load: pull the journal at mount. No polling — SSE delivers
-   * subsequent updates live so polling would just create duplicates. */
+  /* Initial load: pull the journal at mount. No polling — the shared
+   * SSE bus delivers subsequent updates live so polling would just
+   * create duplicates. */
   const { data: initial, error, loading } = useApi<Event[]>('/api/events')
 
   /* Live-appended events. Prepend to keep the most recent on top. */
   const [live, setLive] = useState<Event[]>([])
 
-  useEventStream<{ monitor: LiveMonitorPayload }>('/api/events/stream', {
-    monitor: (e) => {
-      setLive((prev) => [
-        { timestamp: nowTimestamp(), ...e },
-        ...prev,
-      ].slice(0, MAX_EVENTS))
-    },
+  useSseMonitor((e) => {
+    setLive((prev) => [
+      { timestamp: nowTimestamp(), ...e },
+      ...prev,
+    ].slice(0, MAX_EVENTS))
   })
 
   /* Reset live buffer whenever the initial fetch lands so a refresh
