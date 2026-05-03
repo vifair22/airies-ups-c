@@ -89,7 +89,7 @@ UPS_SRCS   = src/ups/ups.c src/ups/ups_format.c src/ups/ups_modbus.c \
              src/ups/ups_srt.c src/ups/ups_smt.c \
              src/ups/ups_apc_hid.c src/ups/ups_cyberpower_hid.c \
              src/ups/hid_pdc_core.c src/ups/hid_parser.c
-API_SRCS   = src/api/server.c src/api/auth.c \
+API_SRCS   = src/api/server.c src/api/auth.c src/api/sse.c \
              src/api/routes/routes.c src/api/routes/auth_routes.c \
              src/api/routes/shutdown.c src/api/routes/config.c \
              src/api/routes/weather.c
@@ -349,6 +349,10 @@ $(eval $(call build_test,test_xfer_ring,\
   tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
   $(TEST_COMMON_LIBS),$(TEST_DIR),))
 
+$(eval $(call build_test,test_sse,\
+  tests/test_sse.c src/api/sse.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(TEST_DIR),))
+
 # --- Coverage builds (same definitions, --coverage flag) ---
 
 $(eval $(call build_test,test_ups_strings,\
@@ -399,9 +403,13 @@ $(eval $(call build_test,test_xfer_ring,\
   tests/test_xfer_ring.c src/monitor/xfer_ring.c src/ups/ups_format.c,\
   $(TEST_COMMON_LIBS),$(COV_TEST),--coverage))
 
+$(eval $(call build_test,test_sse,\
+  tests/test_sse.c src/api/sse.c src/api/server.c,\
+  $(TEST_FULL_LIBS) -lmicrohttpd,$(COV_TEST),--coverage))
+
 # --- Test names (used by both targets) ---
 
-TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_routes_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_xfer_ring
+TEST_NAMES := test_ups_strings test_hid_parser test_alerts test_cli test_auth test_routes_auth test_shutdown test_config_validation test_ups test_status_snapshot test_config_snapshot test_xfer_ring test_sse
 
 # --- Run targets ---
 
