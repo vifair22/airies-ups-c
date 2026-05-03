@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useApi, apiPost } from '../hooks/useApi'
+import { useEventStream } from '../hooks/useEventStream'
 import type { UpsStatus } from '../types/ups'
 
 const nav = [
@@ -36,7 +37,15 @@ function SideLink({ to, label }: { to: string; label: string }) {
 }
 
 export default function Layout() {
-  const { data: status } = useApi<UpsStatus>('/api/status', 5000)
+  /* Initial /api/status for first paint, then live state via SSE — same
+   * pattern as Dashboard. The topbar shows name + connected indicator on
+   * every page so this connection is open whenever the UI is. */
+  const { data: initial } = useApi<UpsStatus>('/api/status')
+  const [live, setLive] = useState<UpsStatus | null>(null)
+  useEventStream<{ state: UpsStatus }>('/api/events/stream', { state: setLive })
+  useEffect(() => { if (initial && !live) setLive(initial) }, [initial, live])
+  const status = live ?? initial
+
   const { data: version } = useApi<{ daemon: string }>('/api/version')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
