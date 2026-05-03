@@ -363,7 +363,66 @@ The non-token columns are forward-compat hooks: `user_id` for multi-admin, `kind
 
 ---
 
-## 15. Where to find what
+## 15. Live event stream (SSE)
+
+The daemon exposes a single Server-Sent Events endpoint at **`GET /api/events/stream`** that multiplexes two channels onto one connection:
+
+- **`event: monitor`** — state-change events as they fire (alerts, on-battery / bypass / fault transitions, self-test results). Same payload shape as the journal `/api/events` endpoint, minus the timestamp (clients synthesize one on receipt).
+- **`event: state`** — full UPS snapshot at the slow-loop cadence (default 5 s). Same JSON shape as `/api/status`. Lets dashboards drop their poll-every-N-seconds pattern entirely.
+
+### Auth
+
+Cookie-only. `EventSource` automatically sends the `auth` HttpOnly cookie set by `/api/auth/login` (see §14), and the existing `auth_check` middleware gates the stream the same way it gates every other route. There is no ticket endpoint, no `?token=…` query param. Browsers can't attach `Authorization` headers to `EventSource`, so the cookie is the only auth path — mirrored intentionally so server-side checks don't fork between SSE and regular routes.
+
+### Push-on-connect
+
+The broadcaster caches the most recent `state` frame. When a new client connects, that cached frame is delivered **before** any further events — no "blank dashboard until the next 5 s tick" gap. The cache is updated atomically every time the slow loop emits a new state, so the gap is bounded by one slow-loop period.
+
+`monitor` events are not cached. The `/api/events` journal endpoint is the source of truth for historical replay; the live stream is for "what's happening right now."
+
+### Heartbeat
+
+Default 30 s. If no real frame fires within the interval, the broadcaster sends the SSE comment line `:heartbeat\n\n`. This keeps idle connections alive past common proxy timeouts and gives clients a positive liveness signal even when the UPS is reporting nothing new. Comment lines are ignored by `EventSource` so the application code never sees them.
+
+### Concurrency cap
+
+8 simultaneous subscribers (`SSE_MAX_SUBSCRIBERS` in `src/api/sse.h`). The 9th connection gets a real **`503 Service Unavailable`** with body `{"error":"sse capacity exceeded"}` — not a dropped TCP connection. Browsers `EventSource` auto-reconnects on 503, so the cap doubles as natural backpressure.
+
+The cap is generous for a single-admin UPS daemon (typical: one open dashboard tab). Raise `SSE_MAX_SUBSCRIBERS` if you have a real reason; each subscriber holds a 256-frame ring buffer (~1 MB worst case).
+
+### Reconnect semantics
+
+`EventSource` reconnects automatically on transient errors (server restart, network blip, idle timeout). The auth cookie rides on each reconnect with no client work. The frontend hook (`useEventStream`) re-establishes its event listeners on every connection without re-subscribing globally.
+
+`Last-Event-ID` is **not** honored. Replay of the live stream is not supported by design — `/api/events` already serves the historical journal, and the live stream is meant for "right now." A reconnecting client gets the cached state immediately and continues from there.
+
+### Frontend usage
+
+```tsx
+import { useEventStream } from '@/hooks/useEventStream'
+
+useEventStream<{ state: UpsStatus; monitor: MonitorEvent }>('/api/events/stream', {
+  state:   (snapshot) => setLive(snapshot),
+  monitor: (event)    => setEvents(prev => [event, ...prev].slice(0, 200)),
+})
+```
+
+The hook installs listeners per event type, parses `data` as JSON, drops malformed payloads silently. Handlers can change between renders without reconnecting (refs under the hood). Unmount closes the connection cleanly.
+
+### Where it lives
+
+| Looking for | Path |
+|-------------|------|
+| Broadcaster + subscriber primitives | `src/api/sse.{h,c}` |
+| Streaming-route plumbing | `src/api/server.c` (`api_server_route_streaming`, `send_streaming_response`) |
+| Wiring (broadcaster + monitor + route) | `src/daemon/main.c`, `src/api/routes/routes.c` |
+| State-tick serializer | `api_state_emit` in `src/api/routes/routes.c` (reuses `build_status_into_resp`) |
+| Frontend hook | `frontend/src/hooks/useEventStream.ts` |
+| Backend tests (unit + integration) | `tests/test_sse.c` |
+
+---
+
+## 16. Where to find what
 
 | Looking for | Path |
 |-------------|------|
