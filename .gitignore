@@ -29,6 +29,7 @@ frontend/test-results.junit.xml
 *.swo
 *~
 .idea/
+.vscode/
 
 # OS
 .DS_Store
@@ -36,3 +37,8 @@ frontend/test-results.junit.xml
 
 todo.md
 dist
+
+# Local-only deployment notes (hostnames, sysroot rsync, internal DNS)
+DEPLOY.md
+# Local-only deploy script (cross-compile + ssh to personal Pis)
+deploy.sh

@@ -228,6 +228,24 @@ static api_response_t handle_version(const api_request_t *req, void *ud)
     return finalize_ok(resp);
 }
 
+void api_state_emit(const ups_data_t *data, void *userdata)
+{
+    (void)data;
+    route_ctx_t *ctx = userdata;
+    if (!ctx || !ctx->sse) return;
+
+    CUTILS_AUTO_JSON_RESP cutils_json_resp_t *resp = NULL;
+    CUTILS_AUTOFREE       char               *json = NULL;
+    size_t len;
+
+    if (json_resp_new(&resp) != CUTILS_OK ||
+        build_status_into_resp(ctx, resp) != CUTILS_OK ||
+        json_resp_finalize(resp, &json, &len) != CUTILS_OK)
+        return;
+
+    sse_broadcaster_emit_cached(ctx->sse, "state", json);
+}
+
 static api_response_t handle_status(const api_request_t *req, void *ud)
 {
     (void)req;
@@ -438,6 +456,13 @@ void api_register_routes(api_server_t *srv, route_ctx_t *ctx)
     api_server_route(srv, "/api/cmd",          API_POST, handle_cmd,       ctx);
     api_server_route(srv, "/api/events",       API_GET,  handle_events,    ctx);
     api_server_route(srv, "/api/restart",      API_POST, handle_restart,   ctx);
+
+    /* Live event/state stream — userdata is the broadcaster, not ctx, since
+     * sse_handle_stream needs only the broadcaster handle. */
+    if (ctx->sse) {
+        api_server_route_streaming(srv, "/api/events/stream", API_GET,
+                                   sse_handle_stream, ctx->sse);
+    }
 
     /* Domain modules */
     api_register_auth_routes(srv, ctx);

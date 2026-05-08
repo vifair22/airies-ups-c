@@ -4,12 +4,19 @@ import { MemoryRouter } from 'react-router-dom'
 import { render } from '@testing-library/react'
 import { vi } from 'vitest'
 import type { ReactElement } from 'react'
+import { SseProvider } from '../hooks/SseProvider'
 
-/* Render inside a MemoryRouter for components that use routing */
+/* Render inside a MemoryRouter and the SseProvider that wraps the
+ * protected routes in the real app. Tests that mock /api/status via
+ * mockApiResponses get that data routed through the provider's internal
+ * useApi exactly like in production. The NoopEventSource installed in
+ * test/setup.ts keeps the provider's useEventStream from blowing up. */
 export function renderWithRouter(ui: ReactElement, { route = '/' } = {}) {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      {ui}
+      <SseProvider>
+        {ui}
+      </SseProvider>
     </MemoryRouter>
   )
 }

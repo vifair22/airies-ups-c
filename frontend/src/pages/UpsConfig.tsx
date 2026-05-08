@@ -77,13 +77,10 @@ export default function UpsConfig() {
       /* Use fetch directly so we can distinguish 400 (operator error,
        * structured ConfigWriteError body) from 200 (write attempt,
        * with result=written|rejected) and from 5xx (UPS/network). */
-      const token = localStorage.getItem('auth_token')
       const res = await fetch('/api/config/ups', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, value }),
       })
       const body = await res.json()
@@ -329,9 +326,8 @@ function HistoryPanel({ registerName }: { registerName: string }) {
 
   useEffect(() => {
     let cancelled = false
-    const token = localStorage.getItem('auth_token')
     fetch(`/api/config/ups/history?name=${encodeURIComponent(registerName)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
     })
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
       .then((data: ConfigHistoryEntry[]) => { if (!cancelled) setRows(data) })

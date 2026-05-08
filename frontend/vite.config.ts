@@ -33,7 +33,7 @@ export default defineConfig({
         'src/env.d.ts',
         'src/types/**',
       ],
-      reporter: ['text', 'cobertura'],
+      reporter: ['text', 'text-summary', 'cobertura'],
       reportsDirectory: './coverage',
     },
   },

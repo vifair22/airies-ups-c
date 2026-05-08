@@ -1,6 +1,6 @@
 #include "ups_driver.h"
 #include "ups.h"
-#include <modbus/modbus.h>
+#include "ups/ups_modbus.h"
 #include <string.h>
 #include <time.h>
 
@@ -59,9 +59,15 @@
 #define SMT_SOG_HAS_SOG1         (1 << 2)
 #define SMT_SOG_HAS_SOG2         (1 << 3)
 
-/* --- Transport helpers --- */
+/* --- Transport helpers ---
+ *
+ * Drivers cast the opaque transport pointer to ups_mb_t* (the paced
+ * Modbus wrapper). All Modbus I/O goes through ups_mb_read/write* so
+ * the inter-op gap (UPS_MB_MIN_GAP_MS) is enforced consistently — the
+ * SMT firmware crashes its management plane if polled faster than
+ * ~50 ms apart. */
 
-static modbus_t *mb(void *transport) { return (modbus_t *)transport; }
+static ups_mb_t *mb(void *transport) { return (ups_mb_t *)transport; }
 
 /* Decode an APC string register block: 2 chars per register, big-endian
  * within each register. Strings are not NUL-terminated and pad with
@@ -95,28 +101,13 @@ static void smt_str_decode(const uint16_t *regs, int n, char *out, size_t outsz)
 static void *smt_connect(const ups_conn_params_t *params)
 {
     if (params->type != UPS_CONN_SERIAL) return NULL;
-
-    modbus_t *ctx = modbus_new_rtu(params->serial.device, params->serial.baud,
-                                   'N', 8, 1);
-    if (!ctx) return NULL;
-
-    modbus_set_slave(ctx, params->serial.slave_id);
-    modbus_set_response_timeout(ctx, 5, 0);
-
-    if (modbus_connect(ctx) == -1) {
-        modbus_free(ctx);
-        return NULL;
-    }
-
-    return ctx;
+    return ups_mb_new(params->serial.device, params->serial.baud,
+                      params->serial.slave_id);
 }
 
 static void smt_disconnect(void *transport)
 {
-    if (transport) {
-        modbus_close(mb(transport));
-        modbus_free(mb(transport));
-    }
+    ups_mb_free((ups_mb_t *)transport);
 }
 
 /* Detect: read SKU_STR (reg 548, 16 regs = 32 chars) and substring-match
@@ -126,7 +117,7 @@ static void smt_disconnect(void *transport)
 static int smt_detect(void *transport)
 {
     uint16_t regs[SMT_REG_SKU_LEN];
-    if (modbus_read_registers(mb(transport), SMT_REG_SKU, SMT_REG_SKU_LEN, regs)
+    if (ups_mb_read(mb(transport), SMT_REG_SKU, SMT_REG_SKU_LEN, regs)
         != SMT_REG_SKU_LEN)
         return 0;
 
@@ -143,7 +134,7 @@ static int smt_detect(void *transport)
 static int smt_read_transfer_reason(void *transport, uint16_t *out)
 {
     uint16_t reg;
-    if (modbus_read_registers(mb(transport), SMT_REG_STATUS + 2, 1, &reg) != 1)
+    if (ups_mb_read(mb(transport), SMT_REG_STATUS + 2, 1, &reg) != 1)
         return -1;
     *out = reg;
     return 0;
@@ -152,7 +143,7 @@ static int smt_read_transfer_reason(void *transport, uint16_t *out)
 static int smt_read_status(void *transport, ups_data_t *data)
 {
     uint16_t regs[SMT_REG_STATUS_LEN];
-    if (modbus_read_registers(mb(transport), SMT_REG_STATUS, SMT_REG_STATUS_LEN, regs)
+    if (ups_mb_read(mb(transport), SMT_REG_STATUS, SMT_REG_STATUS_LEN, regs)
         != SMT_REG_STATUS_LEN)
         return -1;
 
@@ -176,7 +167,7 @@ static int smt_read_status(void *transport, ups_data_t *data)
 static int smt_read_dynamic(void *transport, ups_data_t *data)
 {
     uint16_t regs[SMT_REG_DYNAMIC_LEN];
-    if (modbus_read_registers(mb(transport), SMT_REG_DYNAMIC, SMT_REG_DYNAMIC_LEN, regs)
+    if (ups_mb_read(mb(transport), SMT_REG_DYNAMIC, SMT_REG_DYNAMIC_LEN, regs)
         != SMT_REG_DYNAMIC_LEN)
         return -1;
 
@@ -211,7 +202,7 @@ static int smt_read_dynamic(void *transport, ups_data_t *data)
 static int smt_read_inventory(void *transport, ups_inventory_t *inv)
 {
     uint16_t regs[SMT_REG_INVENTORY_LEN];
-    if (modbus_read_registers(mb(transport), SMT_REG_INVENTORY, SMT_REG_INVENTORY_LEN, regs)
+    if (ups_mb_read(mb(transport), SMT_REG_INVENTORY, SMT_REG_INVENTORY_LEN, regs)
         != SMT_REG_INVENTORY_LEN)
         return -1;
 
@@ -232,7 +223,7 @@ static int smt_read_inventory(void *transport, ups_inventory_t *inv)
 static int smt_read_thresholds(void *transport, uint16_t *transfer_high, uint16_t *transfer_low)
 {
     uint16_t regs[SMT_REG_TRANSFER_LEN];
-    if (modbus_read_registers(mb(transport), SMT_REG_TRANSFER_HIGH,
+    if (ups_mb_read(mb(transport), SMT_REG_TRANSFER_HIGH,
                               SMT_REG_TRANSFER_LEN, regs) != SMT_REG_TRANSFER_LEN)
         return -1;
     *transfer_high = regs[0];
@@ -249,7 +240,7 @@ static int smt_config_read(void *transport, const ups_config_reg_t *reg,
     int n = reg->reg_count > 0 ? reg->reg_count : 1;
     if (n > 32) n = 32;
 
-    if (modbus_read_registers(mb(transport), reg->reg_addr, n, regs) != n)
+    if (ups_mb_read(mb(transport), reg->reg_addr, n, regs) != n)
         return UPS_ERR_IO;
 
     if (reg->type == UPS_CFG_STRING && str_buf) {
@@ -269,7 +260,7 @@ static int smt_config_read(void *transport, const ups_config_reg_t *reg,
 
 static int smt_config_write(void *transport, const ups_config_reg_t *reg, uint16_t value)
 {
-    if (modbus_write_register(mb(transport), reg->reg_addr, value) != 1)
+    if (ups_mb_write(mb(transport), reg->reg_addr, value) != 1)
         return UPS_ERR_IO;
 
     /* APC firmware needs ~100 ms before the value is observable on a
@@ -278,7 +269,7 @@ static int smt_config_write(void *transport, const ups_config_reg_t *reg, uint16
     nanosleep(&delay, NULL);
 
     uint16_t readback;
-    if (modbus_read_registers(mb(transport), reg->reg_addr, 1, &readback) != 1)
+    if (ups_mb_read(mb(transport), reg->reg_addr, 1, &readback) != 1)
         return UPS_ERR_IO;
 
     if (readback != value)
@@ -293,22 +284,22 @@ static int smt_config_write(void *transport, const ups_config_reg_t *reg, uint16
 
 static int smt_cmd_shutdown(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_SHUTDOWN, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_SHUTDOWN, 0x0001) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_battery_test(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_BATTEST, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_BATTEST, 0x0001) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_runtime_cal(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_RTCAL, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_RTCAL, 0x0001) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_abort_runtime_cal(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_RTCAL, 0x0002) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_RTCAL, 0x0002) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_clear_faults(void *transport)
@@ -316,27 +307,27 @@ static int smt_cmd_clear_faults(void *transport)
     /* UPSCommand_BF bit 9 = ClearFaults; written via FC16 as a 32-bit BF
      * with the high 16 bits zero, low 16 bits = 0x0200. */
     uint16_t cmd[2] = { 0x0000, 0x0200 };
-    return modbus_write_registers(mb(transport), SMT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
+    return ups_mb_write_n(mb(transport), SMT_REG_CMD_UPS, 2, cmd) == 2 ? 0 : -1;
 }
 
 static int smt_cmd_mute_alarm(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_UI, 0x0004) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_UI, 0x0004) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_cancel_mute(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_UI, 0x0008) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_UI, 0x0008) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_beep_short(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_UI, 0x0001) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_UI, 0x0001) == 1 ? 0 : -1;
 }
 
 static int smt_cmd_beep_continuous(void *transport)
 {
-    return modbus_write_register(mb(transport), SMT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
+    return ups_mb_write(mb(transport), SMT_REG_CMD_UI, 0x0002) == 1 ? 0 : -1;
 }
 
 /* --- Config register descriptors ---
@@ -1164,7 +1155,7 @@ static size_t smt_resolve_config_regs(void *transport,
 
     uint16_t sog_bits = 0xFFFF;  /* fallback: assume all present */
     uint16_t r;
-    if (modbus_read_registers(mb(transport), SMT_REG_SOG_CONFIG, 1, &r) == 1)
+    if (ups_mb_read(mb(transport), SMT_REG_SOG_CONFIG, 1, &r) == 1)
         sog_bits = r;
 
     int has_sog0 = (sog_bits & SMT_SOG_HAS_SOG0) != 0;

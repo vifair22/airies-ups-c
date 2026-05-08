@@ -322,8 +322,8 @@ void ups_close(ups_t *ups);
  * actually work at runtime, not just that the driver struct declared it. */
 int ups_has_cap(const ups_t *ups, ups_cap_t cap);
 
-/* Name of the active driver ("srt", "smt", "backups_hid"). Stable across
- * the ups_t's lifetime. */
+/* Name of the active driver ("srt", "smt", "apc_hid", "cyberpower_hid").
+ * Stable across the ups_t's lifetime. */
 const char *ups_driver_name(const ups_t *ups);
 
 /* Whether the underlying transport is currently open. Tracks the recovery
@@ -440,12 +440,17 @@ const ups_config_reg_t *ups_find_config_reg(const ups_t *ups, const char *name);
 int ups_config_read(ups_t *ups, const ups_config_reg_t *reg,
                     uint32_t *raw_value, char *str_buf, size_t str_bufsz);
 
-/* Write a config register. The registry enforces a 100 ms inter-write delay
- * between successive config_writes against the same UPS and always reads
- * the register back after writing (the driver may verify internally too).
+/* Write a config register. The registry validates `value` against
+ * reg->meta first (returns UPS_ERR_INVALID_VALUE on out-of-range SCALAR
+ * or non-listed strict-BITFIELD, before the driver runs), then holds
+ * cmd_mutex through the driver's config_write and sleeps 200 ms after
+ * it returns — that quiet window lets the UPS firmware digest the
+ * write before the next read races in. Drivers may verify the write
+ * internally, but the registry does not require it.
  *
- * Returns UPS_ERR_NOT_SUPPORTED if reg->writable is 0 or the driver has no
- * config_write handler; UPS_ERR_IO on write failure. */
+ * Returns UPS_OK on success; UPS_ERR_NOT_SUPPORTED if reg->writable is 0
+ * or the driver has no config_write handler; UPS_ERR_INVALID_VALUE on
+ * validation failure; UPS_ERR_IO on driver failure. */
 int ups_config_write(ups_t *ups, const ups_config_reg_t *reg, uint16_t value);
 
 #endif

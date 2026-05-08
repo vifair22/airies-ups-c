@@ -16,7 +16,10 @@ export default function Login() {
 
     const res = await apiPostPublic<LoginResult>('/api/auth/login', { password })
     if (res.token) {
-      localStorage.setItem('auth_token', res.token)
+      /* Server has Set-Cookie'd the auth token via apiPostPublic's
+       * credentials: 'include' — nothing to store client-side. The
+       * res.token is still in the response body for non-browser
+       * clients, but the browser already has the cookie. */
       navigate('/')
     } else {
       setError(res.error || 'Invalid password')

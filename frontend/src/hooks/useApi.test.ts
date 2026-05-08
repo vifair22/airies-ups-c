@@ -31,27 +31,14 @@ describe('useApi', () => {
     expect(result.current.error).toBeNull()
   })
 
-  it('sends auth header when token exists', async () => {
-    localStorage.setItem('auth_token', 'test-jwt')
+  it("sends credentials: 'include' so the cookie rides along", async () => {
     globalThis.fetch = mockFetch(200, {})
 
     renderHook(() => useApi('/api/status'))
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/status', {
-        headers: { Authorization: 'Bearer test-jwt' },
-      })
-    })
-  })
-
-  it('sends no auth header without token', async () => {
-    globalThis.fetch = mockFetch(200, {})
-
-    renderHook(() => useApi('/api/status'))
-
-    await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/status', {
-        headers: {},
+        credentials: 'include',
       })
     })
   })
@@ -68,10 +55,9 @@ describe('useApi', () => {
   })
 
   it('redirects to login on 401', async () => {
-    localStorage.setItem('auth_token', 'expired-token')
     globalThis.fetch = mockFetch(401, {})
 
-    // jsdom doesn't support navigation, so mock location
+    /* jsdom doesn't allow window.location reassignment, so stub it */
     const originalLocation = window.location
     Object.defineProperty(window, 'location', {
       writable: true,
@@ -81,7 +67,6 @@ describe('useApi', () => {
     renderHook(() => useApi('/api/status'))
 
     await waitFor(() => {
-      expect(localStorage.getItem('auth_token')).toBeNull()
       expect(window.location.href).toBe('/login')
     })
 
@@ -115,48 +100,59 @@ describe('useApi', () => {
 })
 
 describe('apiPost', () => {
-  it('sends POST with auth and JSON body', async () => {
+  it('sends POST with credentials and JSON body', async () => {
     const body = { username: 'admin', action: 'shutdown' }
     const response = { ok: true }
     globalThis.fetch = mockFetch(200, response)
-    localStorage.setItem('auth_token', 'jwt-token')
 
     const result = await apiPost('/api/commands', body)
 
     expect(result).toEqual(response)
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/commands', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer jwt-token',
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    })
+  })
+
+  it('redirects to login on 401', async () => {
+    globalThis.fetch = mockFetch(401, {})
+
+    const originalLocation = window.location
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { ...originalLocation, href: '' },
+    })
+
+    await expect(apiPost('/api/test', {})).rejects.toThrow('unauthorized')
+    expect(window.location.href).toBe('/login')
+
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: originalLocation,
     })
   })
 })
 
 describe('apiPut', () => {
-  it('sends PUT with auth and JSON body', async () => {
+  it('sends PUT with credentials and JSON body', async () => {
     const body = { id: 1, name: 'updated' }
     const response = { ok: true }
     globalThis.fetch = mockFetch(200, response)
-    localStorage.setItem('auth_token', 'jwt-token')
 
     const result = await apiPut('/api/shutdown/groups', body)
 
     expect(result).toEqual(response)
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/shutdown/groups', {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer jwt-token',
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
   })
 
   it('redirects to login on 401', async () => {
-    localStorage.setItem('auth_token', 'expired')
     globalThis.fetch = mockFetch(401, {})
 
     const originalLocation = window.location
@@ -166,7 +162,6 @@ describe('apiPut', () => {
     })
 
     await expect(apiPut('/api/test', {})).rejects.toThrow('unauthorized')
-    expect(localStorage.getItem('auth_token')).toBeNull()
     expect(window.location.href).toBe('/login')
 
     Object.defineProperty(window, 'location', {
@@ -177,27 +172,23 @@ describe('apiPut', () => {
 })
 
 describe('apiDelete', () => {
-  it('sends DELETE with auth and JSON body', async () => {
+  it('sends DELETE with credentials and JSON body', async () => {
     const body = { id: 5 }
     const response = { ok: true }
     globalThis.fetch = mockFetch(200, response)
-    localStorage.setItem('auth_token', 'jwt-token')
 
     const result = await apiDelete('/api/shutdown/targets', body)
 
     expect(result).toEqual(response)
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/shutdown/targets', {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer jwt-token',
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
   })
 
   it('redirects to login on 401', async () => {
-    localStorage.setItem('auth_token', 'expired')
     globalThis.fetch = mockFetch(401, {})
 
     const originalLocation = window.location
@@ -207,7 +198,6 @@ describe('apiDelete', () => {
     })
 
     await expect(apiDelete('/api/test', {})).rejects.toThrow('unauthorized')
-    expect(localStorage.getItem('auth_token')).toBeNull()
 
     Object.defineProperty(window, 'location', {
       writable: true,
@@ -217,7 +207,10 @@ describe('apiDelete', () => {
 })
 
 describe('apiPostPublic', () => {
-  it('sends POST without auth header', async () => {
+  it('sends POST with credentials so Set-Cookie is stored', async () => {
+    /* Login is "public" in the auth-middleware sense (no token required
+     * to call it) but it still needs credentials:'include' so the
+     * browser stores the Set-Cookie response from a successful login. */
     const body = { password: 'secret' }
     globalThis.fetch = mockFetch(200, { token: 'new-jwt' })
 
@@ -225,6 +218,7 @@ describe('apiPostPublic', () => {
 
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/auth/login', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })

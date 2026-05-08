@@ -47,8 +47,10 @@ static const config_key_t app_file_keys[] = {
 
 static const config_key_t app_db_keys[] = {
     /* Monitor */
-    { "monitor.poll_interval",      CFG_INT, "2",
-      "UPS status poll interval (seconds)",
+    { "monitor.poll_interval",      CFG_INT, "5",
+      "UPS status poll interval (seconds) — slow loop only; the fast "
+      "power-vitals loop in src/monitor/fast_loop.c runs every 200 ms "
+      "regardless and owns power-state events",
       CFG_STORE_DB, 0 },
 
     /* Alert thresholds */
@@ -132,6 +134,14 @@ static const config_key_t app_db_keys[] = {
     /* Shutdown: controller */
     { "shutdown.controller_enabled", CFG_INT, "1",
       "Shut down this controller after all other steps (1=yes, 0=no)",
+      CFG_STORE_DB, 0 },
+
+    /* Auth */
+    { "auth.cookie_secure",         CFG_INT, "0",
+      "Add the Secure flag to the auth cookie (0=off for plain HTTP, "
+      "1=on for HTTPS). Browsers reject Secure cookies over plain HTTP, "
+      "so leave this off until HTTPS is available — flip on when the "
+      "daemon is served via TLS or behind an HTTPS reverse proxy.",
       CFG_STORE_DB, 0 },
 
     { NULL, 0, NULL, NULL, 0, 0 }  /* sentinel */

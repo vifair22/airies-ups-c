@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 
-function getToken(): string | null {
-  return localStorage.getItem('auth_token')
-}
+/* Auth is now cookie-based (HttpOnly auth cookie set by /api/auth/login).
+ * `credentials: 'include'` makes fetch send the cookie on every request,
+ * including SSE via EventSource (which can't send custom headers). The
+ * old localStorage('auth_token') flow is gone — the browser owns the
+ * credential, the JS layer can't read it (HttpOnly), and clearing on 401
+ * is handled by simply navigating to /login. */
 
-function authHeaders(): Record<string, string> {
-  const token = getToken()
-  const headers: Record<string, string> = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
+function on401(): void {
+  window.location.href = '/login'
 }
 
 export function useApi<T>(url: string, interval?: number) {
@@ -18,10 +18,9 @@ export function useApi<T>(url: string, interval?: number) {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch(url, { headers: authHeaders() })
+      const res = await fetch(url, { credentials: 'include' })
       if (res.status === 401) {
-        localStorage.removeItem('auth_token')
-        window.location.href = '/login'
+        on401()
         return
       }
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
@@ -47,10 +46,9 @@ export function useApi<T>(url: string, interval?: number) {
 }
 
 export async function apiGet<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: authHeaders() })
+  const res = await fetch(url, { credentials: 'include' })
   if (res.status === 401) {
-    localStorage.removeItem('auth_token')
-    window.location.href = '/login'
+    on401()
     throw new Error('unauthorized')
   }
   return res.json()
@@ -59,12 +57,12 @@ export async function apiGet<T>(url: string): Promise<T> {
 export async function apiPost<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (res.status === 401) {
-    localStorage.removeItem('auth_token')
-    window.location.href = '/login'
+    on401()
     throw new Error('unauthorized')
   }
   return res.json()
@@ -73,12 +71,12 @@ export async function apiPost<T>(url: string, body: unknown): Promise<T> {
 export async function apiPut<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (res.status === 401) {
-    localStorage.removeItem('auth_token')
-    window.location.href = '/login'
+    on401()
     throw new Error('unauthorized')
   }
   return res.json()
@@ -87,21 +85,24 @@ export async function apiPut<T>(url: string, body: unknown): Promise<T> {
 export async function apiDelete<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (res.status === 401) {
-    localStorage.removeItem('auth_token')
-    window.location.href = '/login'
+    on401()
     throw new Error('unauthorized')
   }
   return res.json()
 }
 
-/* Unauthenticated POST — for login and setup endpoints */
+/* Unauthenticated POST — for login and setup endpoints. credentials:
+ * 'include' is still set so the server's Set-Cookie response (from
+ * /api/auth/login) gets stored by the browser. */
 export async function apiPostPublic<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })

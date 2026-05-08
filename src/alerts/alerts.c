@@ -42,6 +42,7 @@ alert_config_t alerts_load_config(const void *cfg_ptr)
 /* --- Helpers --- */
 
 static uint32_t check_bit_alert(int *prev, int current,
+                                const char *category,
                                 const char *sev_on, const char *title_on,
                                 const char *sev_off, const char *title_off,
                                 const char *body, uint32_t bit,
@@ -50,10 +51,10 @@ static uint32_t check_bit_alert(int *prev, int current,
     uint32_t alerted = 0;
 
     if (current && !*prev) {
-        notify(sev_on, title_on, body);
+        notify(sev_on, category, title_on, body);
         alerted = bit;
     } else if (!current && *prev) {
-        notify(sev_off, title_off, body);
+        notify(sev_off, category, title_off, body);
         alerted = bit;
     }
 
@@ -62,14 +63,15 @@ static uint32_t check_bit_alert(int *prev, int current,
 }
 
 static void check_threshold_alert(int *prev, int current,
+                                  const char *category,
                                   const char *sev_on, const char *title_on,
                                   const char *sev_off, const char *title_off,
                                   const char *body, alert_notify_fn notify)
 {
     if (current && !*prev)
-        notify(sev_on, title_on, body);
+        notify(sev_on, category, title_on, body);
     else if (!current && *prev)
-        notify(sev_off, title_off, body);
+        notify(sev_off, category, title_off, body);
 
     *prev = current;
 }
@@ -88,7 +90,7 @@ uint32_t alerts_check(alert_state_t *state,
     /* Overload */
     int is_overload = (data->status & UPS_ST_OVERLOAD) != 0;
     snprintf(body, sizeof(body), "Load: %.0f%%", data->load_pct);
-    alerted |= check_bit_alert(&state->overload, is_overload,
+    alerted |= check_bit_alert(&state->overload, is_overload, "fault",
                                 "error", "UPS Overload",
                                 "info", "UPS Overload Cleared",
                                 body, UPS_ST_OVERLOAD, notify);
@@ -100,7 +102,7 @@ uint32_t alerts_check(alert_state_t *state,
         ups_status_str(data->status, status_str, sizeof(status_str));
         snprintf(body, sizeof(body), "Status: %s", status_str);
     }
-    alerted |= check_bit_alert(&state->fault, is_fault,
+    alerted |= check_bit_alert(&state->fault, is_fault, "fault",
                                 "error", "UPS Fault",
                                 "info", "UPS Fault Cleared",
                                 body, UPS_ST_FAULT, notify);
@@ -109,9 +111,9 @@ uint32_t alerts_check(alert_state_t *state,
     int is_bat_replace = (data->bat_system_error & UPS_BATERR_REPLACE) != 0;
     snprintf(body, sizeof(body), "Battery system error detected");
     if (is_bat_replace && !state->bat_replace)
-        notify("error", "UPS Battery Replace Required", body);
+        notify("error", "system", "UPS Battery Replace Required", body);
     else if (!is_bat_replace && state->bat_replace)
-        notify("info", "UPS Battery Error Cleared", body);
+        notify("info", "system", "UPS Battery Error Cleared", body);
     state->bat_replace = is_bat_replace;
 
     /* Input voltage high */
@@ -123,7 +125,7 @@ uint32_t alerts_check(alert_state_t *state,
             : (data->input_voltage > high_enter);
         snprintf(body, sizeof(body), "Input: %.1fV (transfer at %uV, warn at %.0fV)",
                  data->input_voltage, thresh->transfer_high, high_enter);
-        check_threshold_alert(&state->input_high, is_input_high,
+        check_threshold_alert(&state->input_high, is_input_high, "power",
                               "warning", "UPS Input Voltage High",
                               "info", "UPS Input Voltage Normal",
                               body, notify);
@@ -138,7 +140,7 @@ uint32_t alerts_check(alert_state_t *state,
             : (data->input_voltage < low_enter);
         snprintf(body, sizeof(body), "Input: %.1fV (transfer at %uV, warn at %.0fV)",
                  data->input_voltage, thresh->transfer_low, low_enter);
-        check_threshold_alert(&state->input_low, is_input_low,
+        check_threshold_alert(&state->input_low, is_input_low, "power",
                               "warning", "UPS Input Voltage Low",
                               "info", "UPS Input Voltage Normal",
                               body, notify);
@@ -149,7 +151,7 @@ uint32_t alerts_check(alert_state_t *state,
         int is_load_high = data->load_pct > acfg->load_high_pct;
         snprintf(body, sizeof(body), "Load: %.0f%% (threshold: %d%%)",
                  data->load_pct, acfg->load_high_pct);
-        check_threshold_alert(&state->load_high, is_load_high,
+        check_threshold_alert(&state->load_high, is_load_high, "power",
                               "warning", "UPS Load High",
                               "info", "UPS Load Normal",
                               body, notify);
@@ -171,11 +173,11 @@ uint32_t alerts_check(alert_state_t *state,
         if (is_bat_low && !was_bat_low) {
             snprintf(body, sizeof(body), "Battery: %.0f%% (threshold: %d%%)",
                      data->charge_pct, acfg->battery_low_pct);
-            notify("warning", "UPS Battery Low", body);
+            notify("warning", "power", "UPS Battery Low", body);
             state->bat_low = 1;
         } else if (recovered) {
             snprintf(body, sizeof(body), "Battery: %.0f%%", data->charge_pct);
-            notify("info", "UPS Battery Normal", body);
+            notify("info", "power", "UPS Battery Normal", body);
             state->bat_low = 0;
         }
 
@@ -194,14 +196,14 @@ uint32_t alerts_check(alert_state_t *state,
             n = ups_decode_general_errors(gen_new, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "General error: %s", strs[i]);
-                notify("error", "UPS General Error", body);
+                notify("error", "system", "UPS General Error", body);
             }
         }
         if (gen_clr) {
             n = ups_decode_general_errors(gen_clr, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "General error cleared: %s", strs[i]);
-                notify("info", "UPS General Error Cleared", body);
+                notify("info", "system", "UPS General Error Cleared", body);
             }
         }
         state->prev_general_error = data->general_error;
@@ -213,14 +215,14 @@ uint32_t alerts_check(alert_state_t *state,
             n = ups_decode_power_errors(pwr_new, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "Power system error: %s", strs[i]);
-                notify("error", "UPS Power System Error", body);
+                notify("error", "fault", "UPS Power System Error", body);
             }
         }
         if (pwr_clr) {
             n = ups_decode_power_errors(pwr_clr, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "Power system error cleared: %s", strs[i]);
-                notify("info", "UPS Power System Error Cleared", body);
+                notify("info", "fault", "UPS Power System Error Cleared", body);
             }
         }
         state->prev_power_error = data->power_system_error;
@@ -232,14 +234,14 @@ uint32_t alerts_check(alert_state_t *state,
             n = ups_decode_battery_errors(bat_new, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "Battery error: %s", strs[i]);
-                notify("error", "UPS Battery Error", body);
+                notify("error", "system", "UPS Battery Error", body);
             }
         }
         if (bat_clr) {
             n = ups_decode_battery_errors(bat_clr, strs, 16);
             for (int i = 0; i < n; i++) {
                 snprintf(body, sizeof(body), "Battery error cleared: %s", strs[i]);
-                notify("info", "UPS Battery Error Cleared", body);
+                notify("info", "system", "UPS Battery Error Cleared", body);
             }
         }
         state->prev_battery_error = data->bat_system_error;

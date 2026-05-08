@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useApi, apiPost, apiGet } from '../hooks/useApi'
+import { useSseState } from '../hooks/SseProvider'
 import { ConfirmModal, WideModal } from '../components/Modal'
 import { useToast, ToastContainer } from '../components/Toast'
-import type { UpsStatus } from '../types/ups'
 import type { CmdDesc, CmdResult, ShutdownStep, WorkflowStatus } from '../types/commands'
 
 /* ── Simple command button ── */
@@ -327,7 +327,11 @@ const groupLabels: Record<string, { title: string; description: string }> = {
 /* ── Main component ── */
 
 export default function Commands() {
-  const { data: status } = useApi<UpsStatus>('/api/status', 2000)
+  /* Live UPS state from the shared SSE provider. status.raw drives the
+   * "test running" / "power off" indicators; fast-loop monitor events
+   * handle instant-reaction transitions, this stream covers numerics. */
+  const status = useSseState()
+
   const { data: commands } = useApi<CmdDesc[]>('/api/commands')
   const { toasts, push } = useToast()
   const raw = status?.status?.raw ?? 0

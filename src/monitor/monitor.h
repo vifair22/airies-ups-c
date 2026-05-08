@@ -23,7 +23,9 @@ typedef void (*monitor_event_fn)(const char *severity, const char *category,
 
 /* Create and start the monitor.
  * ups must be connected.
- * poll_interval_sec: how often to read UPS (typically 2).
+ * poll_interval_sec: slow-loop cadence in seconds (default 5). The
+ *   fast power-vitals loop runs every 200 ms regardless and is what
+ *   you want for sub-second power-state event detection.
  * Returns NULL on failure. */
 monitor_t *monitor_create(ups_t *ups, cutils_db_t *db,
                           int poll_interval_sec);
@@ -62,6 +64,15 @@ int monitor_is_connected(monitor_t *mon);
 void monitor_fire_event(monitor_t *mon, const char *severity,
                         const char *category, const char *title,
                         const char *message);
+
+/* Same as monitor_fire_event, but appends " (reason: <name>)" to the
+ * message when `reason` is a known transfer-reason code other than
+ * AcceptableInput. UNKNOWN / AcceptableInput pass through unchanged.
+ * Used by both the fast and slow loops to attach a cause to events
+ * that were triggered by an input-side condition. */
+void monitor_fire_event_with_reason(monitor_t *mon, const char *severity,
+                                    const char *category, const char *title,
+                                    const char *message, uint16_t reason);
 
 /* Get a copy of the loaded status snapshot. The alert engine seeds its
  * prev fields from this so it doesn't re-fire alerts on startup for

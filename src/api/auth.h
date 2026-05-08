@@ -10,6 +10,11 @@
  * Token-based sessions for API access.
  * Setup endpoint for first-run password creation. */
 
+/* Default session TTL (in hours). Sliding: bumped on every successful
+ * validation, so a user who interacts at least once per AUTH_SESSION_TTL
+ * never has to re-login. 90 days here matches the home-user UX target. */
+#define AUTH_SESSION_TTL_HOURS (90 * 24)
+
 /* Initialize auth system. */
 int auth_init(cutils_db_t *db);
 
@@ -26,8 +31,17 @@ int auth_verify_password(cutils_db_t *db, const char *password);
  * Token is valid for expire_hours. */
 char *auth_create_token(cutils_db_t *db, int expire_hours);
 
-/* Validate a session token. Returns 1 if valid and not expired. */
+/* Validate a session token. Returns 1 if valid and not expired.
+ * On success, slides expires_at forward by AUTH_SESSION_TTL_HOURS for
+ * kind='session' rows; api_token rows are not slid (they hold a
+ * caller-set expiry until explicitly revoked or expired). last_used_at
+ * is touched for both kinds. */
 int auth_validate_token(cutils_db_t *db, const char *token);
+
+/* Revoke a token immediately (DELETE; soft-delete via revoked_at can
+ * be added when audit retention becomes a requirement). Safe to call
+ * with NULL or unknown tokens — both no-op. */
+void auth_revoke_token(cutils_db_t *db, const char *token);
 
 /* Clean up expired sessions. */
 void auth_cleanup_sessions(cutils_db_t *db);

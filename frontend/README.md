@@ -2,7 +2,7 @@
 
 React + TypeScript + Vite + Tailwind. Web UI for the airies-ups daemon.
 
-The bundle is **compiled into the daemon binary at build time** — see [`../DEPLOY.md`](../DEPLOY.md) for the embed pipeline. There is no separate static-file deploy path.
+The bundle is **compiled into the daemon binary at build time** — `make embed-frontend` in the repo root gzips and brotli-compresses each `dist/` file into a C byte-array source the daemon links in. There is no separate static-file deploy path.
 
 ## Layout
 
@@ -24,8 +24,8 @@ The Vite dev server (`bun run dev`) listens on `http://localhost:5173` and proxi
 You need a daemon running locally for the proxy to have a target. From the repo root:
 
 ```bash
-./deploy.sh local                       # native debug build into ~/.local/share/airies-ups
-cd ~/.local/share/airies-ups && ./airies-upsd
+make debug                              # native debug build, skips frontend embed
+./build/airies-upsd                     # run the daemon (binds :8080 by default)
 ```
 
 Then in this directory:

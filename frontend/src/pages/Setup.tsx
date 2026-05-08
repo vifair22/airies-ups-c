@@ -43,20 +43,30 @@ export default function Setup() {
   const [saveError, setSaveError] = useState('')
   const [restarting, setRestarting] = useState(false)
 
-  /* Determine starting step based on what's already configured */
+  /* Determine starting step based on what's already configured. The
+   * "password set but not authed" check used to read localStorage; now
+   * we probe /api/auth/check (the only way the frontend can tell if the
+   * HttpOnly cookie is valid). */
   useEffect(() => {
-    fetch('/api/setup/status')
-      .then(r => r.json())
-      .then((data: SetupStatus) => {
+    (async () => {
+      try {
+        const data: SetupStatus = await fetch('/api/setup/status', {
+          credentials: 'include',
+        }).then(r => r.json())
         if (data.password_set && data.ups_configured) {
           navigate('/', { replace: true })
-        } else if (data.password_set) {
-          const token = localStorage.getItem('auth_token')
-          setStep(token ? 'connection' : 'login')
+          return
         }
-      })
-      .catch(() => { /* start at password */ })
-      .finally(() => setLoading(false))
+        if (data.password_set) {
+          const probe = await fetch('/api/auth/check', { credentials: 'include' })
+          setStep(probe.ok ? 'connection' : 'login')
+        }
+      } catch {
+        /* start at password */
+      } finally {
+        setLoading(false)
+      }
+    })()
   }, [navigate])
 
   /* Load available ports/devices when entering connection step */
@@ -83,7 +93,7 @@ export default function Setup() {
     try {
       const res = await apiPostPublic<{ token?: string; error?: string }>('/api/auth/login', { password })
       if (res.error) { setPasswordError(res.error); return }
-      if (res.token) localStorage.setItem('auth_token', res.token)
+      /* Server set the auth cookie via apiPostPublic's credentials:'include' */
       setStep('connection')
     } catch {
       setPasswordError('Failed to connect to server')
@@ -102,8 +112,8 @@ export default function Setup() {
       const res = await apiPostPublic<{ result?: string; error?: string }>('/api/auth/setup', { password })
       if (res.error) { setPasswordError(res.error); return }
 
-      const login = await apiPostPublic<{ token?: string }>('/api/auth/login', { password })
-      if (login.token) localStorage.setItem('auth_token', login.token)
+      /* Auto-login after setup. Server Set-Cookies via credentials:'include'. */
+      await apiPostPublic<{ token?: string }>('/api/auth/login', { password })
 
       setStep('connection')
     } catch {
@@ -134,13 +144,11 @@ export default function Setup() {
     setSaveError('')
 
     try {
-      const token = localStorage.getItem('auth_token')
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (token) headers['Authorization'] = `Bearer ${token}`
-
       const setConfig = async (key: string, value: string) => {
         const res = await fetch('/api/config/app', {
-          method: 'POST', headers,
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, value }),
         })
         if (!res.ok) throw new Error(`Failed to save ${key}`)
@@ -174,11 +182,11 @@ export default function Setup() {
 
   const restart = useCallback(async () => {
     setRestarting(true)
-    const token = localStorage.getItem('auth_token')
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (token) headers['Authorization'] = `Bearer ${token}`
-
-    await fetch('/api/restart', { method: 'POST', headers }).catch(() => {})
+    await fetch('/api/restart', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    }).catch(() => {})
 
     const poll = () => {
       fetch('/api/setup/status')

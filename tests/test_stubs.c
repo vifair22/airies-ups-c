@@ -46,3 +46,8 @@ void monitor_fire_event(monitor_t *mon, const char *severity,
 {
     (void)mon; (void)severity; (void)category; (void)title; (void)message;
 }
+
+/* Used by handle_setup_status when ctx->monitor is non-NULL. The
+ * route-handler tests construct ctx with monitor=NULL so this stub is
+ * never reached at runtime; it just satisfies the linker. */
+int monitor_is_connected(monitor_t *mon) { (void)mon; return 0; }
