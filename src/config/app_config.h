@@ -191,6 +191,15 @@ static inline appguard_config_t app_appguard_config(void)
          * `journalctl -p err` filters correctly. No-op outside systemd. */
         .log_systemd_autodetect = 1,
         .migrations             = app_migrations,
+        /* DB holds bcrypt hashes, session tokens, push retry rows;
+         * config file holds pushover credentials. AppGuard 1.2.0
+         * chmod's the .db + .db-wal + .db-shm + config file to 0600
+         * and (for the DB side) narrows the umask around its own
+         * init phase so sqlite-created sidecars come up at 0600 in
+         * the first place. The umask change is localized — does not
+         * bleed into the daemon's runtime. */
+        .db_mode                = 0600,
+        .config_mode            = 0600,
     };
     return cfg;
 }
