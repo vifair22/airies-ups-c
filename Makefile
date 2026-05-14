@@ -36,6 +36,19 @@ VERSION_DEF := -DVERSION_STRING='"$(VERSION)"'
 CUTILS_SEMVER       := $(shell cat $(CUTILS_DIR)/release_version 2>/dev/null | tr -d '[:space:]')
 CUTILS_VERSION_DEF  := -DCUTILS_VERSION_STRING=\"$(CUTILS_SEMVER)_$(BUILD_TS).release\"
 
+# c-utils dependency pin. CI clones this exact tag; local builds use whatever
+# is at $(CUTILS_DIR). The warning below surfaces drift so an out-of-date
+# sibling can't silently mask a problem the pinned-tag CI build would catch.
+CUTILS_REF          := $(shell cat cutils_version 2>/dev/null | tr -d '[:space:]')
+
+ifneq ($(CUTILS_SEMVER),)
+ifneq ($(CUTILS_REF),)
+ifneq (v$(CUTILS_SEMVER),$(CUTILS_REF))
+$(warning sibling c-utils $(CUTILS_SEMVER) differs from pinned $(CUTILS_REF) — CI builds against the pinned tag)
+endif
+endif
+endif
+
 CC       := gcc
 INCLUDES := -Isrc -I$(CUTILS_DIR)/include -I$(CUTILS_DIR)/lib/cJSON
 LIBS     := -L$(CUTILS_DIR)/build -lc-utils -lmodbus -lsqlite3 -lcurl -lcrypto -lmicrohttpd -lpthread -lm
